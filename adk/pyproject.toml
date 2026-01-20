@@ -29,7 +29,6 @@ dependencies = [
   "pydantic>=2.10.6",
   "pyyaml>=6.0.1",
   "uvicorn>=0.37.0",
-  "bat>=0.3.9",
 ]
 [dependency-groups]
 dev = [
