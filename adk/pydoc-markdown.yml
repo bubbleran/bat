@@ -1,0 +1,46 @@
+loaders:
+  - type: python
+    search_path: ["./src"]
+    packages:
+      - bat.agent
+      - bat.chat_model_client
+      - bat.logging
+      - bat.prebuilt
+
+processors:
+  - type: filter
+  - type: smart
+  - type: crossref
+
+renderer:
+  type: mkdocs
+  pages:
+    - title: Home
+      name: index
+      source: README.md
+
+    - title: BAT-ADK
+      children:
+        - title: Agent
+          contents:
+            - bat.agent.config.*
+            - bat.agent.state.*
+            - bat.agent.graph.*
+            - bat.agent.application.*
+        - title: Chat Model Client
+          contents:
+            - bat.chat_model_client.config.*
+            - bat.chat_model_client.client.*
+        - title: Logging
+          contents:
+            - bat.logging.logging.*
+        - title: Prebuilt
+          contents:
+            - bat.prebuilt.prebuilt_workflow.*
+            - bat.prebuilt.react_loop.*
+            - bat.prebuilt.call_agent_node.*
+
+  mkdocs_config:
+    site_name: BAT
+    theme: readthedocs
+    repo_url: https://github.com/bubbleran/bat
