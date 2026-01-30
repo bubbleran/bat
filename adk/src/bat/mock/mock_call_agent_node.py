@@ -7,7 +7,32 @@ from typing import Callable, Type
 from typing_extensions import override
 
 class MockCallAgentNode(MockNode):
-    """Mock version of CallAgentNode that modifies state without actual agent calls."""
+    """Mock version of CallAgentNode that modifies state without actual agent calls.
+    
+    Args:
+        mock_output: The simulated output string that will be returned instead of
+            making actual agent calls. This value will be used to populate the
+            output field and agent_content field in the state.
+            
+        for all other parameters, see CallAgentNode.
+    
+    Example:
+        mock_call_agent = MockCallAgentNode(
+            config=config,
+            StateType=MyAgentState,
+            loop_name="call_external_agent",
+            agent_name="ExternalAgent",
+            input="agent_question",
+            output="answer",
+            global_status="status",
+            agent_input_required="agent_input",
+            agent_status="agent_status",
+            agent_content="agent_content",
+            input_required="input_required",
+            build_message=build_agent_message,
+            mock_output="Operation completed successfully.",
+        )
+    """
     
     def __init__(
         self,
@@ -17,7 +42,6 @@ class MockCallAgentNode(MockNode):
         agent_name: str,
         build_message: Callable[[RunnableConfig, str], Message],
         mock_output: str,
-        needs_input: bool = False,
         *,
         input: str = "question",
         output: str = "answer",
@@ -30,7 +54,6 @@ class MockCallAgentNode(MockNode):
     ) -> None:
         super().__init__(mock_output)
         self.config = config
-        self.needs_input = needs_input
         self.StateType = StateType
         self.loop_name = loop_name
         self.agent_name = agent_name
@@ -50,22 +73,11 @@ class MockCallAgentNode(MockNode):
         state: Type[AgentState],
     ) -> Type[AgentState]:
         """Modify state like CallAgentNode would, but with mock output instead of real calls."""
-        if self.needs_input:
-            self.mock_output="Input required with this output: " + self.mock_output
-            return state.model_copy(update={
-                self.output: self.mock_output,
-                self.agent_content: self.mock_output,
-                self.agent_status: "input-required",
-                self.global_status: "input-required",
-                self.agent_input_required: False,
-                self.input_required: False,
-            })
-        else:
-            return state.model_copy(update={
-                self.output: self.mock_output,
-                self.agent_content: self.mock_output,
-                self.agent_status: "completed",
-                self.global_status: "completed",
-                self.agent_input_required: False,
-                self.input_required: False,
-            })
+        return state.model_copy(update={
+            self.output: self.mock_output,
+            self.agent_content: self.mock_output,
+            self.agent_status: "completed",
+            self.global_status: "completed",
+            self.agent_input_required: False,
+            self.input_required: False,
+        })

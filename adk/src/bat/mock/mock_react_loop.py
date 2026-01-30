@@ -7,7 +7,27 @@ from typing_extensions import override
 
 
 class MockReActLoop(MockNode):
-    """Mock version of ReActLoop that modifies state without actual LLM calls."""
+    """Mock version of ReActLoop that modifies state without actual LLM calls.
+    
+    Args:
+        mock_output: The simulated output string that will be returned instead of
+            making actual LLM calls. This value will be used to populate the
+            output_key field in the state.
+        for all other parameters, see ReActLoop.
+    
+    Example:
+        mock_react_loop = MockReActLoop(
+            config=config,
+            StateType=MyAgentState,
+            loop_name="monitoring_react_loop",
+            chat_model_client=chat_client,
+            input_key="question",
+            output_key="answer",
+            messages_key="history",
+            status_key="status",
+            mock_output="All systems operational.",
+        )
+    """
 
     def __init__(
         self,
