@@ -183,7 +183,7 @@ class ReActLoop(PrebuiltWorkflow):
         input = state_dict[self.input_key]
         if not isinstance(input, str) and not isinstance(input, HumanMessage):
             raise ValueError(f"Key '{self.input_key}' must point to a string or HumanMessage. Found {type(input)} instead.")
-        # TODO: also check if all messages are BaseMessage instances
+
         messages = state_dict[self.messages_key] if self.messages_key else []
         if not isinstance(messages, List):
             raise ValueError(f"Key '{self.messages_key}' must point to a List[BaseMessage]. Found {type(messages)} instead.")
