@@ -250,10 +250,11 @@ class ReActLoop(PrebuiltWorkflow):
         except Exception as e:
             raise RuntimeError(f"Error invoking chat model client: {e}") from e
         if response.tool_calls:
+            tool_names = [tool_call.get('name', '') for tool_call in response.tool_calls]
             state.bat_buffer = [response]
             if self.status_key:
                 state = state.model_copy(update={
-                    self.status_key: "Running tools...",
+                    self.status_key: f"Running tools: {', '.join(tool_names)}",
                 })
         else:
             state = state.model_copy(update={self.output_key: response.content})  
