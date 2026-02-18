@@ -1,6 +1,7 @@
 import asyncio
 import bisect
 import time
+import warnings
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState
 from ..chat_model_client import UsageMetadata
@@ -22,6 +23,7 @@ from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
 from typing import Any, AsyncIterable, Callable, Dict, List, Literal, Optional, Sequence, Type
 from typing_extensions import override
+
 
 logger = create_logger(__name__, level="debug")
 USAGE_METADATA_KEY = "usage"
@@ -57,12 +59,13 @@ class CallAgentNode(PrebuiltWorkflow):
             The value at this key is updated with the overall status of the communication.
         agent_input_required (str, optional): A key pointing to a bool in the state. Defaults to "agent_input".
             The value at this key is set to True when the target agent requests user input.
-        agent_status (str, optional): A key pointing to a string in the state. Defaults to "agent_status".
+        agent_response_status (str, optional): A key pointing to a string in the state. Defaults to "agent_response_status".
             The value at this key is updated with the status from the target agent.
-        agent_content (str, optional): A key pointing to a string in the state. Defaults to "agent_content".
+        agent_response_content (str, optional): A key pointing to a string in the state. Defaults to "agent_response_content".
             The value at this key is updated with the content from the target agent.
-        input_required (str, optional): A key pointing to a bool in the state. Defaults to "input_required".
-            The value at this key is set to True when user input is required.
+        agent_status (str, optional): **DEPRECATED** Use agent_response_status instead.
+        agent_content (str, optional): **DEPRECATED** Use agent_response_content instead.
+        input_required (str, optional): **DEPRECATED** This parameter is no longer used.
         recursion_limit (int, optional): Maximum recursion depth for nested calls. Defaults to 50.
 
     Example
@@ -78,10 +81,9 @@ class CallAgentNode(PrebuiltWorkflow):
     class OrchestratorAgentState(AgentState):
         agent_input_text: str
         agent_output_text: str
-        agent_status: str
+        agent_response_status: str
         agent_input_required: bool = False
-        agent_content: Optional[str] = None
-        input_required: bool = False
+        agent_response_content: Optional[str] = None
         ...
 
     def build_agent_message(config: RunnableConfig, text: str) -> Message:
@@ -102,9 +104,8 @@ class CallAgentNode(PrebuiltWorkflow):
                 output="agent_output_text",
                 global_status="agent_status",
                 agent_input_required="agent_input_required",
-                agent_status="agent_status",
-                agent_content="agent_content",
-                input_required="input_required",
+                agent_response_status="agent_response_status",
+                agent_response_content="agent_response_content",
                 build_message=build_agent_message,
             )
             ...
@@ -124,9 +125,12 @@ class CallAgentNode(PrebuiltWorkflow):
         output: str = "answer",
         global_status: str = "status",
         agent_input_required: str = "agent_input",
-        agent_status: str = "agent_status",
-        agent_content: str = "agent_content",
-        input_required: str = "input_required",
+        agent_response_status: Optional[str] = None,
+        agent_response_content: Optional[str] = None,
+        # Deprecated parameters
+        agent_status: Optional[str] = None,
+        agent_content: Optional[str] = None,
+        input_required: Optional[str] = None,
         recursion_limit: int = 50,
     ) -> None:
         """Initialize the CallAgentNode workflow with the given configuration and parameters.
@@ -149,15 +153,48 @@ class CallAgentNode(PrebuiltWorkflow):
                 Useful to display the current operation to the user.
             agent_input_required (str, optional): A key pointing to a bool in the state. Defaults to "agent_input".
                 The value at this key is set to True when the target agent requests user input.
-            agent_status (str, optional): A key pointing to a string in the state. Defaults to "agent_status".
+            agent_response_status (str, optional): A key pointing to a string in the state. Defaults to "agent_response_status".
                 The value at this key is updated with the status from the target agent.
-            agent_content (str, optional): A key pointing to a string in the state. Defaults to "agent_content".
+            agent_response_content (str, optional): A key pointing to a string in the state. Defaults to "agent_response_content".
                 The value at this key is updated with the content from the target agent.
-            input_required (str, optional): A key pointing to a bool in the state. Defaults to "input_required".
-                The value at this key is set to True when user input is required.
+            agent_status (str, optional): **DEPRECATED** Use agent_response_status instead.
+            agent_content (str, optional): **DEPRECATED** Use agent_response_content instead.
+            input_required (str, optional): **DEPRECATED** This parameter is no longer used.
             recursion_limit (int, optional): Maximum recursion depth for nested calls. Defaults to 50.
                 This prevents infinite loops in agent-to-agent communication.
         """
+        # Handle deprecated parameters
+        if agent_status is not None:
+            warnings.warn(
+                "'agent_status' is deprecated, use 'agent_response_status' instead",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            if agent_response_status is None:
+                agent_response_status = agent_status
+        
+        if agent_content is not None:
+            warnings.warn(
+                "'agent_content' is deprecated, use 'agent_response_content' instead",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            if agent_response_content is None:
+                agent_response_content = agent_content
+        
+        if input_required is not None:
+            warnings.warn(
+                "'input_required' parameter is deprecated and will be ignored",
+                DeprecationWarning,
+                stacklevel=2
+            )
+        
+        # Set defaults if not provided
+        if agent_response_status is None:
+            agent_response_status = "agent_response_status"
+        if agent_response_content is None:
+            agent_response_content = "agent_response_content"
+        
         # Initialize PrebuiltWorkflow 
         super().__init__(
             config=config,
@@ -169,9 +206,8 @@ class CallAgentNode(PrebuiltWorkflow):
             output=output,
             global_status=global_status,
             agent_input_required=agent_input_required,
-            agent_status=agent_status,
-            agent_content=agent_content,
-            input_required=input_required,
+            agent_response_status=agent_response_status,
+            agent_response_content=agent_response_content,
             recursion_limit=recursion_limit,
         )
         
@@ -207,9 +243,8 @@ class CallAgentNode(PrebuiltWorkflow):
         output: str = "answer",
         global_status: str = "status",
         agent_input_required: str = "agent_input",
-        agent_status: str = "agent_status",
-        agent_content: str = "agent_content",
-        input_required: str = "input_required",
+        agent_response_status: str = "agent_response_status",
+        agent_response_content: str = "agent_response_content",
         recursion_limit: int = 50,
     ) -> None:
         """Set up the internal mini-graph with nodes and edges.
@@ -231,9 +266,8 @@ class CallAgentNode(PrebuiltWorkflow):
             output (str): State field name for output text.
             global_status (str): State field name for global status.
             agent_input_required (str): State field name indicating if agent needs input.
-            agent_status (str): State field name for agent-specific status.
-            agent_content (str): State field name for agent-specific content.
-            input_required (str): State field name indicating if user input is required.
+            agent_response_status (str): State field name for agent-specific status.
+            agent_response_content (str): State field name for agent-specific content.
             recursion_limit (int): Maximum recursion depth for nested calls.
         """
         self._agent_name = agent_name
@@ -241,13 +275,11 @@ class CallAgentNode(PrebuiltWorkflow):
         self.output = output
         self.global_status = global_status
         self.agent_input_required = agent_input_required
-        self.agent_status = agent_status
-        self.agent_content = agent_content
-        self.input_required = input_required
+        self.agent_response_status = agent_response_status
+        self.agent_response_content = agent_response_content
         self._build_message = build_message
         self.recursion_limit = recursion_limit
         self.loop_name = loop_name
-        
         self._agent_card = None  
         self.stream_done: bool = False
         self._queue: Optional[asyncio.Queue[Optional[tuple[str, str]]]] = None
@@ -318,15 +350,19 @@ class CallAgentNode(PrebuiltWorkflow):
         Yields:
             Type[AgentState]: The updated state after initiating the agent call.
         """
+        url = self.agent_config.get_a2a_agent_connection(self._agent_name).url
         
         if self._agent_card is None or self._agent_card.name != self._agent_name:
             cards = await self.agent_config.list_agent_cards([self._agent_name])
             self._agent_card = cards[self._agent_name]
+            self._agent_card.url = url
+            logger.info(f"Set agent card URL to {url} for agent {self._agent_card.name}")
+        
             
         # Reset dynamic fields
         self.stream_done = False
-        setattr(state, self.agent_status, None)
-        setattr(state, self.agent_content, None)
+        setattr(state, self.agent_response_status, None)
+        setattr(state, self.agent_response_content, None)
         setattr(state, self.agent_input_required, False)
 
         # Get input text
@@ -339,7 +375,6 @@ class CallAgentNode(PrebuiltWorkflow):
         # Update global state
         setattr(state, self.global_status, "working")
         setattr(state, self.output, f"Forwarding request to {self.loop_name}…")
-        setattr(state, self.input_required, False)
 
         # Start streaming worker
         await self._start_stream(request)
@@ -388,8 +423,8 @@ class CallAgentNode(PrebuiltWorkflow):
         status, content = item
 
         # Update agent-specific fields
-        setattr(state, self.agent_status, status)
-        setattr(state, self.agent_content, content)
+        setattr(state, self.agent_response_status, status)
+        setattr(state, self.agent_response_content, content)
 
         # Update global fields
         setattr(state, self.global_status, status)
@@ -398,7 +433,6 @@ class CallAgentNode(PrebuiltWorkflow):
 
         needs_input = (status == "input-required")
         setattr(state, self.agent_input_required, needs_input)
-        setattr(state, self.input_required, needs_input)
 
         if needs_input:
             # If user input is required, stop the stream
