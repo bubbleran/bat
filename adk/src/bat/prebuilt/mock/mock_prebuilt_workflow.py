@@ -1,10 +1,10 @@
-from ..agent.state import AgentState
+from ...agent.state import AgentState
 from abc import ABC, abstractmethod
 from langchain_core.runnables import RunnableLambda, Runnable
 from typing import Type
 
 
-class MockNode(ABC):
+class MockPrebuiltWorkflow(ABC):
     """Base class for mock nodes. Subclasses must override modify_state."""
 
     def __init__(self, mock_output: str) -> None:

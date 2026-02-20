@@ -1,12 +1,12 @@
-from .mock_node import MockNode
-from ..agent.config import AgentConfig
-from ..agent.state import AgentState
-from ..chat_model_client import ChatModelClient
+from .mock_prebuilt_workflow import MockPrebuiltWorkflow
+from ...agent.config import AgentConfig
+from ...agent.state import AgentState
+from ...chat_model_client import ChatModelClient
 from typing import Optional, Type
 from typing_extensions import override
 
 
-class MockReActLoop(MockNode):
+class MockReActLoop(MockPrebuiltWorkflow):
     """Mock version of ReActLoop that modifies state without actual LLM calls.
     
     Args:
