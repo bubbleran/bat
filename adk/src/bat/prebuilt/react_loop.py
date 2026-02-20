@@ -183,7 +183,7 @@ class ReActLoop(PrebuiltWorkflow):
         input = state_dict[self.input_key]
         if not isinstance(input, str) and not isinstance(input, HumanMessage):
             raise ValueError(f"Key '{self.input_key}' must point to a string or HumanMessage. Found {type(input)} instead.")
-        # TODO: also check if all messages are BaseMessage instances
+
         messages = state_dict[self.messages_key] if self.messages_key else []
         if not isinstance(messages, List):
             raise ValueError(f"Key '{self.messages_key}' must point to a List[BaseMessage]. Found {type(messages)} instead.")
@@ -250,10 +250,11 @@ class ReActLoop(PrebuiltWorkflow):
         except Exception as e:
             raise RuntimeError(f"Error invoking chat model client: {e}") from e
         if response.tool_calls:
+            tool_names = [tool_call.get('name', '') for tool_call in response.tool_calls]
             state.bat_buffer = [response]
             if self.status_key:
                 state = state.model_copy(update={
-                    self.status_key: "Running tools...",
+                    self.status_key: f"Running tools: {', '.join(tool_names)}",
                 })
         else:
             state = state.model_copy(update={self.output_key: response.content})  

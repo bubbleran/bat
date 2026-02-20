@@ -51,7 +51,7 @@ class ChatModelClientConfig(BaseModel):
     ```
     """
 
-    class Config:
+    class ConfigDict:
         arbitrary_types_allowed = True
 
     model: str

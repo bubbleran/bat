@@ -112,30 +112,6 @@ class AgentGraph(ABC):
         )
         
         self._usage_buffer = UsageMetadata()
-    
-    # def _log(
-    #     self,
-    #     message: str,
-    #     level: Literal["info", "debug", "warning", "error", "critical"],
-    #     exc_info: bool = None,
-    #     extra: Mapping[str, object] | None = None
-    # ) -> None:
-    #     """Log a message using the logger if the logger_name was provided in the constructor."""
-    #     if not self._logger:
-    #         return
-        
-    #     if level == "info":
-    #         self._logger.info(message, extra=extra, exc_info=exc_info)
-    #     elif level == "debug":
-    #         self._logger.debug(message, extra=extra, exc_info=exc_info)
-    #     elif level == "warning":
-    #         self._logger.warning(message, extra=extra, exc_info=exc_info)
-    #     elif level == "error":
-    #         self._logger.error(message, extra=extra, exc_info=exc_info)
-    #     elif level == "critical":
-    #         self._logger.critical(message, extra=extra, exc_info=exc_info)
-    #     else:
-    #         raise ValueError(f"Invalid log level: {level}")
 
     async def astream(
         self,
