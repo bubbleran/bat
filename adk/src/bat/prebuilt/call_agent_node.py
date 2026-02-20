@@ -65,7 +65,7 @@ class CallAgentNode(PrebuiltWorkflow):
             The value at this key is updated with the content from the target agent.
         agent_status (str, optional): **DEPRECATED** Use agent_response_status instead.
         agent_content (str, optional): **DEPRECATED** Use agent_response_content instead.
-        input_required (str, optional): **DEPRECATED** This parameter is no longer used.
+        input_required (str, optional): **DEPRECATED** This parameter is no longer used and will be dropped in future versions.
         recursion_limit (int, optional): Maximum recursion depth for nested calls. Defaults to 50.
 
     Example
@@ -78,7 +78,7 @@ class CallAgentNode(PrebuiltWorkflow):
     from typing import List, Optional
     from langchain_core.messages import BaseMessage
 
-    class OrchestratorAgentState(AgentState):
+    class MyAgentState(AgentState):
         agent_input_text: str
         agent_output_text: str
         agent_response_status: str
@@ -93,11 +93,11 @@ class CallAgentNode(PrebuiltWorkflow):
             parts=[{"type": "text", "text": text}],
         )
 
-    class OrchestratorGraph(AgentGraph):
+    class MyAgentGraph(AgentGraph):
         def setup(self, config: AgentConfig) -> None:
             self.call_agent_node = CallAgentNode(
                 config=config,
-                StateType=OrchestratorAgentState,
+                StateType=MyAgentState,
                 loop_name="domain_agent_loop",
                 agent_name="SMO Agent",
                 input="agent_input_text",
