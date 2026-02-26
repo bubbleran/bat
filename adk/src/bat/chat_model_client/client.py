@@ -153,6 +153,7 @@ class ChatModelClient:
             model=self.config.model,
             model_provider=self.config.model_provider,
             base_url=self.config.base_url,
+            default_headers=self.config.build_default_headers(),
         )
         _logger.info(f"model {self.config.model_provider}:{self.config.model} initialized{' with tools' if self.tools else ''}")
         if self.tools:
@@ -252,7 +253,7 @@ class ChatModelClient:
         try:
             response = self._chat_model.invoke(messages)
         except Exception as e:
-            raise RuntimeError(message="Error invoking chat model.") from e
+            raise e
         t_end = time.time()
         if not isinstance(response, AIMessage):
             raise ValueError(f"Expected AIMessage after invocation of chat model, got {type(response)}")
