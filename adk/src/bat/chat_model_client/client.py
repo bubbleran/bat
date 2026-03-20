@@ -165,13 +165,9 @@ class ChatModelClient:
         
         self.usage_metadatas = []
         
-
-    def get_chat_model(self) -> BaseChatModel:
-        """Get the chat model instance.
-        
-        Returns:
-            BaseChatModel: The chat model instance configured with the provided model and tools.
-        """
+    @property
+    def chat_model(self) -> BaseChatModel:
+        """The chat model instance configured with the provided model and tools."""
         return self._chat_model
     
     @classmethod
