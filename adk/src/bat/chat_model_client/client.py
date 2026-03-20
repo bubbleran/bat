@@ -173,9 +173,11 @@ class ChatModelClient:
     @classmethod
     def _validate_input_type(
         cls,
-        input: HumanMessage | List[ToolMessage],
+        input: str | HumanMessage | List[ToolMessage],
     ):
         """Validate the input for the invoke and stream method."""
+        if isinstance(input, str):
+            return True
         if isinstance(input, HumanMessage):
             return True
         if isinstance(input, list) and all(isinstance(msg, ToolMessage) for msg in input):
@@ -184,7 +186,7 @@ class ChatModelClient:
     
     def _build_messages_list(
         self,
-        input: HumanMessage | List[ToolMessage],
+        input: str | HumanMessage | List[ToolMessage],
         history: Optional[List[BaseMessage]] = None,
     ) -> List[BaseMessage]:
         """Build the messages list for the chat model.
@@ -200,7 +202,9 @@ class ChatModelClient:
         messages = [self.system_instructions]
         if history:
             messages += history
-        if isinstance(input, HumanMessage):
+        if isinstance(input, str):
+            messages.append(HumanMessage(input))
+        elif isinstance(input, HumanMessage):
             messages.append(input)
         else:
             messages += input
@@ -209,7 +213,7 @@ class ChatModelClient:
     def _update_history(
         self,
         history: List[BaseMessage],
-        input: HumanMessage | List[ToolMessage],
+        input: str | HumanMessage | List[ToolMessage],
         response: AIMessage,
     ) -> None:
         """Update the history **in-place** with the input and response.
@@ -218,7 +222,9 @@ class ChatModelClient:
         If the input is a list of ToolMessages, they are appended to the history.
         The response is always appended to the history.
         """
-        if isinstance(input, HumanMessage):
+        if isinstance(input, str):
+            history.append(HumanMessage(input))
+        elif isinstance(input, HumanMessage):
             history.append(input)
         else:
             history += input
@@ -226,7 +232,7 @@ class ChatModelClient:
 
     def invoke(
         self,
-        input: HumanMessage | List[ToolMessage],
+        input: str | HumanMessage | List[ToolMessage],
         history: Optional[List[BaseMessage]] = None,
     ) -> AIMessage:
         """Invoke the chat model with user instructions or tool call results.
@@ -235,7 +241,7 @@ class ChatModelClient:
         This method modifies the `history` in-place to include the input and output messages.
         
         Parameters:
-            input (HumanMessage | List[ToolMessage]): The user input or tool call results to process.
+            input (str | HumanMessage | List[ToolMessage]): The user input or tool call results to process.
             history (Optional[List[BaseMessage]]): Optional history of messages.
         
         Returns:
@@ -243,7 +249,7 @@ class ChatModelClient:
         Raises:
             ValueError: If the input type is invalid or if the response from the chat model is not an `AIMessage`.
         """
-        assert self._validate_input_type(input), f"Invalid input type: {type(input)}. Expected HumanMessage or List[ToolMessage]."
+        assert self._validate_input_type(input), f"Invalid input type: {type(input)}. Expected str or HumanMessage or List[ToolMessage]."
 
         # Build the messages for the chat model
         messages = self._build_messages_list(input, history)
