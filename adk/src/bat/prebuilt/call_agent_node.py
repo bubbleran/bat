@@ -121,13 +121,16 @@ class CallAgentNode(PrebuiltWorkflow):
         agent_name: str,
         build_message: Callable[[RunnableConfig, str], Message],
         *,
-        input: str = "question",
-        output: str = "answer",
-        global_status: str = "status",
+        input_key: Optional[str] = None,
+        output_key: Optional[str] = None,
+        status_key: Optional[str] = None,
         agent_input_required: str = "agent_input",
         agent_response_status: Optional[str] = None,
         agent_response_content: Optional[str] = None,
         # Deprecated parameters
+        input: Optional[str] = None,
+        output: Optional[str] = None,
+        global_status: Optional[str] = None,
         agent_status: Optional[str] = None,
         agent_content: Optional[str] = None,
         input_required: Optional[str] = None,
@@ -144,11 +147,11 @@ class CallAgentNode(PrebuiltWorkflow):
             build_message (Callable[[RunnableConfig, str], Message]): Callback function to build
                 the request message from the input text. Should accept a RunnableConfig and a
                 string, and return an A2A Message object.
-            input (str, optional): A key pointing to a string in the state. Defaults to "question".
+            input (str, optional): A key pointing to a string in the state. Defaults to "input".
                 The value at this key is used as input to send to the target agent.
-            output (str, optional): A key pointing to a string in the state. Defaults to "answer".
+            output (str, optional): A key pointing to a string in the state. Defaults to "output".
                 The value at this key is updated with responses from the target agent.
-            global_status (str, optional): A key pointing to a string in the state. Defaults to "status".
+            status_key (str, optional): A key pointing to a string in the state. Defaults to "status".
                 The value at this key is updated with the overall status of the communication.
                 Useful to display the current operation to the user.
             agent_input_required (str, optional): A key pointing to a bool in the state. Defaults to "agent_input".
@@ -157,6 +160,9 @@ class CallAgentNode(PrebuiltWorkflow):
                 The value at this key is updated with the status from the target agent.
             agent_response_content (str, optional): A key pointing to a string in the state. Defaults to "agent_response_content".
                 The value at this key is updated with the content from the target agent.
+            input (str, optional): **DEPRECATED** Use input_key instead.
+            output (str, optional): **DEPRECATED** Use output_key instead.
+            global_status (str, optional): **DEPRECATED** Use status_key instead.
             agent_status (str, optional): **DEPRECATED** Use agent_response_status instead.
             agent_content (str, optional): **DEPRECATED** Use agent_response_content instead.
             input_required (str, optional): **DEPRECATED** This parameter is no longer used.
@@ -164,6 +170,33 @@ class CallAgentNode(PrebuiltWorkflow):
                 This prevents infinite loops in agent-to-agent communication.
         """
         # Handle deprecated parameters
+        if input is not None:
+            warnings.warn(
+                "`input` parameter is deprecated, use `input_key` instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if input_key is None:
+                input_key = input
+        
+        if output is not None:
+            warnings.warn(
+                "`output` parameter is deprecated, use `output_key` instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if output_key is None:
+                output_key = output
+        
+        if global_status is not None:
+            warnings.warn(
+                "`global_status` parameter is deprecated, use `status_key` instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if status_key is None:
+                status_key = global_status
+
         if agent_status is not None:
             warnings.warn(
                 "'agent_status' is deprecated, use 'agent_response_status' instead",
@@ -190,6 +223,12 @@ class CallAgentNode(PrebuiltWorkflow):
             )
         
         # Set defaults if not provided
+        if input_key is None:
+            input_key = "input"
+        if output_key is None:
+            output_key = "output"
+        if status_key is None:
+            status_key = "status"
         if agent_response_status is None:
             agent_response_status = "agent_response_status"
         if agent_response_content is None:
@@ -202,9 +241,9 @@ class CallAgentNode(PrebuiltWorkflow):
             loop_name=loop_name,
             agent_name=agent_name,
             build_message=build_message,
-            input=input,
-            output=output,
-            global_status=global_status,
+            input=input_key,
+            output=output_key,
+            global_status=status_key,
             agent_input_required=agent_input_required,
             agent_response_status=agent_response_status,
             agent_response_content=agent_response_content,
