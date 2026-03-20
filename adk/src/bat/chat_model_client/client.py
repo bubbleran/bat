@@ -158,7 +158,8 @@ class ChatModelClient:
             base_url=self.config.base_url,
             default_headers=self.config.build_default_headers(),
         )
-        _logger.info(f"model {self.config.model_provider}:{self.config.model} initialized{' with tools' if self.tools else ''}")
+        _full_model_name = self.config.model_provider + ":" + self.config.model
+        _logger.info(f"ChatModelClient {self.config.client_name or ''} initialized with: model={_full_model_name}, #tools={len(self.tools or [])}")
         if self.tools:
             self._chat_model = self._chat_model.bind_tools(self.tools)
         
