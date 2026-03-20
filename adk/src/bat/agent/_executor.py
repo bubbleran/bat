@@ -22,7 +22,7 @@ from a2a.utils.errors import ServerError
 from typing import Dict
 from typing_extensions import override, Any
 
-_logger = create_logger(__name__, "debug")
+logger = create_logger(__name__, "debug")
 
 class MinimalAgentExecutor(AgentExecutor):
     """Minimal Agent Executor.
@@ -62,9 +62,9 @@ class MinimalAgentExecutor(AgentExecutor):
                     keep_streaming = await self._process_task_result(task, item, updater, {'usage': usage_metadata})
                 else:
                     # TODO: add chunk status
-                    _logger.warning("Artifact has been updated: ignoring additional streamed item.")
+                    logger.warning("Artifact has been updated: ignoring additional streamed item.")
         except Exception as e:
-            _logger.error(f'An error occurred while streaming the response: {e}')
+            logger.error(f'An error occurred while streaming the response: {e}')
             raise ServerError(error=InternalError()) from e
 
     def _request_ok(self, context: RequestContext) -> bool:
@@ -112,7 +112,7 @@ class MinimalAgentExecutor(AgentExecutor):
             case "error":
                 raise ServerError(error=InternalError(message=task_result.content))
             case _:
-                _logger.warning(f"Unknown task status: {task_result.task_status}")
+                logger.warning(f"Unknown task status: {task_result.task_status}")
         return keep_streaming
 
     @override

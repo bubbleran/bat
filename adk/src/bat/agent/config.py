@@ -11,7 +11,7 @@ from pydantic import BaseModel, BeforeValidator, Field
 from typing import Dict, List, Literal, Tuple
 from typing_extensions import Annotated, Self
 
-_logger = create_logger(__name__, "debug")
+logger = create_logger(__name__, "debug")
 
 DEFAULT_TIMEOUT = 60
 
@@ -187,9 +187,9 @@ class AgentConfig(BaseModel):
             asyncio.run(cfg._build_mcp_servers_aliases_map())
             asyncio.run(cfg._build_remote_agents_aliases_map())
 
-            _logger.info(f"Agent configuration loaded [checkpoints={cfg.checkpoints}] [#agents={len(cfg.remote_agents)}] [#mcp={len(cfg.mcp_servers)}]")
+            logger.info(f"Agent configuration loaded [checkpoints={cfg.checkpoints}] [#agents={len(cfg.remote_agents)}] [#mcp={len(cfg.mcp_servers)}]")
         except FileNotFoundError as e:
-            _logger.warning(f"Configuration file not found. The Agent won't have access to remote agents or MCP servers.")
+            logger.warning(f"Configuration file not found. The Agent won't have access to remote agents or MCP servers.")
             cfg = cls()
         except Exception as e:
             raise ValueError(f"Failed to load and validate agent configuration: {e}") from e
@@ -284,7 +284,7 @@ class AgentConfig(BaseModel):
                     if self.is_mcp_server_required(name):
                         raise ConnectionError(f"Failed to retrieve tools from MCP server '{name}': {e}") from e
             else:
-                _logger.warning(f"MCP Server {name} not found in configuration.")
+                logger.warning(f"MCP Server {name} not found in configuration.")
         return tools
     
     async def list_agent_cards(
@@ -330,7 +330,7 @@ class AgentConfig(BaseModel):
                     agent_card = AgentCard.model_validate(call_tool_result.result)
                     agent_cards[name] = agent_card
                 else:
-                    _logger.warning(f"Remote Agent {name} not found in configuration.")
+                    logger.warning(f"Remote Agent {name} not found in configuration.")
             except Exception as e:
                 if self.is_remote_agent_required(name):
                     raise ConnectionError(f"Failed to retrieve agent card from remote agent '{name}': {e}") from e
@@ -354,12 +354,12 @@ class AgentConfig(BaseModel):
                 aliases[alias] = mcp.name
             except Exception as e:
                 if mcp.required:
-                    _logger.error(f"Failed to get name from required MCP server '{mcp.name}': {e}")
+                    logger.error(f"Failed to get name from required MCP server '{mcp.name}': {e}")
                     raise e
                 else:
-                    _logger.warning(f"Failed to get name from MCP server '{mcp.name}': {e}")
+                    logger.warning(f"Failed to get name from MCP server '{mcp.name}': {e}")
 
-        _logger.debug(f"Retrieved alias for {len(aliases)}/{len(self.mcp_servers)} MCP Servers.")
+        logger.debug(f"Retrieved alias for {len(aliases)}/{len(self.mcp_servers)} MCP Servers.")
         self._mcp_servers_aliases = aliases
 
     async def _build_remote_agents_aliases_map(
@@ -384,12 +384,12 @@ class AgentConfig(BaseModel):
                 aliases[alias] = agent.name
             except Exception as e:
                 if agent.required:
-                    _logger.error(f"Failed to get name from required Agent '{agent.name}': {e}")
+                    logger.error(f"Failed to get name from required Agent '{agent.name}': {e}")
                     raise e
                 else:
-                    _logger.warning(f"Failed to get name from Agent '{agent.name}': {e}")
+                    logger.warning(f"Failed to get name from Agent '{agent.name}': {e}")
 
-        _logger.debug(f"Retrieved alias for {len(aliases)}/{len(self.remote_agents)} Agents.")
+        logger.debug(f"Retrieved alias for {len(aliases)}/{len(self.remote_agents)} Agents.")
         self._remote_agents_aliases = aliases
 
 

@@ -8,7 +8,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.memory import MemorySaver
 from typing import AsyncGenerator, AsyncIterable, Optional, Type
 
-_logger = create_logger(__name__, level="debug")
+logger = create_logger(__name__, level="debug")
 
 class PrebuiltWorkflow(ABC):
     """Abstract base class for prebuilt workflows.
@@ -131,7 +131,7 @@ class PrebuiltWorkflow(ABC):
         instance_found = False
         async for item in generator:
             if instance_found:
-                _logger.warning("Warning: Multiple instances found in input generator. Only the first will be processed.")
+                logger.warning("Warning: Multiple instances found in input generator. Only the first will be processed.")
             else:
                 instance_found = True
                 async for sub_item in self._astream(item, config):

@@ -12,7 +12,7 @@ from typing import List, Literal, Optional, Type
 from typing_extensions import override, AsyncIterable
 from pydantic import ValidationError
 
-_logger = create_logger(__name__, level="debug")
+logger = create_logger(__name__, level="debug")
 
 class ReActLoop(PrebuiltWorkflow):
     """ReActLoop implements a ReAct-style loop using a ChatModelClient with associated tools.
@@ -222,7 +222,7 @@ class ReActLoop(PrebuiltWorkflow):
         Initializes the conversation history and buffer, and updates the status if a status_key is provided.
         The buffer is used to hold AI/Tool Messages between iterations of the loop.
         """
-        _logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: invoked")
+        logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: invoked")
         if self.messages_key:
             state.bat_extra[self._internal_messages_key] = getattr(state, self.messages_key)
         else:
@@ -232,7 +232,7 @@ class ReActLoop(PrebuiltWorkflow):
             state = state.model_copy(update={
                 self.status_key: "Calling LLM..."
             })
-        _logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: prepared")
+        logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: prepared")
         return state
     
     async def _llm(
@@ -245,7 +245,7 @@ class ReActLoop(PrebuiltWorkflow):
         If the chat model produces tool calls, they are added to the buffer for processing in the ToolNode.
         If a status_key is provided, the status is updated to reflect the current operation.
         """
-        _logger.debug(f"Node `{self.loop_name}.llm`: invoked")
+        logger.debug(f"Node `{self.loop_name}.llm`: invoked")
         tool_messages = state.bat_buffer
         state.bat_buffer = []
         if self.status_key:
@@ -274,7 +274,7 @@ class ReActLoop(PrebuiltWorkflow):
                 })
         else:
             state = state.model_copy(update={self.output_key: response.content})  
-        _logger.debug(f"Node `{self.loop_name}.llm`: completed")
+        logger.debug(f"Node `{self.loop_name}.llm`: completed")
         yield state
     
     def _cleanup_after_loop(
@@ -285,11 +285,11 @@ class ReActLoop(PrebuiltWorkflow):
         Restores the conversation history from the internal key to the messages_key in the state
         and removes the internal key from the `bat_extra` dictionary in the state.
         """
-        _logger.debug(f"Node `{self.loop_name}.cleanup`: invoked")
+        logger.debug(f"Node `{self.loop_name}.cleanup`: invoked")
         state = state.model_copy(update={
             self.messages_key: state.bat_extra[self._internal_messages_key]
         })
         if self._internal_messages_key in state.bat_extra:
             del state.bat_extra[self._internal_messages_key]
-        _logger.debug(f"Node `{self.loop_name}.cleanup`: completed")
+        logger.debug(f"Node `{self.loop_name}.cleanup`: completed")
         return state

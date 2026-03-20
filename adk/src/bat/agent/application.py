@@ -22,7 +22,7 @@ from threading import Thread
 from typing import Optional, Type
 
 load_dotenv()
-_logger = create_logger(__name__, "debug")
+logger = create_logger(__name__, "debug")
 
 A2A_APPLICATION_DEFAULT_PORT = 9900
 MCP_APPLICATION_DEFAULT_PORT = 9800
@@ -111,7 +111,7 @@ class AgentApplication:
         """
         url = os.getenv("URL")
         if url is None:
-            _logger.error("URL environment variable is not set.")
+            logger.error("URL environment variable is not set.")
             raise EnvironmentError("URL environment variable is not set.")
         if not url.startswith("http://") and not url.startswith("https://"):
             url = "http://" + url
@@ -123,7 +123,7 @@ class AgentApplication:
                 agent_data = json.load(file)
                 agent_data.setdefault('url', f'{url}:{port}')
                 agent_card = AgentCard.model_validate(agent_data)
-                _logger.debug('Agent Card loaded.')
+                logger.debug('Agent Card loaded.')
         except FileNotFoundError as e:
             raise FileNotFoundError(f'Agent card file not found.') from e
         except ValidationError as e:
@@ -212,7 +212,7 @@ class AgentApplication:
                     if item.parts and item.parts[0].root.kind == "text":
                         response = item.parts[0].root.text
                     else:
-                        _logger.warning("Received Message with non-text part; ignoring.")
+                        logger.warning("Received Message with non-text part; ignoring.")
                 else:
                     task = item[0]
                     if task.artifacts:
@@ -220,11 +220,11 @@ class AgentApplication:
                         if artifact.parts and artifact.parts[0].root.kind == "text":
                             response = artifact.parts[0].root.text
                         else:
-                            _logger.warning("Received Artifact with non-text part; ignoring.")
+                            logger.warning("Received Artifact with non-text part; ignoring.")
 
                 if response is None:
                     response = "No valid response received."
-                    _logger.warning("No valid response was obtained from the agent stream.")
+                    logger.warning("No valid response was obtained from the agent stream.")
                 return response
 
             try:
@@ -254,7 +254,7 @@ class AgentApplication:
                     raise result["error"]
                 response = result["value"]
             except Exception as e:
-                _logger.error(f"Error while getting response from Agent: {e}")
+                logger.error(f"Error while getting response from Agent: {e}")
                 response = f"An error occurred while processing your request: {e}"
             return response
 

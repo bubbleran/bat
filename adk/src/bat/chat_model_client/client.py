@@ -24,7 +24,7 @@ from typing import (
 )
 from typing_extensions import Self
 
-_logger = create_logger(__name__, "debug")
+logger = create_logger(__name__, "debug")
 
 class UsageMetadata(BaseModel):
     """Metadata about the usage of the chat model.
@@ -159,7 +159,7 @@ class ChatModelClient:
             default_headers=self.config.build_default_headers(),
         )
         _full_model_name = self.config.model_provider + ":" + self.config.model
-        _logger.info(f"ChatModelClient {self.config.client_name or ''} initialized with: model={_full_model_name}, #tools={len(self.tools or [])}")
+        logger.info(f"ChatModelClient {self.config.client_name or ''} initialized with: model={_full_model_name}, #tools={len(self.tools or [])}")
         if self.tools:
             self._chat_model = self._chat_model.bind_tools(self.tools)
         
@@ -265,7 +265,7 @@ class ChatModelClient:
             raise ValueError(f"Expected AIMessage after invocation of chat model, got {type(response)}")
 
         if not response.usage_metadata:
-            _logger.warning("Chat model did not return usage metadata.")
+            logger.warning("Chat model did not return usage metadata.")
         usage_metadata = {**(response.usage_metadata or {}) | {'inference_time': t_end - t_start}}
         self.usage_metadatas.append((t_start, UsageMetadata.model_validate(usage_metadata)))
 
@@ -310,7 +310,7 @@ class ChatModelClient:
 
         usage_metadatas = [response.usage_metadata or {} for response in responses]
         if None in usage_metadatas:
-            _logger.warning("Some responses from chat model did not return usage metadata.")
+            logger.warning("Some responses from chat model did not return usage metadata.")
         aggregated_metadata = reduce(
             lambda acc, metadata: acc + metadata,
             usage_metadatas,
