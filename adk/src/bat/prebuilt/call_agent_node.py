@@ -411,7 +411,7 @@ class CallAgentNode(PrebuiltWorkflow):
             cards = await self.agent_config.list_agent_cards([self._agent_name])
             self._agent_card = cards[self._agent_name]
             self._agent_card.url = url
-            logger.debug(f"Set agent card URL to {url} for agent {self._agent_card.name}")
+            logger.debug(f"Node `{self.loop_name}.call_agent`: Set agent card URL to {url} for agent {self._agent_card.name}")
         
             
         # Reset dynamic fields
