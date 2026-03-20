@@ -145,6 +145,9 @@ class ChatModelClient:
         Raises:
             EnvironmentError: If the chat model configuration is not provided and cannot be loaded from environment variables.
         """
+        if not isinstance(system_instructions, str):
+            raise TypeError(f"Expected system_instructions to be of type 'str', got {type(system_instructions)}")
+
         self.config = ChatModelClientConfig.from_env() if chat_model_config is None else chat_model_config
         self.system_instructions = SystemMessage(system_instructions)
         self.tools = tools
