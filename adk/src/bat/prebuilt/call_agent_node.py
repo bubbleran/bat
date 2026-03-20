@@ -234,6 +234,22 @@ class CallAgentNode(PrebuiltWorkflow):
         if agent_response_content is None:
             agent_response_content = "agent_response_content"
         
+        keys = [
+            input_key,
+            output_key,
+            status_key,
+            agent_input_required,
+            agent_response_content,
+            agent_response_status,
+        ]
+        for key in keys:
+            if key not in StateType.model_fields:
+                warnings.warn(
+                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'",
+                    Warning,
+                    stacklevel=2,
+                )
+        
         # Initialize PrebuiltWorkflow 
         super().__init__(
             config=config,

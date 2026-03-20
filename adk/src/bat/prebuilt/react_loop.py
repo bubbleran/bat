@@ -1,3 +1,4 @@
+import warnings
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState
 from ..chat_model_client import ChatModelClient
@@ -104,6 +105,21 @@ class ReActLoop(PrebuiltWorkflow):
                 If provided, the value at this key is updated with the current status of the loop.
                 Useful to beautify the streamed output of the loop.        
         """
+
+        keys = [
+            input_key,
+            output_key,
+            status_key,
+            messages_key,
+        ]
+        for key in keys:
+            if key not in StateType.model_fields:
+                warnings.warn(
+                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'",
+                    Warning,
+                    stacklevel=2,
+                )
+
         super().__init__(
             config=config,
             StateType=StateType,
