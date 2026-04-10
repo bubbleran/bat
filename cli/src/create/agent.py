@@ -7,6 +7,7 @@ BAT_ADK_VERSION = "2026.3"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "agent"
 _DYNAMIC_TEMPLATE_FILES = {
+    ".env.template",
     "agent.json.template",
     "agent.spec",
     "Dockerfile",
@@ -46,7 +47,13 @@ def _render_template(template_file: str, replacements: dict[str, str]) -> str:
 
 def _normalize_name(raw: str, style: Literal["project", "snake", "pascal"]) -> str:
     if style == "pascal":
-        parts = [part for part in re.split(r"[^A-Za-z0-9]+", raw) if part]
+        name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", raw)
+        name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+        name = re.sub(r"[^A-Za-z0-9]+", "_", name)
+        name = re.sub(r"_+", "_", name).strip("_")
+        parts = [part for part in name.split("_") if part]
+        if parts and parts[-1].lower() == "agent":
+            parts = parts[:-1]
         if not parts:
             return ""
         return "".join(part[:1].upper() + part[1:] for part in parts)
@@ -59,7 +66,10 @@ def _normalize_name(raw: str, style: Literal["project", "snake", "pascal"]) -> s
     name = re.sub(rf"{collapsed_separator}+", separator, name).strip(separator)
 
     if style == "project":
-        return (name or "agent").lower()
+        project_name = (name or "agent").lower()
+        if project_name.endswith("-agent"):
+            project_name = project_name[: -len("-agent")]
+        return project_name or "agent"
     return name.lower()
 
 
@@ -145,6 +155,22 @@ def _build_agent_json_content(agent_dir_name: str) -> str:
     )
 
 
+def _build_env_template_content(
+    *,
+    port: int,
+    model: str,
+    model_provider: str,
+) -> str:
+    return _render_template(
+        ".env.template",
+        {
+            "PORT": str(port),
+            "MODEL": model,
+            "MODEL_PROVIDER": model_provider,
+        },
+    )
+
+
 def _build_llm_client_content(class_name: str) -> str:
     return _render_template(
         "llm_client.py.template",
@@ -205,6 +231,9 @@ def create_agent_scaffold(
     *,
     force: bool = False,
     clients: list[str] | None = None,
+    port: int = 9900,
+    model: str = "gpt-4o-mini",
+    model_provider: str = "openai",
 ) -> list[Path]:
     if target_dir.exists() and any(target_dir.iterdir()) and not force:
         raise FileExistsError(
@@ -235,6 +264,18 @@ def create_agent_scaffold(
     if force or not agent_json_path.exists():
         agent_json_path.write_text(_build_agent_json_content(target_dir.name), encoding="utf-8")
         created.append(agent_json_path)
+
+    env_path = target_dir / ".env"
+    if force or not env_path.exists():
+        env_path.write_text(
+            _build_env_template_content(
+                port=port,
+                model=model,
+                model_provider=model_provider,
+            ),
+            encoding="utf-8",
+        )
+        created.append(env_path)
 
     agent_spec_path = target_dir / "agent.spec"
     if force or not agent_spec_path.exists():

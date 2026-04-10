@@ -42,6 +42,17 @@ Generate custom LLM clients:
 uv run bat init agent rng --clients talk,discuss
 ```
 
+Set runtime and build environment variables from an existing agent root:
+
+```bash
+cd my_agent
+uv run bat set env --port 8080 --model gpt-4.1-mini --model-provider openai --docker-registry hub.bubbleran.com --repo orama/labs/my-agent
+```
+
+This command updates `.env` (creating it if missing).
+
+When running `init agent`, the scaffold creates `.env` as the runtime file.
+
 Build a Docker image:
 
 ```bash
@@ -115,4 +126,4 @@ bat --help
 Notes:
 
 - PyInstaller builds are OS-specific. Build on each target OS.
-- The spec includes `bat_cli` package data so scaffold templates are bundled in the executable.
+- The spec includes `create` package data so scaffold templates are bundled in the executable.

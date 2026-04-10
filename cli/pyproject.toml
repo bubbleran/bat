@@ -21,7 +21,7 @@ packaging = [
 ]
 
 [project.scripts]
-bat = "bat_cli.cli:main"
+bat = "cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -30,7 +30,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-bat_cli = [
+create = [
     "templates/agent/*",
     "templates/agent/.*",
     "templates/agent/src/*",

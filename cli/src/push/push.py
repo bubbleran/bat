@@ -3,7 +3,7 @@ from pathlib import Path
 
 import typer
 
-from bat_cli.image_defaults import resolve_registry, resolve_repo_name
+from image_defaults import resolve_registry, resolve_repo_name
 
 
 def push_image(
