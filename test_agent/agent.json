@@ -1,0 +1,12 @@
+{
+  "version": "2026_3",
+  "name": "test_agent",
+  "description": "",
+  "capabilities": {
+    "pushNotifications": false,
+    "streaming": false
+  },
+  "defaultInputModes": [],
+  "defaultOutputModes": [],
+  "skills": []
+}

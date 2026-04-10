@@ -1,0 +1,269 @@
+import re
+from pathlib import Path
+from typing import Literal
+
+
+BAT_ADK_VERSION = "2026.3"
+
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "agent"
+_DYNAMIC_TEMPLATE_FILES = {
+    "agent.json.template",
+    "agent.spec",
+    "Dockerfile",
+    "Makefile",
+    "llm_client.py.template",
+    "pyproject.toml.template",
+    "src/graph.py",
+}
+
+
+def _load_static_templates() -> dict[str, str]:
+    templates: dict[str, str] = {}
+    for template_path in sorted(TEMPLATES_DIR.rglob("*")):
+        if not template_path.is_file():
+            continue
+
+        relative_path = template_path.relative_to(TEMPLATES_DIR).as_posix()
+        if relative_path in _DYNAMIC_TEMPLATE_FILES:
+            continue
+
+        templates[relative_path] = template_path.read_text(encoding="utf-8")
+
+    return templates
+
+
+def _render_template(template_file: str, replacements: dict[str, str]) -> str:
+    template_path = TEMPLATES_DIR / template_file
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template file not found: {template_path}")
+
+    rendered = template_path.read_text(encoding="utf-8")
+    for key, value in replacements.items():
+        rendered = rendered.replace(f"__{key}__", value)
+
+    return rendered
+
+
+def _normalize_name(raw: str, style: Literal["project", "snake", "pascal"]) -> str:
+    if style == "pascal":
+        parts = [part for part in re.split(r"[^A-Za-z0-9]+", raw) if part]
+        if not parts:
+            return ""
+        return "".join(part[:1].upper() + part[1:] for part in parts)
+
+    separator = "-" if style == "project" else "_"
+    name = re.sub(r"([A-Z]+)([A-Z][a-z])", rf"\1{separator}\2", raw)
+    name = re.sub(r"([a-z0-9])([A-Z])", rf"\1{separator}\2", name)
+    name = re.sub(r"[^A-Za-z0-9]+", separator, name)
+    collapsed_separator = re.escape(separator)
+    name = re.sub(rf"{collapsed_separator}+", separator, name).strip(separator)
+
+    if style == "project":
+        return (name or "agent").lower()
+    return name.lower()
+
+
+def _build_pyproject_content(agent_dir_name: str) -> str:
+    project_name = _normalize_name(agent_dir_name, "project")
+    return _render_template(
+        "pyproject.toml.template",
+        {
+            "BAT_ADK_VERSION": BAT_ADK_VERSION,
+            "PROJECT_DESCRIPTION": f"{project_name.upper()} Agent",
+            "PROJECT_NAME": project_name,
+        },
+    )
+
+
+def _build_agent_spec_content(agent_dir_name: str) -> str:
+    return _render_template(
+        "agent.spec",
+        {
+            "PROJECT_NAME": _normalize_name(agent_dir_name, "project"),
+        },
+    )
+
+
+def _build_dockerfile_content(agent_dir_name: str) -> str:
+    return _render_template(
+        "Dockerfile",
+        {
+            "PROJECT_NAME": _normalize_name(agent_dir_name, "project"),
+        },
+    )
+
+
+def _build_makefile_content(agent_dir_name: str) -> str:
+    return _render_template(
+        "Makefile",
+        {
+            "PROJECT_NAME": _normalize_name(agent_dir_name, "project"),
+        },
+    )
+
+
+def _build_graph_content(agent_dir_name: str, clients: list[str] | None) -> str:
+    resolved_clients = _resolve_client_specs(clients)
+    agent_class_name = _normalize_name(agent_dir_name, "pascal") or "Agent"
+
+    client_imports = "\n".join(
+        f"from .llm_clients.{file_stem} import {class_name}"
+        for file_stem, class_name in resolved_clients
+    )
+
+    setup_blocks: list[str] = []
+
+    for file_stem, class_name in resolved_clients:
+        
+        setup_blocks.append(
+            "\n".join(
+                [
+                    f"        self.{file_stem} = {class_name}(",
+                    "            tools=[],",
+                    "        )",
+                ]
+            )
+        )
+
+    return _render_template(
+        "src/graph.py",
+        {
+            "AGENT_CLASS_NAME": agent_class_name,
+            "CLIENT_IMPORTS": client_imports,
+            "CLIENT_SETUP": "\n\n".join(setup_blocks),
+        },
+    )
+
+
+def _build_agent_json_content(agent_dir_name: str) -> str:
+    return _render_template(
+        "agent.json.template",
+        {
+            "ADK_API_VERSION": BAT_ADK_VERSION.replace(".", "_"),
+            "AGENT_NAME": agent_dir_name,
+        },
+    )
+
+
+def _build_llm_client_content(class_name: str) -> str:
+    return _render_template(
+        "llm_client.py.template",
+        {
+            "CLASS_NAME": class_name,
+        },
+    )
+
+
+def _resolve_client_specs(clients: list[str] | None) -> list[tuple[str, str]]:
+    if not clients:
+        return [("example_client", "ExampleClient")]
+
+    resolved: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for raw_name in clients:
+        snake_name = _normalize_name(raw_name, "snake")
+        if not snake_name:
+            continue
+
+        file_stem = snake_name if snake_name.endswith("_client") else f"{snake_name}_client"
+        if file_stem in seen:
+            continue
+
+        pascal_name = _normalize_name(raw_name, "pascal")
+        if not pascal_name:
+            continue
+        class_name = pascal_name if pascal_name.endswith("Client") else f"{pascal_name}Client"
+
+        seen.add(file_stem)
+        resolved.append((file_stem, class_name))
+
+    return resolved or [("example_client", "ExampleClient")]
+
+
+def _write_llm_clients(
+    llm_clients_dir: Path,
+    *,
+    clients: list[str] | None,
+    force: bool,
+) -> list[Path]:
+    created: list[Path] = []
+    for file_stem, class_name in _resolve_client_specs(clients):
+        client_path = llm_clients_dir / f"{file_stem}.py"
+        if client_path.exists() and not force:
+            continue
+
+        client_path.parent.mkdir(parents=True, exist_ok=True)
+        client_path.write_text(_build_llm_client_content(class_name), encoding="utf-8")
+        created.append(client_path)
+
+    return created
+
+
+def create_agent_scaffold(
+    target_dir: Path,
+    *,
+    force: bool = False,
+    clients: list[str] | None = None,
+) -> list[Path]:
+    if target_dir.exists() and any(target_dir.iterdir()) and not force:
+        raise FileExistsError(
+            f"Target directory '{target_dir}' already exists and is not empty. "
+            "Use --force to overwrite files."
+        )
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    created: list[Path] = []
+    for relative_path, content in _load_static_templates().items():
+        file_path = target_dir / relative_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if file_path.exists() and not force:
+            continue
+
+        file_path.write_text(content, encoding="utf-8")
+        created.append(file_path)
+
+    pyproject_path = target_dir / "pyproject.toml"
+    
+    if force or not pyproject_path.exists():
+        pyproject_path.write_text(_build_pyproject_content(target_dir.name), encoding="utf-8")
+        created.append(pyproject_path)
+
+    agent_json_path = target_dir / "agent.json"
+    if force or not agent_json_path.exists():
+        agent_json_path.write_text(_build_agent_json_content(target_dir.name), encoding="utf-8")
+        created.append(agent_json_path)
+
+    agent_spec_path = target_dir / "agent.spec"
+    if force or not agent_spec_path.exists():
+        agent_spec_path.write_text(_build_agent_spec_content(target_dir.name), encoding="utf-8")
+        created.append(agent_spec_path)
+
+    dockerfile_path = target_dir / "Dockerfile"
+    if force or not dockerfile_path.exists():
+        dockerfile_path.write_text(_build_dockerfile_content(target_dir.name), encoding="utf-8")
+        created.append(dockerfile_path)
+
+    makefile_path = target_dir / "Makefile"
+    if force or not makefile_path.exists():
+        makefile_path.write_text(_build_makefile_content(target_dir.name), encoding="utf-8")
+        created.append(makefile_path)
+
+    graph_path = target_dir / "src" / "graph.py"
+    if force or not graph_path.exists():
+        graph_path.write_text(_build_graph_content(target_dir.name, clients), encoding="utf-8")
+        created.append(graph_path)
+
+    created.extend(
+        _write_llm_clients(
+            target_dir / "src" / "llm_clients",
+            clients=clients,
+            force=force,
+        )
+    )
+
+    return created
+
+

@@ -1,0 +1,9 @@
+[project]
+name = "__PROJECT_NAME__"
+version = "1.0.0"
+description = "__PROJECT_DESCRIPTION__"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bat-adk>=__BAT_ADK_VERSION__"
+]

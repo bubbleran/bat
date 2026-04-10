@@ -1,0 +1,12 @@
+{
+  "version": "__ADK_API_VERSION__",
+  "name": "__AGENT_NAME__",
+  "description": "",
+  "capabilities": {
+    "pushNotifications": false,
+    "streaming": false
+  },
+  "defaultInputModes": [],
+  "defaultOutputModes": [],
+  "skills": []
+}

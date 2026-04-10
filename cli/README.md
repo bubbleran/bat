@@ -1,0 +1,118 @@
+# bat-cli
+
+A CLI tool for creating and managing BAT agent projects.
+
+## Quick Start
+
+1. Install dependencies:
+
+```bash
+uv sync --group dev
+```
+
+If you also need packaging tools (PyInstaller):
+
+```bash
+uv sync --group dev --group packaging
+```
+
+2. Create a new agent scaffold:
+
+```bash
+uv run bat init agent
+```
+
+This creates a `default` folder by default.
+
+Use a custom name:
+
+```bash
+uv run bat init agent my_agent
+```
+
+Choose an output directory:
+
+```bash
+uv run bat init agent my_agent --output-dir .
+```
+
+Generate custom LLM clients:
+
+```bash
+uv run bat init agent rng --clients talk,discuss
+```
+
+Build a Docker image:
+
+```bash
+uv run bat build --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --tag latest
+```
+
+Push a Docker image:
+
+```bash
+uv run bat push --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --tag latest
+```
+
+Set a default repository for an agent via environment variable:
+
+```bash
+# in ./my_agent/.env
+BAT_DOCKER_REPO=orama/labs/my-agent
+BAT_DOCKER_REGISTRY=hub.bubbleran.com
+```
+
+Then you can omit `--repo`:
+
+```bash
+uv run bat build --context ./my_agent --docker-registry hub.bubbleran.com --tag latest
+uv run bat push --context ./my_agent --docker-registry hub.bubbleran.com --tag latest
+```
+
+Repository precedence is:
+
+1. `--repo`
+2. `BAT_DOCKER_REPO` from shell environment
+3. `BAT_DOCKER_REPO` from `.env` in current directory
+4. auto-generated default: `default-repository/<project-name>`
+
+Registry precedence is:
+
+1. `--docker-registry`
+2. `BAT_DOCKER_REGISTRY` from shell environment
+3. `BAT_DOCKER_REGISTRY` from `.env` in current directory
+4. fallback default: `default_registry`
+
+## Build Standalone Executable (PyInstaller)
+
+Build a standalone executable for the current OS (on Windows this creates `bat.exe`):
+
+```bash
+uv sync --group packaging
+uv run pyinstaller --clean --noconfirm bat_cli.spec
+```
+
+Or if you are not in a synchronized environment:
+
+```bash
+uv run --group packaging pyinstaller --clean --noconfirm bat_cli.spec
+```
+
+Output:
+
+- One-file executable: `dist/bat` (Linux/macOS) or `dist/bat.exe` (Windows)
+
+Install on your machine (Windows example):
+
+1. Copy `dist/bat.exe` to a folder, for example `C:\tools\bat`.
+2. Add that folder to your `PATH`.
+3. Open a new terminal and run:
+
+```bash
+bat --help
+```
+
+Notes:
+
+- PyInstaller builds are OS-specific. Build on each target OS.
+- The spec includes `bat_cli` package data so scaffold templates are bundled in the executable.
