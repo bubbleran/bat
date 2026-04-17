@@ -94,6 +94,55 @@ Registry precedence is:
 3. `BAT_DOCKER_REGISTRY` from `.env` in current directory
 4. fallback default: `default_registry`
 
+## Evaluation Commands
+
+Run these commands from an existing BAT agent root (the folder containing `agent.json`, `config.yaml`, and `src/graph.py`).
+
+Initialize evaluation scaffold:
+
+```bash
+uv run bat eval init
+```
+
+This creates:
+
+- `eval/eval.yaml`
+- `eval/input/tasks.json`
+- `eval/output/`
+
+Run evaluation:
+
+```bash
+uv run bat eval run
+```
+
+How it works:
+
+- Reads settings from `eval/eval.yaml`.
+- Runs each configured model.
+- Executes the agent in the agent's own virtual environment (`.venv/bin/python`).
+- Writes artifacts under `eval/output/<task_id>/...`.
+
+Minimal `eval/eval.yaml`:
+
+```yaml
+evaluation:
+  dataset: eval/input/tasks.json
+  output_dir: eval/output
+  k: 1
+  qualitative: true
+  save_attempts: false
+
+judge:
+  provider: ollama
+  model: your-judge-model
+  base_url: http://localhost:11434
+
+models:
+  - provider: openai
+    model: your-model-name
+```
+
 ## Build Standalone Executable (PyInstaller)
 
 Build a standalone executable for the current OS (on Windows this creates `bat.exe`):

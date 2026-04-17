@@ -5,6 +5,7 @@ import typer
 from add.client import add_clients_to_existing_agent
 from build.build import build_image
 from create.agent import create_agent_scaffold
+from eval.commands import eval_init, eval_run
 from push.push import push_image
 from set.env import set_env_values
 
@@ -13,12 +14,16 @@ app = typer.Typer(help="CLI tool to create, build, and manage AI agents develope
 init_app = typer.Typer(help="Create new BAT resources.")
 add_app = typer.Typer(help="Add new components to existing BAT agents.")
 set_app = typer.Typer(help="Set configuration values for existing BAT agents.")
+eval_app = typer.Typer(help="Run local evaluation workflows for existing BAT agents.")
 
 app.add_typer(init_app, name="init")
 app.add_typer(add_app, name="add")
 app.add_typer(set_app, name="set")
+app.add_typer(eval_app, name="eval")
 app.command("build", help="Build the Docker image for the agent.")(build_image)
 app.command("push", help="Push the Docker image to a registry.")(push_image)
+eval_app.command("init", help="Initialize local evaluation scaffold.")(eval_init)
+eval_app.command("run", help="Run evaluation using eval/eval.yaml.")(eval_run)
 
 
 def _parse_clients_option(raw_clients: str | None) -> list[str] | None:
