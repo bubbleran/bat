@@ -4,6 +4,8 @@ A CLI tool for creating and managing BAT agent projects.
 
 ## Quick Start
 
+For a complete command reference with a command tree, see [CLI_GUIDE.md](CLI_GUIDE.md).
+
 1. Install dependencies:
 
 ```bash

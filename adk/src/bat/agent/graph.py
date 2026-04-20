@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
-from typing import AsyncIterable, Dict, Optional, Type
+from typing import Any, AsyncIterable, Dict, List, Optional, Type
 
 logger = create_logger(__name__, level="debug")
 
@@ -290,6 +290,36 @@ class AgentGraph(ABC):
                     from_timestamp=from_timestamp,
                 )
         return total
+
+    def _get_trace_metadata(
+        self,
+        from_timestamp: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Get trace metadata for the graph from components that expose it.
+
+        Components can opt in by implementing a callable method:
+            get_trace_metadata(from_timestamp: Optional[float]) -> Dict[str, Any]
+
+        Currently, trace metadata is merged under the `tool_calls` key.
+        """
+        tool_calls: List[Dict[str, Any]] = []
+
+        for _, value in self.__dict__.items():
+            get_trace_metadata = getattr(value, "get_trace_metadata", None)
+            if not callable(get_trace_metadata):
+                continue
+
+            trace_item = get_trace_metadata(from_timestamp=from_timestamp)
+            if not isinstance(trace_item, dict):
+                continue
+
+            item_tool_calls = trace_item.get("tool_calls", [])
+            if isinstance(item_tool_calls, list):
+                tool_calls.extend(item_tool_calls)
+
+        if not tool_calls:
+            return {}
+        return {"tool_calls": tool_calls}
 
     
     def _build_request(config:AgentConfig, text: str) -> Message:
