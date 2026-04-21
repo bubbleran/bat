@@ -18,6 +18,15 @@ def _usage_to_dict(usage: Any) -> Dict[str, Any]:
     return {"raw": str(usage)}
 
 
+def _tool_calls_from_trace(trace_metadata: Any) -> list[Dict[str, Any]]:
+    if not isinstance(trace_metadata, dict):
+        return []
+    tool_calls = trace_metadata.get("tool_calls", [])
+    if not isinstance(tool_calls, list):
+        return []
+    return [item for item in tool_calls if isinstance(item, dict)]
+
+
 def _merge_runnable_config(base: RunnableConfig, thread_id: str) -> RunnableConfig:
     base = base or {}
     cfg = dict(base)
@@ -78,6 +87,12 @@ class BatAgentGraphAdapter:
             trace.usage = _usage_to_dict(usage)
         except Exception:
             trace.usage = {}
+
+        try:
+            trace_metadata = self.agent._get_trace_metadata(from_timestamp=t0_epoch)
+            trace.tool_calls = _tool_calls_from_trace(trace_metadata)
+        except Exception:
+            trace.tool_calls = []
 
         status = last_terminal_status or "error"
         output_text = last_terminal_content or ""
