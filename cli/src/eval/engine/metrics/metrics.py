@@ -60,6 +60,7 @@ def episode_metrics(ep: EpisodeResult) -> Dict[str, Any]:
             "response_relevance": ep.qualitative_scores.response_relevance,
             "task_completion_quality": ep.qualitative_scores.task_completion_quality,
             "hallucination_score": ep.qualitative_scores.hallucination_score,
+            "tool_call_appropriateness": ep.qualitative_scores.tool_call_appropriateness,
         }
 
     return metrics
@@ -106,7 +107,12 @@ def summarize_episode_metrics(results: List[EpisodeResult], k: int = 1) -> Dict[
     qualitative_metrics = [metric["qualitative"] for metric in per_episode if metric.get("qualitative")]
     if qualitative_metrics:
         qualitative_summary: Dict[str, Any] = {}
-        for field in ["response_relevance", "task_completion_quality", "hallucination_score"]:
+        for field in [
+            "response_relevance",
+            "task_completion_quality",
+            "hallucination_score",
+            "tool_call_appropriateness",
+        ]:
             values = [metric[field] for metric in qualitative_metrics if metric.get(field) is not None]
             if values:
                 qualitative_summary[field] = {

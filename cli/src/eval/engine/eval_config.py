@@ -32,6 +32,17 @@ def _to_optional_str(value: Any) -> str | None:
     text = str(value).strip()
     return text or None
 
+
+def _to_positive_int(value: Any, *, field_name: str, default: int) -> int:
+    raw = default if value is None else value
+    try:
+        parsed = int(raw)
+    except Exception as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{field_name} must be >= 1")
+    return parsed
+
 def _split_provider_model(value: str, *, field_name: str) -> tuple[str, str]:
     raw = value.strip()
     if not raw or ":" not in raw:
@@ -126,13 +137,24 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
 
     dataset = _resolve_path(agent_root, evaluation_section.get("dataset"), "eval/input/tasks.json")
     output_dir = _resolve_path(agent_root, evaluation_section.get("output_dir"), "eval/output")
+    agent_url = _to_optional_str(evaluation_section.get("agent_url")) or "http://127.0.0.1:9900"
+
+    agent_startup_timeout_s = _to_positive_int(
+        evaluation_section.get("agent_startup_timeout_s"),
+        field_name="evaluation.agent_startup_timeout_s",
+        default=45,
+    )
+    agent_shutdown_timeout_s = _to_positive_int(
+        evaluation_section.get("agent_shutdown_timeout_s"),
+        field_name="evaluation.agent_shutdown_timeout_s",
+        default=10,
+    )
 
     k = int(evaluation_section.get("k", 1))
     if k < 1:
         raise ValueError("evaluation.k must be >= 1")
 
     qualitative = _to_bool(evaluation_section.get("qualitative"), default=True)
-    save_attempts = _to_bool(evaluation_section.get("save_attempts"), default=False)
     run_name = _to_optional_str(evaluation_section.get("run_name")) or "benchmark"
 
     judge = _parse_model_spec(raw.get("judge"), section_name="judge")
@@ -144,9 +166,11 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
     return EvalConfig(
         dataset=dataset,
         output_dir=output_dir,
+        agent_url=agent_url,
+        agent_startup_timeout_s=agent_startup_timeout_s,
+        agent_shutdown_timeout_s=agent_shutdown_timeout_s,
         k=k,
         qualitative=qualitative,
-        save_attempts=save_attempts,
         run_name=run_name,
         models=models,
         judge=judge,
@@ -158,9 +182,11 @@ def default_eval_yaml() -> str:
         "evaluation:\n"
         "  dataset: eval/input/tasks.json\n"
         "  output_dir: eval/output\n"
+        "  agent_url: http://127.0.0.1:9900\n"
+        "  agent_startup_timeout_s: 45\n"
+        "  agent_shutdown_timeout_s: 10\n"
         "  k: 1\n"
         "  qualitative: true\n"
-        "  save_attempts: false\n"
         "\n"
         "judge:\n"
         "  provider: ollama\n"

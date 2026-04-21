@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlparse
 
 import typer
 
@@ -21,8 +23,8 @@ _BRACED_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 def _validate_agent_root(agent_root: Path) -> None:
     required = [
         agent_root / "config.yaml",
-        agent_root / "src" / "graph.py",
         agent_root / "agent.json",
+        agent_root / "pyproject.toml",
     ]
     missing = [path for path in required if not path.exists()]
     if missing:
@@ -113,6 +115,69 @@ def _apply_env_overrides(
         )
 
 
+def _parse_agent_url(agent_url: str) -> tuple[str, int, str]:
+    parsed = urlparse(agent_url.strip())
+    if not parsed.scheme or not parsed.hostname:
+        raise typer.BadParameter(
+            "evaluation.agent_url must be a full URL, for example: http://127.0.0.1:9900"
+        )
+
+    port = parsed.port
+    if port is None:
+        if parsed.scheme == "https":
+            port = 443
+        elif parsed.scheme == "http":
+            port = 80
+        else:
+            raise typer.BadParameter("evaluation.agent_url must use http or https")
+
+    base_url = f"{parsed.scheme}://{parsed.hostname}"
+    return parsed.hostname, port, base_url
+
+
+def _wait_for_agent_port(agent_url: str, timeout_s: int, process: subprocess.Popen) -> None:
+    host, port, _ = _parse_agent_url(agent_url)
+    deadline = time.time() + timeout_s
+
+    while time.time() < deadline:
+        if process.poll() is not None:
+            raise typer.BadParameter(
+                f"Agent process exited before becoming ready (exit code: {process.returncode})."
+            )
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                return
+        except OSError:
+            time.sleep(0.2)
+
+    raise typer.BadParameter(
+        f"Agent did not become ready at {agent_url} within {timeout_s} seconds."
+    )
+
+
+def _start_agent_process(agent_root: Path, env: dict[str, str]) -> subprocess.Popen:
+    try:
+        return subprocess.Popen(
+            ["uv", "run", "."],
+            cwd=agent_root,
+            env=env,
+        )
+    except FileNotFoundError as exc:
+        raise typer.BadParameter("Cannot execute 'uv run .'. Ensure uv is installed and available in PATH.") from exc
+
+
+def _stop_agent_process(process: subprocess.Popen, timeout_s: int) -> None:
+    if process.poll() is not None:
+        return
+
+    process.terminate()
+    try:
+        process.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=timeout_s)
+
+
 def eval_init(
     force: bool = typer.Option(
         False,
@@ -174,8 +239,7 @@ def eval_run() -> None:
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
     cli_src = _find_cli_src()
-    print("Percorso della sorgente CLI:", cli_src)
-    if not (cli_src / "eval" / "engine" / "orchestrator.py").exists():
+    if cli_src is None or not (cli_src / "eval" / "engine" / "orchestrator.py").exists():
         raise typer.BadParameter(
             "Cannot locate eval runner module. Expected cli/src/eval/engine/orchestrator.py"
         )
@@ -192,82 +256,97 @@ def eval_run() -> None:
         fg=typer.colors.CYAN,
     )
 
+    _, parsed_port, base_url = _parse_agent_url(cfg.agent_url)
+
     for idx, model_cfg in enumerate(cfg.models):
         typer.secho(f"- {model_cfg.provider}:{model_cfg.model}", fg=typer.colors.CYAN)
 
-        runner_args = [
-            "-m",
-            "eval.engine.orchestrator",
-            "--agent-root",
-            str(agent_root.resolve()),
-            "--dataset",
-            str(cfg.dataset),
-            "--output-dir",
-            str(cfg.output_dir),
-            "--model-provider",
-            model_cfg.provider,
-            "--model",
-            model_cfg.model,
-            "--task-id",
-            task_id,
-            "--k",
-            str(cfg.k),
-            "--run-name",
-            cfg.run_name,
-        ]
-        if cfg.qualitative:
-            runner_args.append("--qualitative")
-        if cfg.save_attempts:
-            runner_args.append("--save-attempts")
+        server_env = os.environ.copy()
+        server_env["MODEL_PROVIDER"] = model_cfg.provider
+        server_env["MODEL"] = model_cfg.model
+        server_env["PORT"] = str(parsed_port)
+        server_env["URL"] = base_url
 
-        child_env = os.environ.copy()
-        child_env["MODEL_PROVIDER"] = model_cfg.provider
-        child_env["MODEL"] = model_cfg.model
         if model_cfg.base_url:
-            child_env["BASE_URL"] = model_cfg.base_url
+            server_env["BASE_URL"] = model_cfg.base_url
         else:
-            child_env.pop("BASE_URL", None)
+            server_env.pop("BASE_URL", None)
 
         _apply_env_overrides(
-            child_env,
+            server_env,
             model_cfg.env,
             section_name=f"models[{idx}]",
         )
 
-        if cfg.qualitative:
-            if cfg.judge is None:
-                raise typer.BadParameter(
-                    "When evaluation.qualitative is true, judge.provider and judge.model are required"
-                )
+        process = _start_agent_process(agent_root, server_env)
 
-            child_env["JUDGE_PROVIDER"] = cfg.judge.provider
-            child_env["JUDGE_MODEL"] = cfg.judge.model
-            if cfg.judge.base_url:
-                child_env["JUDGE_BASE_URL"] = cfg.judge.base_url
-            else:
-                child_env.pop("JUDGE_BASE_URL", None)
-
-            _apply_env_overrides(
-                child_env,
-                cfg.judge.env,
-                section_name="judge",
+        try:
+            _wait_for_agent_port(
+                cfg.agent_url,
+                timeout_s=cfg.agent_startup_timeout_s,
+                process=process,
             )
-        else:
-            child_env.pop("JUDGE_PROVIDER", None)
-            child_env.pop("JUDGE_MODEL", None)
-            child_env.pop("JUDGE_BASE_URL", None)
 
-        child_env["PYTHONPATH"] = str(cli_src)
+            runner_args = [
+                "-m",
+                "eval.engine.orchestrator",
+                "--dataset",
+                str(cfg.dataset),
+                "--output-dir",
+                str(cfg.output_dir),
+                "--agent-url",
+                cfg.agent_url,
+                "--model-provider",
+                model_cfg.provider,
+                "--model",
+                model_cfg.model,
+                "--task-id",
+                task_id,
+                "--k",
+                str(cfg.k),
+                "--run-name",
+                cfg.run_name,
+            ]
+            if cfg.qualitative:
+                runner_args.append("--qualitative")
 
-        cmd = [str(agent_python), *runner_args]
-        result = subprocess.run(
-            cmd,
-            cwd=agent_root,
-            env=child_env,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise typer.Exit(code=result.returncode)
+            runner_env = server_env.copy()
+            if cfg.qualitative:
+                if cfg.judge is None:
+                    raise typer.BadParameter(
+                        "When evaluation.qualitative is true, judge.provider and judge.model are required"
+                    )
+
+                runner_env["JUDGE_PROVIDER"] = cfg.judge.provider
+                runner_env["JUDGE_MODEL"] = cfg.judge.model
+                if cfg.judge.base_url:
+                    runner_env["JUDGE_BASE_URL"] = cfg.judge.base_url
+                else:
+                    runner_env.pop("JUDGE_BASE_URL", None)
+
+                _apply_env_overrides(
+                    runner_env,
+                    cfg.judge.env,
+                    section_name="judge",
+                )
+            else:
+                runner_env.pop("JUDGE_PROVIDER", None)
+                runner_env.pop("JUDGE_MODEL", None)
+                runner_env.pop("JUDGE_BASE_URL", None)
+
+            runner_env["PYTHONPATH"] = str(cli_src)
+
+            cmd = [str(agent_python), *runner_args]
+            result = subprocess.run(
+                cmd,
+                cwd=agent_root,
+                env=runner_env,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise typer.Exit(code=result.returncode)
+        finally:
+            _stop_agent_process(process, timeout_s=cfg.agent_shutdown_timeout_s)
 
     typer.secho(
         f"Evaluation completed. Output: {cfg.output_dir / task_id}",

@@ -57,6 +57,7 @@ class QualitativeScores(BaseModel):
     response_relevance: Optional[float] = None
     task_completion_quality: Optional[float] = None
     hallucination_score: Optional[float] = None
+    tool_call_appropriateness: Optional[float] = None
     judge_reasoning: Dict[str, str] = Field(default_factory=dict)
 
 
@@ -90,9 +91,11 @@ class JudgeSpec(BaseModel):
 class EvalConfig(BaseModel):
     dataset: Path
     output_dir: Path
+    agent_url: str
+    agent_startup_timeout_s: int = 45
+    agent_shutdown_timeout_s: int = 10
     k: int
     qualitative: bool
-    save_attempts: bool
     run_name: str
     models: list[ModelSpec]
     judge: JudgeSpec | None
