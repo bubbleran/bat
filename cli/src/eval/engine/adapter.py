@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-import importlib
 import json
 import time
 import uuid
 from typing import Any, Dict, Optional
+
+from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
+from a2a.types import Message, TextPart
+from httpx import AsyncClient
 
 from .contracts import EpisodeResult, EpisodeTrace, ExpectedToolCall, TaskSpec, TraceEvent
 
@@ -251,17 +254,6 @@ class BatA2AAdapter:
         self.max_events = max_events
 
     async def run_task(self, task: TaskSpec, *, thread_id: str) -> EpisodeResult:
-        a2a_client = importlib.import_module("a2a.client")
-        a2a_types = importlib.import_module("a2a.types")
-        httpx_module = importlib.import_module("httpx")
-
-        A2ACardResolver = getattr(a2a_client, "A2ACardResolver")
-        ClientConfig = getattr(a2a_client, "ClientConfig")
-        ClientFactory = getattr(a2a_client, "ClientFactory")
-        Message = getattr(a2a_types, "Message")
-        TextPart = getattr(a2a_types, "TextPart")
-        AsyncClient = getattr(httpx_module, "AsyncClient")
-
         t0_perf = time.perf_counter()
         trace = EpisodeTrace()
 

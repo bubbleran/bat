@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 import re
 import socket
 import subprocess
-import sys
 import time
 from pathlib import Path
-from typing import Mapping
+from typing import Iterator, Mapping
 from urllib.parse import urlparse
 
 import typer
 
+from .engine.orchestrator import run_agent
 from .engine.eval_config import default_eval_yaml, default_tasks_json, load_eval_config
 
 
@@ -34,15 +36,50 @@ def _validate_agent_root(agent_root: Path) -> None:
         )
 
 
-def _find_cli_src() -> Path | None:
-    candidates = [
-        Path(__file__).resolve().parents[1],
-        Path(sys.executable).resolve().parent.parent / "src",
-    ]
-    for candidate in candidates:
-        if (candidate / "eval" / "engine" / "orchestrator.py").exists():
-            return candidate
-    return None
+@contextlib.contextmanager
+def _temporary_env(overrides: Mapping[str, str]) -> Iterator[None]:
+    original_values: dict[str, str | None] = {}
+    try:
+        for key, value in overrides.items():
+            original_values[key] = os.environ.get(key)
+            os.environ[key] = value
+        yield
+    finally:
+        for key, original in original_values.items():
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+
+
+def _run_eval_orchestrator(
+    *,
+    agent_url: str,
+    model_provider: str,
+    model: str,
+    dataset: Path,
+    output_dir: Path,
+    task_id: str,
+    k: int,
+    run_name: str,
+    qualitative: bool,
+    env: Mapping[str, str],
+) -> None:
+    with _temporary_env(env):
+        asyncio.run(
+            run_agent(
+                agent_url=agent_url,
+                model=model,
+                model_provider=model_provider,
+                input_path=dataset,
+                run_name=run_name,
+                task_id=task_id,
+                enable_scoring=True,
+                enable_qualitative_eval=qualitative,
+                k=k,
+                out_dir=str(output_dir),
+            )
+        )
 
 
 def _find_agent_python(agent_root: Path) -> Path | None:
@@ -220,6 +257,93 @@ def eval_init(
     typer.secho("Evaluation scaffold ready in eval/", fg=typer.colors.GREEN)
 
 
+def _eval_config_to_dict(cfg) -> dict[str, object]:
+    models = [f"{model.provider}:{model.model}" for model in cfg.models]
+    judge_model = f"{cfg.judge.provider}:{cfg.judge.model}" if cfg.judge is not None else "not configured"
+
+    return {
+        "dataset": str(cfg.dataset),
+        "k": cfg.k,
+        "qualitative": cfg.qualitative,
+        "models": models,
+        "judge_model": judge_model,
+    }
+
+
+def _render_eval_show(payload: dict[str, object]) -> str:
+    lines = [
+        "============================",
+        "  EVALUATION CONFIGURATION",
+        "============================",
+        f"Dataset     : {payload['dataset']}",
+        f"k           : {payload['k']}",
+        f"Qualitative : {'yes' if payload['qualitative'] else 'no'}",
+        "",
+        "Models:",
+    ]
+
+    models = payload["models"]
+    if isinstance(models, list) and models:
+        lines.extend([f"  [{idx}] {model}" for idx, model in enumerate(models, start=1)])
+    else:
+        lines.append("  [0] none")
+
+    lines.extend(
+        [
+            "",
+            f"Judge model : {payload['judge_model']}",
+            "============================",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _print_eval_show(payload: dict[str, object]) -> None:
+    typer.secho("============================", fg=typer.colors.BLUE)
+    typer.secho("  EVALUATION CONFIGURATION", fg=typer.colors.BLUE, bold=True)
+    typer.secho("============================", fg=typer.colors.BLUE)
+
+    typer.secho("Dataset", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
+    typer.echo(f"     : {payload['dataset']}")
+
+    typer.secho("k", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
+    typer.echo(f"           : {payload['k']}")
+
+    typer.secho("Qualitative", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
+    typer.echo(f" : {'yes' if payload['qualitative'] else 'no'}")
+
+    typer.secho("", nl=True)
+    typer.secho("Models:", fg=typer.colors.CYAN, bold=True)
+
+    models = payload["models"]
+    if isinstance(models, list) and models:
+        for idx, model in enumerate(models, start=1):
+            typer.echo(f"  [{idx}] {model}")
+    else:
+        typer.echo("  [0] none")
+
+    typer.secho("", nl=True)
+    typer.secho("Judge model", fg=typer.colors.MAGENTA, bold=True, nl=False)
+    typer.echo(f" : {payload['judge_model']}")
+    typer.secho("============================", fg=typer.colors.BLUE)
+
+
+def eval_show() -> None:
+    agent_root = Path.cwd()
+    _validate_agent_root(agent_root)
+
+    eval_yaml_path = agent_root / "eval" / "eval.yaml"
+    if not eval_yaml_path.exists():
+        raise typer.BadParameter("Missing ./eval/eval.yaml. Run 'bat eval init' first.")
+
+    try:
+        cfg = load_eval_config(agent_root, eval_yaml_path)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    _print_eval_show(_eval_config_to_dict(cfg))
+
+
 def eval_run() -> None:
     agent_root = Path.cwd()
     _validate_agent_root(agent_root)
@@ -237,12 +361,6 @@ def eval_run() -> None:
         raise typer.BadParameter(f"Dataset not found: {cfg.dataset}")
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
-
-    cli_src = _find_cli_src()
-    if cli_src is None or not (cli_src / "eval" / "engine" / "orchestrator.py").exists():
-        raise typer.BadParameter(
-            "Cannot locate eval runner module. Expected cli/src/eval/engine/orchestrator.py"
-        )
 
     agent_python = _find_agent_python(agent_root)
     if agent_python is None:
@@ -287,29 +405,6 @@ def eval_run() -> None:
                 process=process,
             )
 
-            runner_args = [
-                "-m",
-                "eval.engine.orchestrator",
-                "--dataset",
-                str(cfg.dataset),
-                "--output-dir",
-                str(cfg.output_dir),
-                "--agent-url",
-                cfg.agent_url,
-                "--model-provider",
-                model_cfg.provider,
-                "--model",
-                model_cfg.model,
-                "--task-id",
-                task_id,
-                "--k",
-                str(cfg.k),
-                "--run-name",
-                cfg.run_name,
-            ]
-            if cfg.qualitative:
-                runner_args.append("--qualitative")
-
             runner_env = server_env.copy()
             if cfg.qualitative:
                 if cfg.judge is None:
@@ -334,17 +429,18 @@ def eval_run() -> None:
                 runner_env.pop("JUDGE_MODEL", None)
                 runner_env.pop("JUDGE_BASE_URL", None)
 
-            runner_env["PYTHONPATH"] = str(cli_src)
-
-            cmd = [str(agent_python), *runner_args]
-            result = subprocess.run(
-                cmd,
-                cwd=agent_root,
+            _run_eval_orchestrator(
+                agent_url=cfg.agent_url,
+                model_provider=model_cfg.provider,
+                model=model_cfg.model,
+                dataset=cfg.dataset,
+                output_dir=cfg.output_dir,
+                task_id=task_id,
+                k=cfg.k,
+                run_name=cfg.run_name,
+                qualitative=cfg.qualitative,
                 env=runner_env,
-                check=False,
             )
-            if result.returncode != 0:
-                raise typer.Exit(code=result.returncode)
         finally:
             _stop_agent_process(process, timeout_s=cfg.agent_shutdown_timeout_s)
 

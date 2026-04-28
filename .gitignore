@@ -3,6 +3,6 @@
 .env
 .venv/
 uv.lock
-
+.codex
 __pycache__/
 

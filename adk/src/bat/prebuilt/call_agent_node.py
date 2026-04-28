@@ -2,9 +2,9 @@ import asyncio
 import time
 import warnings
 from ..agent.config import AgentConfig
-from ..agent.metadata import MetadataCollector
+from ..chat_model_client.metadata import MetadataCollector
 from ..agent.state import AgentState
-from ..chat_model_client import UsageMetadata
+from ..chat_model_client.metadata import UsageMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
 from a2a.client import ClientConfig, ClientEvent, ClientFactory

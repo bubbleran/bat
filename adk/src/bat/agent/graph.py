@@ -1,4 +1,5 @@
-from ..chat_model_client import ChatModelClient, UsageMetadata
+from ..chat_model_client import ChatModelClient
+from ..chat_model_client.metadata import UsageMetadata
 from ..logging import create_logger
 from ..prebuilt import CallAgentNode
 from .config import AgentConfig

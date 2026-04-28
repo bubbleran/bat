@@ -78,166 +78,185 @@ def _call_llm_judge(prompt: str, max_retries: int = 2) -> Dict[str, Any]:
 # Prompt templates
 # ---------------------------------------------------------------------------
 
-RESPONSE_RELEVANCE_PROMPT = """You are an expert evaluator assessing the relevance of an AI agent's response throughout its entire interaction.
+RESPONSE_RELEVANCE_PROMPT = """You are a strict evaluator of response relevance.
 
-**User Queries (chronological):**
+**User Queries:**
 {query}
 
-**Full Agent Conversation:**
+**Full Conversation:**
 {context}
 
-**Final Agent Response:**
+**Final Response:**
 {response}
 
-**Task:** Evaluate how relevant and on-topic the agent's responses are to the user's queries throughout the entire conversation. You can be harsh, use the whole scale from 0.0 to 1.0, and consider the following:
+TASK: Score how directly the agent answered the user’s request.
 
-**Evaluation Instructions:**
-1. **Consider the full conversation flow**: Review all intermediate steps and responses
-2. **Weight the final response more heavily** (60% weight) but don't ignore intermediate steps (40% weight)
-3. **Check for topic drift**: Did the agent stay focused throughout or introduce irrelevant information?
-4. **Assess contextual awareness**: Did intermediate responses show understanding of the evolving task and the user's needs?
-5. **Evaluate final response relevance**: Does the final response directly address the user's queries without tangents?
+HARD RULES (override all other reasoning):
+- If the final response does NOT contain a concrete answer/result → score ≤ 0.3
+- If the response is mostly procedural ("how to do it") → score ≤ 0.3
+- If the response includes fabricated example outputs (e.g., "item1", "...") → score ≤ 0.5
+- If the response directly answers the query with concrete content → score ≥ 0.7
 
-**Scoring Criteria:**
-- **1.0**: All responses perfectly relevant; final response directly addresses all queries; no tangents
-- **0.8-0.9**: Mostly relevant throughout; final response addresses main points; minor tangents in intermediate steps
-- **0.6-0.7**: Generally relevant but some intermediate drift; final response mostly on-topic
-- **0.4-0.5**: Partial relevance; significant tangents or off-topic intermediate steps; final response somewhat addresses queries
-- **0.2-0.3**: Barely relevant; mostly off-topic throughout; final response weakly connected to queries
-- **0.0-0.1**: Completely irrelevant conversation; final response unrelated to user queries
+EVALUATION:
+- Final response weight: 70%
+- Intermediate steps: 30%
 
-Respond ONLY with valid JSON in this exact format:
+CHECKS:
+1. Does the final response directly answer the question?
+2. Is it a real answer or just instructions?
+3. Are there fake placeholders instead of real data?
+4. Any off-topic drift?
+
+SCORING:
+- 1.0: Direct, concrete, complete answer
+- 0.7–0.9: Mostly correct, minor issues
+- 0.4–0.6: Partial answer or weak relevance
+- 0.2–0.3: Mostly procedural or indirect
+- 0.0–0.1: No real answer
+
+Return JSON:
 {{
-  "score": <float between 0.0 and 1.0>,
-  "reasoning": "<explanation covering intermediate steps and final response>"
-}}"""
+    "score": float,
+    "reasoning": "short explanation"
+}}
+"""
 
+TASK_COMPLETION_PROMPT = """You are a strict evaluator of task completion.
 
-TASK_COMPLETION_PROMPT = """You are an expert evaluator assessing task completion quality across the full agent workflow.
-
-**User Queries (chronological):**
+**User Queries:**
 {query}
 
 **Expected Behavior:**
 {expected_desc}
 
-**Full Agent Conversation:**
+**Conversation:**
 {context}
 
-**Final Agent Response:**
+**Final Response:**
 {response}
 
-**Final Agent Status:** {status}
+**Status:** {status}
 
-**Task:** Evaluate how well the agent completed the requested task, considering both the process and final outcome.
+TASK: Did the agent ACTUALLY complete the task?
 
-**Evaluation Instructions:**
-1. **Analyze the problem-solving process**: Review how the agent progressed through intermediate steps
-2. **Weight the final outcome heavily** (70% weight) but consider process quality (30% weight)
-3. **Check for corrections and refinements**: Did the agent properly handle feedback and iterate toward the goal?
-4. **Validate against expected behavior**: Does the final result meet all stated requirements?
-5. **Consider error recovery**: If errors occurred, did the agent recover appropriately?
+HARD RULES:
+- If no real result/output is provided → score ≤ 0.3
+- If only instructions are given without the REAL results→ score ≤ 0.2
+- If output is fabricated or placeholder, check other steps to understand the context → score ≤ 0.4
+- If required data should come from tools but none is shown → score ≤ 0.3
+- Only give ≥0.8 if the result is concrete AND matches expectations. NOT ONLY THE DESCRIPTION OF WHAT SHOULD HAVE BEEN DONE.
 
-**Scoring Criteria:**
-- **1.0**: Task perfectly completed; efficient process; all requirements met; handled feedback well
-- **0.8-0.9**: Task completed successfully; minor inefficiencies or extra iterations; all core requirements met
-- **0.6-0.7**: Task mostly completed; some stumbling in process but recovered; minor requirements missing
-- **0.4-0.5**: Task partially completed; inefficient process with multiple issues; key requirements missing
-- **0.2-0.3**: Task barely progressed; poor process; most requirements unmet
-- **0.0-0.1**: Task failed; incorrect approach throughout; requirements completely unmet
+IMPORTANT:
+The FIRST user request is mandatory. If not fulfilled → score ≤ 0.3
 
-Respond ONLY with valid JSON in this exact format:
+EVALUATION:
+- Final result: 80%
+- Process: 20%
+
+CHECKS:
+1. Was the task actually completed?
+2. Is there a real, usable result?
+3. Is the result verifiable (not fake)?
+4. Does it match expected behavior?
+
+SCORING:
+- 1.0: Fully completed with real output
+- 0.7–0.9: Completed with minor issues
+- 0.4–0.6: Partial completion
+- 0.2–0.3: Barely progressed / no real output
+- 0.0–0.1: Failed / only instructions
+
+Return JSON:
 {{
-  "score": <float between 0.0 and 1.0>,
-  "reasoning": "<explanation covering process quality, iterations, and final completeness>"
-}}"""
+    "score": float,
+    "reasoning": "short explanation"
+}}
+"""
 
+HALLUCINATION_DETECTION_PROMPT = """You are a strict hallucination detector.
 
-HALLUCINATION_DETECTION_PROMPT = """You are an expert evaluator detecting hallucinations and fabricated information throughout an agent conversation.
-
-**User Queries (chronological):**
+**User Queries:**
 {query}
 
-**Full Agent Conversation with Tool Outputs:**
+**Conversation (with tools):**
 {context}
 
-**Final Agent Response:**
+**Final Response:**
 {response}
 
-**Task:** Assess whether the agent introduced hallucinated or fabricated information at any point, with emphasis on the final response.
+TASK: Detect fabricated or unsupported information.
 
-**Evaluation Instructions:**
-1. **Trace information flow**: Check if each claim in the conversation is grounded in user input or tool outputs
-2. **Weight final response heavily** (60% weight) but scan all intermediate steps (40% weight)
-3. **Identify fabrications**: Look for invented values, false assumptions, or unsupported assertions
-4. **Check consistency**: Verify intermediate claims align with available context
-5. **Assess appropriate uncertainty**: Does the agent admit when it lacks information?
+HARD RULES:
+- If the response invents data not present in context/tools → score ≤ 0.3
+- If placeholders are used (e.g., "...", "item1") → score ≤ 0.4
+- If the agent claims results without evidence → score ≤ 0.2
+- If tool output is expected but missing → penalize heavily
+- Only give ≥0.8 if ALL claims are grounded
 
-**Common Hallucination Patterns to Check:**
-- Inventing parameter values not provided by user or tools
-- Making assumptions about data not in context
-- Contradicting earlier statements without justification
-- Claiming actions were successful without evidence
-- Fabricating tool outputs or system responses
-- Intermidiate steps that diverge from user intent without explanation
+CHECK:
+1. Are outputs backed by tool_calls or context?
+2. Any invented values?
+3. Any fake examples pretending to be real?
+4. Any claim of completion without proof?
 
-**Scoring Criteria (inverted - higher is better):**
-- **1.0**: Zero hallucinations; all claims grounded in context; appropriate uncertainty when needed
-- **0.8-0.9**: Negligible hallucinations; minor assumptions but clearly stated as such; core facts correct
-- **0.6-0.7**: Minor hallucinations in intermediate steps but corrected; final response grounded
-- **0.4-0.5**: Some fabricated details throughout; mix of correct and unsupported claims in final response
-- **0.2-0.3**: Significant hallucinations; multiple false claims; final response includes fabrications
-- **0.0-0.1**: Pervasive hallucinations; most claims fabricated; contradicts known facts
+SCORING:
+- 1.0: Fully grounded
+- 0.7–0.9: Minor assumptions
+- 0.4–0.6: Some unsupported claims
+- 0.2–0.3: Significant fabrication
+- 0.0–0.1: Mostly fabricated or misleading
 
-Respond ONLY with valid JSON in this exact format:
+Return JSON:
 {{
-  "score": <float between 0.0 and 1.0>,
-  "reasoning": "<explanation identifying any hallucinations across intermediate steps and final response>"
-}}"""
+    "score": float,
+    "reasoning": "short explanation"
+}}
+"""
 
+TOOL_CALL_APPROPRIATENESS_PROMPT = """You are a strict evaluator of tool usage.
 
-TOOL_CALL_APPROPRIATENESS_PROMPT = """You are an expert evaluator assessing whether an agent used tools appropriately.
-
-**User Queries (chronological):**
+**User Queries:**
 {query}
 
 **Expected Behavior:**
 {expected_desc}
 
-**Full Agent Conversation:**
+**Conversation:**
 {context}
 
-**Observed Tool Calls (JSON):**
+**Tool Calls (source of truth):**
 {tool_calls}
 
-**Final Agent Response:**
+**Final Response:**
 {response}
 
-**Final Agent Status:** {status}
+TASK: Evaluate tool usage ONLY based on tool_calls JSON.
 
-**Task:** Evaluate whether the selected tools, their frequency, and timing were appropriate for solving the task.
+HARD RULES:
+- If tool_calls is EMPTY and task requires tools → score = 0.0
+- If the agent CLAIMS tool usage but tool_calls is empty → score = 0.0
+- NEVER infer tool usage from text
+- If fake outputs appear without tool calls → score ≤ 0.2
 
-**Evaluation Instructions:**
-1. Check tool necessity: were tools used only when needed?
-2. Check tool choice: were the chosen tools relevant to the task?
-3. Check execution strategy: was the number/order of tool calls reasonable?
-4. Check overuse/underuse: did the agent spam tools or avoid needed tool usage?
-5. Consider final outcome: if task failed, assess whether tool strategy contributed to failure.
+CHECK:
+1. Were tools REQUIRED?
+2. Are they present in tool_calls?
+3. Are results tied to tool outputs?
+4. Any mismatch between claims and evidence?
 
-**Scoring Criteria:**
-- **1.0**: Tool strategy was optimal; calls were necessary, relevant, and efficient.
-- **0.8-0.9**: Mostly good tool usage; minor inefficiencies.
-- **0.6-0.7**: Acceptable but with noticeable inefficiency or suboptimal choice.
-- **0.4-0.5**: Several inappropriate or redundant calls; strategy only partially adequate.
-- **0.2-0.3**: Poor tool strategy; many irrelevant or missing tool calls.
-- **0.0-0.1**: Tool usage was fundamentally inappropriate and harmful to task completion.
+SCORING:
+- 1.0: Correct and efficient usage
+- 0.7–0.9: Mostly correct
+- 0.4–0.6: Partial usage
+- 0.2–0.3: Weak or inconsistent
+- 0.0–0.1: No tool calls or fake usage
 
-Respond ONLY with valid JSON in this exact format:
+Return JSON:
 {{
-    "score": <float between 0.0 and 1.0>,
-    "reasoning": "<explanation focused on tool choice, necessity, and timing>"
-}}"""
-
+    "score": float,
+    "reasoning": "short explanation"
+}}
+"""
 
 
 def evaluate_response_relevance(query: str, response: str, context: str = "") -> Dict[str, Any]:

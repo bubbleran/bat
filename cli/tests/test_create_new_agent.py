@@ -4,6 +4,7 @@ import os
 from typer.testing import CliRunner
 
 from cli import app
+import create.agent as create_agent_module
 
 
 runner = CliRunner()
@@ -21,6 +22,19 @@ def test_create_new_agent_default_name() -> None:
         assert (root / "src" / "llm_clients" / "example_client.py").exists()
         assert not (root / "src" / "llm_clients" / "courtesy_client.py").exists()
         assert not (root / "src" / "llm_clients" / "planner_client.py").exists()
+
+
+def test_static_template_loader_ignores_bytecode_cache(monkeypatch, tmp_path) -> None:
+    templates_dir = tmp_path / "templates" / "agent"
+    cache_dir = templates_dir / "__pycache__"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "README.cpython-313.pyc").write_bytes(b"\xf3\x00\x00\x00")
+    (templates_dir / "README.md").write_text("hello\n", encoding="utf-8")
+
+    monkeypatch.setattr(create_agent_module, "TEMPLATES_DIR", templates_dir)
+    monkeypatch.setattr(create_agent_module, "_DYNAMIC_TEMPLATE_FILES", set())
+
+    assert create_agent_module._load_static_templates() == {"README.md": "hello\n"}
 
 
 def test_create_new_agent_custom_name() -> None:
@@ -287,6 +301,7 @@ def test_build_command_runs_docker_build(monkeypatch) -> None:
 
     with runner.isolated_filesystem():
         Path("agent").mkdir()
+        Path("agent", "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
         result = runner.invoke(
             app,
             [

@@ -25,7 +25,11 @@ def _load_static_templates() -> dict[str, str]:
             continue
 
         relative_path = template_path.relative_to(TEMPLATES_DIR).as_posix()
-        if relative_path in _DYNAMIC_TEMPLATE_FILES:
+        if (
+            relative_path in _DYNAMIC_TEMPLATE_FILES
+            or "__pycache__" in template_path.parts
+            or template_path.suffix == ".pyc"
+        ):
             continue
 
         templates[relative_path] = template_path.read_text(encoding="utf-8")
@@ -306,5 +310,4 @@ def create_agent_scaffold(
     )
 
     return created
-
 

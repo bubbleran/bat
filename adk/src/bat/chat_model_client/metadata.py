@@ -1,8 +1,7 @@
 import bisect
 import time
 
-from pydantic import BaseModel
-from ..chat_model_client import UsageMetadata, model_validator
+from pydantic import BaseModel, model_validator
 from functools import reduce
 from typing import Any, Dict, List, Optional, Self
 

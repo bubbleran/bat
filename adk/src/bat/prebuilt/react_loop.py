@@ -1,5 +1,5 @@
 from ..agent.config import AgentConfig
-from ..agent.metadata import MetadataCollector
+from ..chat_model_client.metadata import MetadataCollector
 from ..agent.state import AgentState
 from ..chat_model_client import ChatModelClient
 from ..logging import create_logger

@@ -1,2 +1,2 @@
-from .client import ChatModelClient, UsageMetadata
+from .client import ChatModelClient
 from .config import ChatModelClientConfig
