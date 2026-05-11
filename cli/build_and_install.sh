@@ -7,7 +7,7 @@ BINARY_NAME="bat"
 # ──────────────────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLI_DIR="$SCRIPT_DIR/cli"
+CLI_DIR="$SCRIPT_DIR"
 DIST_BINARY="$CLI_DIR/dist/$BINARY_NAME"
 INSTALL_PATH="$INSTALL_DIR/$BINARY_NAME"
 

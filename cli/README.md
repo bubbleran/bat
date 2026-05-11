@@ -1,129 +1,196 @@
 # bat-cli
 
-A CLI tool for creating and managing BAT agent projects.
+A CLI tool for creating, building, and evaluating BAT agent projects.
 
-## Quick Start
+## Prerequisites
 
-For a complete command reference with a command tree, see [CLI_GUIDE.md](CLI_GUIDE.md).
+- Python and [uv](https://docs.astral.sh/uv/) installed
+- Docker installed (required for `bat build` and `bat push`)
+- For evaluation commands: an existing BAT agent root containing `agent.json`, `config.yaml`, and `src/graph.py`
 
-1. Install dependencies:
+---
+
+## Installation
+
+### Option A — build and install a standalone binary (Linux/macOS)
+
+Run the helper script from the repo root:
 
 ```bash
-uv sync --group dev
+bash cli/build_and_install.sh
 ```
 
-If you also need packaging tools (PyInstaller):
+This will:
+
+1. Sync `dev` and `packaging` dependency groups via `uv`.
+2. Build a one-file executable with PyInstaller.
+3. Move it to `~/.local/bin/bat` (uses `sudo` only when necessary).
+
+Make sure `~/.local/bin` is in your `PATH`:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # or ~/.zshrc
+source ~/.bashrc
+```
+
+Then verify:
+
+```bash
+bat --help
+```
+
+### Option B — build manually
 
 ```bash
 uv sync --group dev --group packaging
+uv run pyinstaller --clean --noconfirm bat_cli.spec
+# binary is at dist/bat (Linux/macOS) or dist/bat.exe (Windows)
 ```
 
-2. Create a new agent scaffold:
+On **Windows**, copy `dist/bat.exe` to a folder on your `PATH` (e.g. `C:\tools\bat`) and open a new terminal.
+
+> PyInstaller builds are OS-specific — build on each target OS.
+
+### Option C — run without installing (development)
 
 ```bash
-uv run bat init agent
+uv sync --group dev
+uv run bat --help
 ```
 
-This creates a `default` folder by default.
+All examples below show `bat ...`; replace with `uv run bat ...` when using this option.
 
-Use a custom name:
+---
+
+## Command Tree
+
+```
+bat
+├── init
+│   └── agent
+│       ├── [name=default]
+│       ├── --clients, -c
+│       ├── --output-dir, -o
+│       ├── --force, -f
+│       ├── --port
+│       ├── --model
+│       └── --model-provider
+├── add
+│   └── client
+│       ├── <clients>
+│       └── --force, -f
+├── set
+│   └── env
+│       ├── --port
+│       ├── --model
+│       ├── --model-provider
+│       ├── --docker-registry
+│       └── --repo
+├── eval
+│   ├── init
+│   │   └── --force, -f
+│   └── run
+├── build
+│   ├── --context, -C
+│   ├── --docker-registry
+│   ├── --repo
+│   ├── --tag
+│   ├── --version
+│   └── --no-cache
+└── push
+    ├── --context, -C
+    ├── --docker-registry
+    ├── --repo
+    └── --tag
+```
+
+Built-in help is available at every level:
 
 ```bash
-uv run bat init agent my_agent
+bat --help
+bat init agent --help
+bat build --help
 ```
 
-Choose an output directory:
+---
+
+## Workflows
+
+### 1. Create a new agent
 
 ```bash
-uv run bat init agent my_agent --output-dir .
+# default name
+bat init agent
+
+# custom name
+bat init agent my_agent
+
+# specific output directory
+bat init agent my_agent --output-dir .
+
+# pre-generate LLM clients
+bat init agent my_agent --clients reformulator,planner,executor
 ```
 
-Generate custom LLM clients:
+### 2. Add clients to an existing agent
+
+Run from the agent root (must contain `src/llm_clients/`):
 
 ```bash
-uv run bat init agent rng --clients talk,discuss
+bat add client planner,executor
+
+# overwrite existing files
+bat add client planner,executor --force
 ```
 
-Set runtime and build environment variables from an existing agent root:
+### 3. Update agent environment variables
+
+Run from the agent root (updates or creates `.env`):
 
 ```bash
-cd my_agent
-uv run bat set env --port 8080 --model gpt-4.1-mini --model-provider openai --docker-registry hub.bubbleran.com --repo orama/labs/my-agent
+bat set env --port 8080 --model gpt-4.1-mini --model-provider openai
+
+# also set Docker defaults for build/push
+bat set env --docker-registry hub.bubbleran.com --repo orama/labs/my-agent
 ```
 
-This command updates `.env` (creating it if missing).
-
-When running `init agent`, the scaffold creates `.env` as the runtime file.
-
-Build a Docker image:
+### 4. Build and push a Docker image
 
 ```bash
-uv run bat build --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --tag latest
+bat build --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --tag latest
+
+# no-cache build with version build-arg
+bat build --context ./my_agent --repo orama/labs/my-agent --tag v1 --version 1.0.0 --no-cache
+
+bat push --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --tag latest
 ```
 
-Push a Docker image:
+If `BAT_DOCKER_REGISTRY` and `BAT_DOCKER_REPO` are already set in `.env` or the shell, `--docker-registry` and `--repo` can be omitted.
+
+**Precedence** (both `--docker-registry` / `--repo`):
+
+1. CLI flag
+2. Shell environment variable (`BAT_DOCKER_REGISTRY` / `BAT_DOCKER_REPO`)
+3. `.env` file in the current directory
+4. Hardcoded default (`default_registry` / `default-repository/<project-name>`)
+
+### 5. Run evaluation
+
+From an existing agent root:
 
 ```bash
-uv run bat push --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --tag latest
+# scaffold evaluation files
+bat eval init
+
+# run evaluation
+bat eval run
 ```
 
-Set a default repository for an agent via environment variable:
-
-```bash
-# in ./my_agent/.env
-BAT_DOCKER_REPO=orama/labs/my-agent
-BAT_DOCKER_REGISTRY=hub.bubbleran.com
-```
-
-Then you can omit `--repo`:
-
-```bash
-uv run bat build --context ./my_agent --docker-registry hub.bubbleran.com --tag latest
-uv run bat push --context ./my_agent --docker-registry hub.bubbleran.com --tag latest
-```
-
-Repository precedence is:
-
-1. `--repo`
-2. `BAT_DOCKER_REPO` from shell environment
-3. `BAT_DOCKER_REPO` from `.env` in current directory
-4. auto-generated default: `default-repository/<project-name>`
-
-Registry precedence is:
-
-1. `--docker-registry`
-2. `BAT_DOCKER_REGISTRY` from shell environment
-3. `BAT_DOCKER_REGISTRY` from `.env` in current directory
-4. fallback default: `default_registry`
-
-## Evaluation Commands
-
-Run these commands from an existing BAT agent root (the folder containing `agent.json`, `config.yaml`, and `src/graph.py`).
-
-Initialize evaluation scaffold:
-
-```bash
-uv run bat eval init
-```
-
-This creates:
+`eval init` creates:
 
 - `eval/eval.yaml`
 - `eval/input/tasks.json`
 - `eval/output/`
-
-Run evaluation:
-
-```bash
-uv run bat eval run
-```
-
-How it works:
-
-- Reads settings from `eval/eval.yaml`.
-- Runs each configured model.
-- Executes the agent in the agent's own virtual environment (`.venv/bin/python`).
-- Writes artifacts under `eval/output/<task_id>/...`.
 
 Minimal `eval/eval.yaml`:
 
@@ -145,36 +212,4 @@ models:
     model: your-model-name
 ```
 
-## Build Standalone Executable (PyInstaller)
-
-Build a standalone executable for the current OS (on Windows this creates `bat.exe`):
-
-```bash
-uv sync --group packaging
-uv run pyinstaller --clean --noconfirm bat_cli.spec
-```
-
-Or if you are not in a synchronized environment:
-
-```bash
-uv run --group packaging pyinstaller --clean --noconfirm bat_cli.spec
-```
-
-Output:
-
-- One-file executable: `dist/bat` (Linux/macOS) or `dist/bat.exe` (Windows)
-
-Install on your machine (Windows example):
-
-1. Copy `dist/bat.exe` to a folder, for example `C:\tools\bat`.
-2. Add that folder to your `PATH`.
-3. Open a new terminal and run:
-
-```bash
-bat --help
-```
-
-Notes:
-
-- PyInstaller builds are OS-specific. Build on each target OS.
-- The spec includes `create` package data so scaffold templates are bundled in the executable.
+`eval run` requires the agent virtual environment at `.venv/bin/python` (`.venv/Scripts/python.exe` on Windows).
