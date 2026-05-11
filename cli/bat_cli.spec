@@ -26,11 +26,13 @@ template_datas = [
 ]
 
 datas = collect_data_files("create") + template_datas
+datas += collect_data_files("matplotlib")
 
 hiddenimports = []
 hiddenimports += collect_submodules("langchain_core")
 hiddenimports += collect_submodules("langchain.chat_models")
 hiddenimports += collect_submodules("langchain_openai")
+hiddenimports += collect_submodules("matplotlib")
 
 
 a = Analysis(

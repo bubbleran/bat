@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .contracts import EpisodeResult, TaskSpec
+from .evaluator import EpisodeEvaluator
 
 
 def _safe_task_id(task_id: str) -> str:
@@ -27,9 +28,15 @@ class RunConfig:
 
 
 class BenchRunner:
-    def __init__(self, adapter: object, config: RunConfig):
+    def __init__(
+        self,
+        adapter: object,
+        config: RunConfig,
+        evaluator: EpisodeEvaluator | None = None,
+    ):
         self.adapter = adapter
         self.config = config
+        self.evaluator = evaluator or EpisodeEvaluator()
         self.task_dir: Optional[Path] = None
         self.run_dir: Optional[Path] = None
 
@@ -78,6 +85,10 @@ class BenchRunner:
             for i in range(max(1, int(self.config.k))):
                 thread_id = f"{task.id}__try{i}"
                 episode = await self.adapter.run_task(task=task, thread_id=thread_id)
+                episode.verdict = self.evaluator.evaluate(
+                    episode.status, episode.output_text, episode.trace.tool_calls, task.expected
+                )
+                episode.expected_outcome = task.expected.expected_outcome
                 episode.model_name = self.config.model
                 episode.aux["attempt_index"] = i
                 task_attempts.append(episode)

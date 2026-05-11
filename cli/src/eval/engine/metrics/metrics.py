@@ -45,6 +45,7 @@ def episode_metrics(ep: EpisodeResult) -> Dict[str, Any]:
 
     metrics: Dict[str, Any] = {
         "task_id": ep.task_id,
+        "expected_outcome": ep.expected_outcome,
         "status": ep.status,
         "success": ep.success,
         "time": {"wall_ms": wall_ms},
@@ -54,6 +55,15 @@ def episode_metrics(ep: EpisodeResult) -> Dict[str, Any]:
             "total_tokens": total,
         },
     }
+
+    if ep.verdict:
+        metrics["verdict"] = {
+            "passed": ep.verdict.passed,
+            "checks": {
+                k: {"passed": v.passed, "reason": v.reason}
+                for k, v in ep.verdict.checks.items()
+            },
+        }
 
     if ep.qualitative_scores:
         metrics["qualitative"] = {

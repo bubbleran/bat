@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import re
 import socket
@@ -447,4 +448,50 @@ def eval_run() -> None:
     typer.secho(
         f"Evaluation completed. Output: {cfg.output_dir / task_id}",
         fg=typer.colors.GREEN,
+    )
+
+
+def eval_plot(
+    folder: Path = typer.Option(
+        ...,
+        "--folder",
+        "-f",
+        help="Path to an evaluation output folder. Each sub-folder containing a metrics.json is treated as one run.",
+    ),
+) -> None:
+    folder = folder.resolve()
+
+    if not folder.is_dir():
+        raise typer.BadParameter(f"Folder not found: {folder}")
+
+    metrics: dict[str, dict] = {}
+    for sub in sorted(folder.iterdir()):
+        if sub.is_dir():
+            metrics_file = sub / "metrics.json"
+            if metrics_file.exists():
+                with open(metrics_file, encoding="utf-8") as f:
+                    metrics[sub.name] = json.load(f)
+
+    if not metrics:
+        raise typer.BadParameter(
+            f"No valid evaluation results found in {folder}. "
+            "A sub-folder is a valid run only if it contains a metrics.json file."
+        )
+
+    typer.secho(
+        f"Found {len(metrics)} run(s): {', '.join(metrics)}",
+        fg=typer.colors.CYAN,
+    )
+
+    from .engine.plotter import generate_and_save_plots
+
+    saved = generate_and_save_plots(metrics, folder)
+
+    for path in saved:
+        typer.secho(f"  {path.relative_to(folder)}", fg=typer.colors.GREEN)
+
+    typer.secho(
+        f"\nSaved {len(saved)} chart(s) to {folder}",
+        fg=typer.colors.GREEN,
+        bold=True,
     )

@@ -40,8 +40,10 @@ async def _evaluate_qualitative(results: list[EpisodeResult], tasks_by_id: Dict[
         context = build_context_from_events([event.model_dump() for event in episode.trace.events])
         tool_calls = json.dumps(episode.trace.tool_calls, ensure_ascii=False, indent=2)
         expected_desc = build_expected_desc(
-            must_succeed=task.expected.must_succeed,
-            final_contains=task.expected.final_contains,
+            status=task.expected.status,
+            expected_outcome=task.expected.expected_outcome,
+            output_must_contain=task.expected.output_must_contain,
+            expected_tool_calls=task.expected.tool_calls or None,
         )
 
         episode.qualitative_scores = await asyncio.to_thread(
@@ -52,6 +54,7 @@ async def _evaluate_qualitative(results: list[EpisodeResult], tasks_by_id: Dict[
             context,
             expected_desc,
             tool_calls,
+            bool(task.expected.tool_calls),
         )
         
 

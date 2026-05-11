@@ -13,6 +13,7 @@ dependencies = [
     "bat-adk>=2025.12",
     "python-dotenv>=1.0.1",
     "typing-extensions>=4.12.0",
+    "matplotlib>=3.8",
 ]
 
 [dependency-groups]

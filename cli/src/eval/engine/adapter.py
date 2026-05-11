@@ -9,7 +9,7 @@ from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
 from a2a.types import Message, TextPart
 from httpx import AsyncClient
 
-from .contracts import EpisodeResult, EpisodeTrace, ExpectedToolCall, TaskSpec, TraceEvent
+from .contracts import EpisodeResult, EpisodeTrace, TaskSpec, TraceEvent
 
 
 TERMINAL_STATUSES = {"completed", "error", "input-required"}
@@ -203,49 +203,6 @@ def _tool_call_key(tool_call: Dict[str, Any]) -> str:
     return json.dumps(tool_call, sort_keys=True, ensure_ascii=True, default=str)
 
 
-def _is_subset(expected: Any, actual: Any) -> bool:
-    if isinstance(expected, dict):
-        if not isinstance(actual, dict):
-            return False
-        for key, value in expected.items():
-            if key not in actual or not _is_subset(value, actual[key]):
-                return False
-        return True
-
-    if isinstance(expected, list):
-        if not isinstance(actual, list) or len(expected) > len(actual):
-            return False
-        used = [False] * len(actual)
-        for expected_item in expected:
-            matched = False
-            for idx, actual_item in enumerate(actual):
-                if used[idx]:
-                    continue
-                if _is_subset(expected_item, actual_item):
-                    used[idx] = True
-                    matched = True
-                    break
-            if not matched:
-                return False
-        return True
-
-    return expected == actual
-
-
-def _count_matches(expected: ExpectedToolCall, observed: list[Dict[str, Any]]) -> int:
-    total = 0
-    for call in observed:
-        if call.get("name") != expected.name:
-            continue
-        args = call.get("args") if isinstance(call.get("args"), dict) else {}
-        if _is_subset(expected.args_subset, args):
-            total += 1
-    return total
-
-
-def _tool_expectations_satisfied(expected_calls: list[ExpectedToolCall], observed: list[Dict[str, Any]]) -> bool:
-    return all(_count_matches(expected, observed) >= expected.times for expected in expected_calls)
-
 
 class BatA2AAdapter:
     def __init__(self, agent_url: str, request_timeout_s: float = 180.0, max_events: int = 200) -> None:
@@ -334,19 +291,10 @@ class BatA2AAdapter:
         status = last_status or "error"
         output_text = last_content or ""
 
-        success = True
-        if task.expected.must_succeed:
-            success = status == "completed"
-        if success and task.expected.final_contains:
-            success = task.expected.final_contains in output_text
-        if success and task.expected.tool_calls:
-            success = _tool_expectations_satisfied(task.expected.tool_calls, trace.tool_calls)
-
         return EpisodeResult(
             task_id=task.id,
             status=status,
             output_text=output_text,
-            success=success,
             trace=trace,
             aux={"agent_url": self.agent_url},
         )
