@@ -58,8 +58,14 @@ class MinimalAgentExecutor(AgentExecutor):
             async for item in self.agent_graph.astream(query, config):
                 if keep_streaming:
                     usage_metadata = self.agent_graph._get_usage_metadata(ts)
+                    trace_metadata = self.agent_graph._get_trace_metadata(ts)
                     ts = time.time()
-                    keep_streaming = await self._process_task_result(task, item, updater, {'usage': usage_metadata})
+
+                    metadata: Dict[str, Any] = {"usage": usage_metadata}
+                    if trace_metadata:
+                        metadata["trace"] = trace_metadata
+
+                    keep_streaming = await self._process_task_result(task, item, updater, metadata)
                 else:
                     # TODO: add chunk status
                     _logger.warning("Artifact has been updated: ignoring additional streamed item.")

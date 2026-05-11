@@ -1,10 +1,10 @@
 import asyncio
-import bisect
 import time
 import warnings
 from ..agent.config import AgentConfig
+from ..chat_model_client.metadata import MetadataCollector
 from ..agent.state import AgentState
-from ..chat_model_client import UsageMetadata
+from ..chat_model_client.metadata import UsageMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
 from a2a.client import ClientConfig, ClientEvent, ClientFactory
@@ -17,7 +17,6 @@ from a2a.types import (
     Part,
 )
 from a2a.utils.parts import get_text_parts, get_data_parts, get_file_parts
-from functools import reduce
 from httpx import AsyncClient
 from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
@@ -26,7 +25,6 @@ from typing_extensions import override
 
 
 logger = create_logger(__name__, level="debug")
-USAGE_METADATA_KEY = "usage"
 
 class CallAgentNode(PrebuiltWorkflow):
     """CallAgentNode implements agent-to-agent communication using the A2A protocol.
@@ -284,7 +282,7 @@ class CallAgentNode(PrebuiltWorkflow):
         self.stream_done: bool = False
         self._queue: Optional[asyncio.Queue[Optional[tuple[str, str]]]] = None
         self._stream_task: Optional[asyncio.Task[None]] = None
-        self._usage_metadatas: List[tuple[float,UsageMetadata]] = []
+        self._metadata_collector = MetadataCollector()
 
         self.graph_builder.add_node("call_agent", self._call_agent)
         self.graph_builder.add_node("consume_stream", self._consume_stream)
@@ -631,9 +629,7 @@ class CallAgentNode(PrebuiltWorkflow):
                     event = item[1]
                     metadata = event.metadata if event else None
 
-                if metadata and USAGE_METADATA_KEY in metadata:
-                    usage = metadata[USAGE_METADATA_KEY]
-                    self._usage_metadatas.append((t, UsageMetadata.model_validate(usage)))
+                self._metadata_collector.observe_metadata(metadata, timestamp=t)
                 yield item
 
         except Exception as e:
@@ -654,15 +650,20 @@ class CallAgentNode(PrebuiltWorkflow):
         Returns:
             UsageMetadata: The aggregated usage metadata from all stream events.
         """
-        # lower bound binary search to find the first usage metadata after the timestamp
-        i = bisect.bisect_left(
-            self._usage_metadatas,
-            0 if from_timestamp is None else from_timestamp,
-            key=lambda x: x[0]
-        )
-        # call reduce to aggregate usage metadata
-        return reduce(
-            lambda acc, metadata: acc + metadata[1],
-            self._usage_metadatas[i:],
-            UsageMetadata(),
-        )
+        return self._metadata_collector.get_usage_metadata(from_timestamp=from_timestamp)
+
+    def get_trace_metadata(
+        self,
+        from_timestamp: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Get aggregated trace metadata collected from the agent communication stream.
+
+        Args:
+            from_timestamp (Optional[float]): If provided, only trace metadata after this
+                timestamp is considered. If None, all trace metadata is considered.
+
+        Returns:
+            Dict[str, Any]: Trace metadata in the shape {"tool_calls": [...]}. Returns
+                an empty dict when no tool calls are available.
+        """
+        return self._metadata_collector.get_trace_metadata(from_timestamp=from_timestamp)

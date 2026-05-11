@@ -5,7 +5,7 @@ import typer
 from add.client import add_clients_to_existing_agent
 from build.build import build_image
 from create.agent import create_agent_scaffold
-from eval.commands import eval_init, eval_run
+from eval.commands import eval_init, eval_plot, eval_run, eval_show
 from push.push import push_image
 from set.env import set_env_values
 
@@ -24,6 +24,8 @@ app.command("build", help="Build the Docker image for the agent.")(build_image)
 app.command("push", help="Push the Docker image to a registry.")(push_image)
 eval_app.command("init", help="Initialize local evaluation scaffold.")(eval_init)
 eval_app.command("run", help="Run evaluation using eval/eval.yaml.")(eval_run)
+eval_app.command("show", help="Show the resolved evaluation configuration.")(eval_show)
+eval_app.command("plot", help="Generate metric charts from an evaluation output folder.")(eval_plot)
 
 
 def _parse_clients_option(raw_clients: str | None) -> list[str] | None:

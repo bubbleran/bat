@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from typing import Any, Dict, List, Literal, Optional
 
 
@@ -19,8 +19,12 @@ class ExpectedToolCall(BaseModel):
 class TaskExpected(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    must_succeed: bool = True
-    final_contains: Optional[str] = None
+    # Expected final status from the agent. None = skip status check entirely.
+    status: Optional[AgentTaskStatus] = "completed"
+    # Free-text description of the desired outcome, evaluated semantically by the LLM judges.
+    expected_outcome: Optional[str] = None
+    # All phrases must appear in the final output text. None/empty = skip substring check.
+    output_must_contain: Optional[List[str]] = None
     tool_calls: List[ExpectedToolCall] = Field(default_factory=list)
 
 
@@ -57,7 +61,22 @@ class QualitativeScores(BaseModel):
     response_relevance: Optional[float] = None
     task_completion_quality: Optional[float] = None
     hallucination_score: Optional[float] = None
+    tool_call_appropriateness: Optional[float] = None
     judge_reasoning: Dict[str, str] = Field(default_factory=dict)
+
+
+class CheckResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    passed: bool
+    reason: str
+
+
+class EpisodeVerdict(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    passed: bool
+    checks: Dict[str, CheckResult] = Field(default_factory=dict)
 
 
 class EpisodeResult(BaseModel):
@@ -66,11 +85,17 @@ class EpisodeResult(BaseModel):
     task_id: str
     status: AgentTaskStatus
     output_text: str
-    success: bool
+    expected_outcome: Optional[str] = None
+    verdict: Optional[EpisodeVerdict] = None
     trace: EpisodeTrace = Field(default_factory=EpisodeTrace)
     aux: Dict[str, Any] = Field(default_factory=dict)
     model_name: Optional[str] = None
     qualitative_scores: Optional[QualitativeScores] = None
+
+    @computed_field
+    @property
+    def success(self) -> bool:
+        return self.verdict.passed if self.verdict is not None else False
 
 
 class ModelSpec(BaseModel):
@@ -90,9 +115,11 @@ class JudgeSpec(BaseModel):
 class EvalConfig(BaseModel):
     dataset: Path
     output_dir: Path
+    agent_url: str
+    agent_startup_timeout_s: int = 45
+    agent_shutdown_timeout_s: int = 10
     k: int
     qualitative: bool
-    save_attempts: bool
     run_name: str
     models: list[ModelSpec]
     judge: JudgeSpec | None

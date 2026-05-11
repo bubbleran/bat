@@ -1,9 +1,0 @@
-[project]
-name = "test-agent"
-version = "1.0.0"
-description = "TEST-AGENT Agent"
-readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-    "bat-adk>=2026.3"
-]

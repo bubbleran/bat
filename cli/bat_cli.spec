@@ -1,11 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import sys
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
-template_root = Path("src") / "create" / "templates"
+spec_root = Path(SPECPATH).resolve()
+cli_src = spec_root / "src"
+adk_src = spec_root.parent / "adk" / "src"
+
+for source_path in (adk_src, cli_src):
+    sys.path.insert(0, str(source_path))
+
+template_root = cli_src / "create" / "templates"
 template_datas = [
     (
         str(file_path),
@@ -13,15 +21,23 @@ template_datas = [
     )
     for file_path in template_root.rglob("*")
     if file_path.is_file()
+    and "__pycache__" not in file_path.parts
+    and file_path.suffix != ".pyc"
 ]
 
 datas = collect_data_files("create") + template_datas
-hiddenimports = collect_submodules("create") + collect_submodules("add") + collect_submodules("build") + collect_submodules("push") + collect_submodules("set")
+datas += collect_data_files("matplotlib")
+
+hiddenimports = []
+hiddenimports += collect_submodules("langchain_core")
+hiddenimports += collect_submodules("langchain.chat_models")
+hiddenimports += collect_submodules("langchain_openai")
+hiddenimports += collect_submodules("matplotlib")
 
 
 a = Analysis(
-    ["src/cli.py"],
-    pathex=["src"],
+    [str(cli_src / "cli.py")],
+    pathex=[str(cli_src), str(adk_src)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,

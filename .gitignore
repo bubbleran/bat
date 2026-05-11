@@ -3,6 +3,7 @@
 .env
 .venv/
 uv.lock
-
+.codex
+CLAUDE.md
 __pycache__/
 

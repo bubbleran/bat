@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .contracts import JudgeSpec, ModelSpec, EvalConfig
 import yaml
 
+from .contracts import EvalConfig, JudgeSpec, ModelSpec
 
 
 def _to_bool(value: Any, *, default: bool) -> bool:
@@ -32,13 +32,25 @@ def _to_optional_str(value: Any) -> str | None:
     text = str(value).strip()
     return text or None
 
+
+def _to_positive_int(value: Any, *, field_name: str, default: int) -> int:
+    raw = default if value is None else value
+    try:
+        parsed = int(raw)
+    except Exception as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{field_name} must be >= 1")
+    return parsed
+
+
 def _split_provider_model(value: str, *, field_name: str) -> tuple[str, str]:
     raw = value.strip()
     if not raw or ":" not in raw:
         raise ValueError(
             f"{field_name} must use '<provider>:<model>' format when provider is omitted"
         )
-    
+
     provider, model = raw.split(":", 1)
     provider = provider.strip()
     model = model.strip()
@@ -75,8 +87,8 @@ def _parse_model_spec(item: Any, *, section_name: str) -> ModelSpec:
     provider = _to_optional_str(item.get("provider"))
     model = _to_optional_str(item.get("model"))
     base_url = _to_optional_str(item.get("base_url"))
-    env=_parse_env_map(item.get("env"), section_name=section_name)
-    
+    env = _parse_env_map(item.get("env"), section_name=section_name)
+
     if model and not provider and ":" in model:
         provider, model = _split_provider_model(model, field_name=f"{section_name}.model")
 
@@ -84,27 +96,51 @@ def _parse_model_spec(item: Any, *, section_name: str) -> ModelSpec:
         raise ValueError(
             f"{section_name} must define at least one valid provider and model (or model as '<provider>:<model>')"
         )
-    
-    if section_name == "judge":
-        is_empty = not any([provider, model, base_url, env])
-        if is_empty:
-            return None
-        return JudgeSpec(
-                provider=provider, 
-                model=model, 
-                base_url=base_url,
-                env=env
-                )
-    else:
-        return ModelSpec(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            env=env
+
+    return ModelSpec(
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        env=env,
+    )
+
+
+def _parse_judge_spec(item: Any) -> JudgeSpec | None:
+    if item is None:
+        return None
+
+    if isinstance(item, str):
+        provider, model = _split_provider_model(item, field_name="judge")
+        return JudgeSpec(provider=provider, model=model)
+
+    if not isinstance(item, dict):
+        raise ValueError("judge must be either a mapping or '<provider>:<model>' string")
+
+    provider = _to_optional_str(item.get("provider"))
+    model = _to_optional_str(item.get("model"))
+    base_url = _to_optional_str(item.get("base_url"))
+    env = _parse_env_map(item.get("env"), section_name="judge")
+
+    if not any([provider, model, base_url, env]):
+        return None
+
+    if model and not provider and ":" in model:
+        provider, model = _split_provider_model(model, field_name="judge.model")
+
+    if not provider or not model:
+        raise ValueError(
+            "judge must define provider and model (or model as '<provider>:<model>')"
         )
 
+    return JudgeSpec(
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        env=env,
+    )
+
+
 def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
-    
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError("eval.yaml must define a mapping at top level")
@@ -126,16 +162,27 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
 
     dataset = _resolve_path(agent_root, evaluation_section.get("dataset"), "eval/input/tasks.json")
     output_dir = _resolve_path(agent_root, evaluation_section.get("output_dir"), "eval/output")
+    agent_url = _to_optional_str(evaluation_section.get("agent_url")) or "http://127.0.0.1:9900"
+
+    agent_startup_timeout_s = _to_positive_int(
+        evaluation_section.get("agent_startup_timeout_s"),
+        field_name="evaluation.agent_startup_timeout_s",
+        default=45,
+    )
+    agent_shutdown_timeout_s = _to_positive_int(
+        evaluation_section.get("agent_shutdown_timeout_s"),
+        field_name="evaluation.agent_shutdown_timeout_s",
+        default=10,
+    )
 
     k = int(evaluation_section.get("k", 1))
     if k < 1:
         raise ValueError("evaluation.k must be >= 1")
 
-    qualitative = _to_bool(evaluation_section.get("qualitative"), default=True)
-    save_attempts = _to_bool(evaluation_section.get("save_attempts"), default=False)
+    qualitative = _to_bool(evaluation_section.get("qualitative"), default=False)
     run_name = _to_optional_str(evaluation_section.get("run_name")) or "benchmark"
 
-    judge = _parse_model_spec(raw.get("judge"), section_name="judge")
+    judge = _parse_judge_spec(raw.get("judge"))
     if qualitative and judge is None:
         raise ValueError(
             "When evaluation.qualitative is true, set judge.provider and judge.model in eval/eval.yaml"
@@ -144,9 +191,11 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
     return EvalConfig(
         dataset=dataset,
         output_dir=output_dir,
+        agent_url=agent_url,
+        agent_startup_timeout_s=agent_startup_timeout_s,
+        agent_shutdown_timeout_s=agent_shutdown_timeout_s,
         k=k,
         qualitative=qualitative,
-        save_attempts=save_attempts,
         run_name=run_name,
         models=models,
         judge=judge,
@@ -158,9 +207,11 @@ def default_eval_yaml() -> str:
         "evaluation:\n"
         "  dataset: eval/input/tasks.json\n"
         "  output_dir: eval/output\n"
+        "  agent_url: http://127.0.0.1:9900\n"
+        "  agent_startup_timeout_s: 45\n"
+        "  agent_shutdown_timeout_s: 10\n"
         "  k: 1\n"
-        "  qualitative: true\n"
-        "  save_attempts: false\n"
+        "  qualitative: false\n"
         "\n"
         "judge:\n"
         "  provider: ollama\n"
@@ -185,7 +236,8 @@ def default_tasks_json() -> str:
         "      \"Describe what you can do in one short paragraph.\"\n"
         "    ],\n"
         "    \"expected\": {\n"
-        "      \"must_succeed\": true\n"
+        "      \"status\": \"completed\",\n"
+        "      \"expected_outcome\": \"The agent describes its capabilities clearly in one short paragraph.\"\n"
         "    },\n"
         "    \"meta\": {\n"
         "      \"category\": \"smoke\"\n"
