@@ -213,3 +213,5 @@ models:
 ```
 
 `eval run` requires the agent virtual environment at `.venv/bin/python` (`.venv/Scripts/python.exe` on Windows).
+
+For model that requires API_KEYS set it into the agent `.env` under <PROVIDER>\_API_KEY.
