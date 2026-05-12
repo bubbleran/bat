@@ -13,9 +13,48 @@ from typing import Iterator, Mapping
 from urllib.parse import urlparse
 
 import typer
+from dotenv import dotenv_values
 
+from .engine.contracts import JudgeSpec
 from .engine.orchestrator import run_agent
 from .engine.eval_config import default_eval_yaml, default_tasks_json, load_eval_config
+
+
+# Maps provider name → the env var its SDK reads for the API key.
+_PROVIDER_API_KEY_ENV: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "azure": "AZURE_OPENAI_API_KEY",
+    "cohere": "COHERE_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "groq": "GROQ_API_KEY",
+}
+
+
+def _inject_judge_api_key(judge: JudgeSpec, agent_root: Path, env: dict[str, str]) -> None:
+    """Resolve the judge's API key and inject it into env.
+
+    Priority:
+      1. judge.api_key field in eval.yaml
+      2. Key already present in env (exported in the shell)
+      3. Key found in the agent's .env file
+    """
+    api_key_var = _PROVIDER_API_KEY_ENV.get(judge.provider.lower())
+    if api_key_var is None:
+        return  # local/no-key provider (e.g. ollama)
+
+    if judge.api_key:
+        env[api_key_var] = judge.api_key
+        return
+
+    if api_key_var in env:
+        return  # already available from the shell
+
+    agent_env_file = agent_root / ".env"
+    if agent_env_file.exists():
+        agent_dotenv = dotenv_values(agent_env_file)
+        if api_key_var in agent_dotenv:
+            env[api_key_var] = agent_dotenv[api_key_var]  # type: ignore[assignment]
 
 
 _ENV_VAR_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -419,6 +458,8 @@ def eval_run() -> None:
                     runner_env["JUDGE_BASE_URL"] = cfg.judge.base_url
                 else:
                     runner_env.pop("JUDGE_BASE_URL", None)
+
+                _inject_judge_api_key(cfg.judge, agent_root, runner_env)
 
                 _apply_env_overrides(
                     runner_env,

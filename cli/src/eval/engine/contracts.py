@@ -109,6 +109,7 @@ class JudgeSpec(BaseModel):
     provider: str
     model: str
     base_url: str | None = None
+    api_key: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
 
 

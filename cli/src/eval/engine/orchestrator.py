@@ -12,7 +12,7 @@ from .bench_runner import BenchRunner, RunConfig
 from .contracts import EpisodeResult, TaskSpec
 from .metrics.llm_evaluators import evaluate_episode_quality
 from .metrics.metrics import summarize_episode_metrics
-from .metrics.qualitative_helpers import build_context_from_events, build_expected_desc
+from .metrics.qualitative_helpers import build_context_from_events, build_expected_desc, build_user_facts_summary
 
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,9 @@ async def _evaluate_qualitative(results: list[EpisodeResult], tasks_by_id: Dict[
             continue
         print(f"Evaluating qualitative scores for episode: {episode} (task_id={episode.task_id})")
         query = " -> ".join(task.turns)
-        context = build_context_from_events([event.model_dump() for event in episode.trace.events])
+        raw_events = [event.model_dump() for event in episode.trace.events]
+        context = build_context_from_events(raw_events)
+        user_facts = build_user_facts_summary(raw_events)
         tool_calls = json.dumps(episode.trace.tool_calls, ensure_ascii=False, indent=2)
         expected_desc = build_expected_desc(
             status=task.expected.status,
@@ -55,6 +57,7 @@ async def _evaluate_qualitative(results: list[EpisodeResult], tasks_by_id: Dict[
             expected_desc,
             tool_calls,
             bool(task.expected.tool_calls),
+            user_facts,
         )
         
 

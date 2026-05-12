@@ -119,9 +119,10 @@ def _parse_judge_spec(item: Any) -> JudgeSpec | None:
     provider = _to_optional_str(item.get("provider"))
     model = _to_optional_str(item.get("model"))
     base_url = _to_optional_str(item.get("base_url"))
+    api_key = _to_optional_str(item.get("api_key"))
     env = _parse_env_map(item.get("env"), section_name="judge")
 
-    if not any([provider, model, base_url, env]):
+    if not any([provider, model, base_url, api_key, env]):
         return None
 
     if model and not provider and ":" in model:
@@ -136,6 +137,7 @@ def _parse_judge_spec(item: Any) -> JudgeSpec | None:
         provider=provider,
         model=model,
         base_url=base_url,
+        api_key=api_key,
         env=env,
     )
 

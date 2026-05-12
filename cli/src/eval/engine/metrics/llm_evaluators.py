@@ -160,6 +160,9 @@ HALLUCINATION_DETECTION_PROMPT = """You are a hallucination detector. Hallucinat
 **User Queries:**
 {query}
 
+**All facts the user explicitly stated (ground truth — use this as your checklist):**
+{user_facts}
+
 **Expected Behavior:**
 {expected_desc}
 
@@ -169,14 +172,17 @@ HALLUCINATION_DETECTION_PROMPT = """You are a hallucination detector. Hallucinat
 **Final Response:**
 {response}
 
-Read every [USER]-tagged line in the conversation — those capture everything the user explicitly stated or requested. Then examine the specific factual claims in the agent's final response: any concrete value, name, number, identifier, or assertion. For each, ask: did the user provide this, or did the system return it as feedback? If neither, it is hallucination.
+The conversation uses three event labels:
+- [USER] — explicit user input. This is the only ground truth for what the user stated.
+- [AGENT OUTPUT] — content the agent generated and sent to the user. Values here are agent proposals, NOT trusted external data. Any specific value in an [AGENT OUTPUT] that does not trace back to a [USER] line is a hallucination candidate.
+- [SYSTEM] — internal runtime status messages. Values returned here (e.g. validation errors, schema constraints) are legitimate system feedback and may be used by the agent without being hallucination.
+
+Use the "All facts the user explicitly stated" section as your ground-truth checklist. For each specific claim in the final response (concrete value, name, number, identifier, field), ask: is it in the user facts list, or was it returned by a [SYSTEM] validation message? If neither, it is UNINVITED.
 
 Label each significant claim as one of:
 - CORRECT — the user stated or requested this, and the agent reproduced it faithfully.
-- UNINVITED — the agent asserted a specific fact or value the user never mentioned. This is hallucination.
+- UNINVITED — the agent asserted a specific fact or value the user never mentioned and no [SYSTEM] message provided. This is hallucination.
 - DISTORTED — the agent changed something the user did specify (user said X, agent produced Y). This is also hallucination.
-
-Facts derived from system-returned feedback are legitimate — if the system explicitly provided a value or constraint that the agent then used, that is not hallucination. But anything the agent introduced without a corresponding user statement or system-provided fact counts as UNINVITED.
 
   1.0  — Every specific claim traces back to a user statement or system-returned fact.
   0.8  — One minor uninvited detail that is harmless and doesn't affect the outcome.
@@ -276,12 +282,14 @@ def evaluate_hallucination(
     response: str,
     context: str = "",
     expected_desc: str = "No specific expectations defined.",
+    user_facts: str = "No explicit user statements recorded.",
 ) -> Dict[str, Any]:
     prompt = HALLUCINATION_DETECTION_PROMPT.format(
         query=query,
         response=response,
         context=context or "No additional context provided",
         expected_desc=expected_desc,
+        user_facts=user_facts,
     )
     return _call_llm_judge(prompt)
 
@@ -314,6 +322,7 @@ def evaluate_episode_quality(
     expected_desc: str = "Task should complete successfully",
     tool_calls: str = "[]",
     has_expected_tools: bool = False,
+    user_facts: str = "No explicit user statements recorded.",
 ) -> QualitativeScores:
     scores = QualitativeScores()
 
@@ -321,7 +330,7 @@ def evaluate_episode_quality(
         futures: Dict[str, Any] = {
             "relevance": pool.submit(evaluate_response_relevance, query, response, context, expected_desc),
             "completion": pool.submit(evaluate_task_completion, query, response, status, expected_desc, context),
-            "hallucination": pool.submit(evaluate_hallucination, query, response, context, expected_desc),
+            "hallucination": pool.submit(evaluate_hallucination, query, response, context, expected_desc, user_facts),
         }
         if has_expected_tools:
             futures["tool_calls"] = pool.submit(
