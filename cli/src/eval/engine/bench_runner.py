@@ -4,7 +4,6 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 from .contracts import EpisodeResult, TaskSpec
 from .evaluator import EpisodeEvaluator
@@ -37,15 +36,15 @@ class BenchRunner:
         self.adapter = adapter
         self.config = config
         self.evaluator = evaluator or EpisodeEvaluator()
-        self.task_dir: Optional[Path] = None
-        self.run_dir: Optional[Path] = None
+        self.task_dir: Path | None = None
+        self.run_dir: Path | None = None
 
     def _episodes_dir(self) -> Path:
         if self.run_dir is None:
             raise ValueError("run_dir is not initialized")
         return self.run_dir / "episodes"
 
-    def persist_results(self, results: List[EpisodeResult]) -> None:
+    def persist_results(self, results: list[EpisodeResult]) -> None:
         episodes_dir = self._episodes_dir()
         episodes_dir.mkdir(parents=True, exist_ok=True)
 
@@ -57,7 +56,7 @@ class BenchRunner:
                 encoding="utf-8",
             )
 
-    async def run(self, tasks: List[TaskSpec]) -> List[EpisodeResult]:
+    async def run(self, tasks: list[TaskSpec]) -> list[EpisodeResult]:
         stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
         task_id = self.config.task_id or stamp
         safe_model_name = self.config.model.replace(":", "-")
@@ -80,8 +79,6 @@ class BenchRunner:
         all_attempts: list[EpisodeResult] = []
 
         for task in tasks:
-            task_attempts: list[EpisodeResult] = []
-
             for i in range(max(1, int(self.config.k))):
                 thread_id = f"{task.id}__try{i}"
                 episode = await self.adapter.run_task(task=task, thread_id=thread_id)
@@ -91,14 +88,17 @@ class BenchRunner:
                 episode.expected_outcome = task.expected.expected_outcome
                 episode.model_name = self.config.model
                 episode.aux["attempt_index"] = i
-                task_attempts.append(episode)
                 all_attempts.append(episode)
 
         self.persist_results(all_attempts)
 
+        attempts_by_task: dict[str, list[EpisodeResult]] = {}
+        for attempt in all_attempts:
+            attempts_by_task.setdefault(attempt.task_id, []).append(attempt)
+
         per_task = []
         for task in tasks:
-            task_attempts = [attempt for attempt in all_attempts if attempt.task_id == task.id]
+            task_attempts = attempts_by_task.get(task.id, [])
             task_total = len(task_attempts)
             task_passed = sum(1 for attempt in task_attempts if attempt.success)
             per_task.append(

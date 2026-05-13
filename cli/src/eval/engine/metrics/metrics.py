@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from ..contracts import EpisodeResult
 
@@ -9,7 +9,7 @@ def _extract_wall_ms(ep: EpisodeResult) -> float:
     return float(ep.trace.timings.get("wall_ms", 0.0))
 
 
-def _extract_tokens_from_usage(usage: Dict[str, Any]) -> Tuple[int, int, int]:
+def _extract_tokens_from_usage(usage: dict[str, Any]) -> tuple[int, int, int]:
     if not isinstance(usage, dict) or not usage:
         return 0, 0, 0
 
@@ -39,11 +39,11 @@ def _extract_tokens_from_usage(usage: Dict[str, Any]) -> Tuple[int, int, int]:
     return 0, 0, 0
 
 
-def episode_metrics(ep: EpisodeResult) -> Dict[str, Any]:
+def episode_metrics(ep: EpisodeResult) -> dict[str, Any]:
     wall_ms = _extract_wall_ms(ep)
     prompt, completion, total = _extract_tokens_from_usage(ep.trace.usage)
 
-    metrics: Dict[str, Any] = {
+    metrics: dict[str, Any] = {
         "task_id": ep.task_id,
         "expected_outcome": ep.expected_outcome,
         "status": ep.status,
@@ -76,7 +76,7 @@ def episode_metrics(ep: EpisodeResult) -> Dict[str, Any]:
     return metrics
 
 
-def summarize_episode_metrics(results: List[EpisodeResult], k: int = 1) -> Dict[str, Any]:
+def summarize_episode_metrics(results: list[EpisodeResult], k: int = 1) -> dict[str, Any]:
     per_episode = [episode_metrics(result) for result in results]
     n = len(per_episode)
 
@@ -91,7 +91,7 @@ def summarize_episode_metrics(results: List[EpisodeResult], k: int = 1) -> Dict[
     passed = sum(1 for metric in per_episode if metric["success"])
     failed = n - passed
 
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "episodes": n,
         "k_attempts": k,
         "total_runs": n,
@@ -116,7 +116,7 @@ def summarize_episode_metrics(results: List[EpisodeResult], k: int = 1) -> Dict[
 
     qualitative_metrics = [metric["qualitative"] for metric in per_episode if metric.get("qualitative")]
     if qualitative_metrics:
-        qualitative_summary: Dict[str, Any] = {}
+        qualitative_summary: dict[str, Any] = {}
         for field in [
             "response_relevance",
             "task_completion_quality",

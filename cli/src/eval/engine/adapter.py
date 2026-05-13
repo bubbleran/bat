@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
 
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
 from a2a.types import Message, TextPart
@@ -15,7 +15,7 @@ from .contracts import EpisodeResult, EpisodeTrace, TaskSpec, TraceEvent
 TERMINAL_STATUSES = {"completed", "error", "input-required"}
 
 
-def _to_dict(value: Any) -> Dict[str, Any]:
+def _to_dict(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
     if isinstance(value, dict):
@@ -29,13 +29,13 @@ def _to_dict(value: Any) -> Dict[str, Any]:
     return {}
 
 
-def _payload(item: Any) -> Dict[str, Any]:
+def _payload(item: Any) -> dict[str, Any]:
     if isinstance(item, tuple) and len(item) == 2:
         return _to_dict(item[1])
     return _to_dict(item)
 
 
-def _event_key(payload: Dict[str, Any]) -> str:
+def _event_key(payload: dict[str, Any]) -> str:
     kind = payload.get("kind")
     if kind == "status-update":
         status = _to_dict(payload.get("status"))
@@ -105,7 +105,7 @@ def _extract_text(value: Any) -> str:
     return ""
 
 
-def _normalize_status(value: Any) -> Optional[str]:
+def _normalize_status(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
 
@@ -121,7 +121,7 @@ def _normalize_status(value: Any) -> Optional[str]:
     return None
 
 
-def _extract_status_and_content(item: Any) -> tuple[Optional[str], str]:
+def _extract_status_and_content(item: Any) -> tuple[str | None, str]:
     data = _payload(item)
     if not data:
         return None, ""
@@ -143,7 +143,7 @@ def _extract_status_and_content(item: Any) -> tuple[Optional[str], str]:
     return None, ""
 
 
-def _extract_metadata(item: Any) -> Dict[str, Any]:
+def _extract_metadata(item: Any) -> dict[str, Any]:
     data = _payload(item)
     metadata = _to_dict(data.get("metadata"))
 
@@ -157,7 +157,7 @@ def _extract_metadata(item: Any) -> Dict[str, Any]:
     return metadata
 
 
-def _normalize_usage(metadata: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_usage(metadata: dict[str, Any]) -> dict[str, Any]:
     usage = _to_dict(metadata.get("usage"))
     if not usage:
         return {}
@@ -178,7 +178,7 @@ def _normalize_usage(metadata: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _add_usage(total: Dict[str, Any], incremental: Dict[str, Any]) -> Dict[str, Any]:
+def _add_usage(total: dict[str, Any], incremental: dict[str, Any]) -> dict[str, Any]:
     return {
         "input_tokens": int(total.get("input_tokens") or 0) + int(incremental.get("input_tokens") or 0),
         "output_tokens": int(total.get("output_tokens") or 0) + int(incremental.get("output_tokens") or 0),
@@ -188,7 +188,7 @@ def _add_usage(total: Dict[str, Any], incremental: Dict[str, Any]) -> Dict[str, 
     }
 
 
-def _extract_tool_calls(metadata: Dict[str, Any]) -> list[Dict[str, Any]]:
+def _extract_tool_calls(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     trace = _to_dict(metadata.get("trace"))
     tool_calls = trace.get("tool_calls")
     if not isinstance(tool_calls, list):
@@ -196,12 +196,11 @@ def _extract_tool_calls(metadata: Dict[str, Any]) -> list[Dict[str, Any]]:
     return [item for item in tool_calls if isinstance(item, dict)]
 
 
-def _tool_call_key(tool_call: Dict[str, Any]) -> str:
+def _tool_call_key(tool_call: dict[str, Any]) -> str:
     call_id = tool_call.get("id")
     if isinstance(call_id, str) and call_id:
         return f"id:{call_id}"
     return json.dumps(tool_call, sort_keys=True, ensure_ascii=True, default=str)
-
 
 
 class BatA2AAdapter:
@@ -214,7 +213,7 @@ class BatA2AAdapter:
         t0_perf = time.perf_counter()
         trace = EpisodeTrace()
 
-        usage_total: Dict[str, Any] = {
+        usage_total: dict[str, Any] = {
             "input_tokens": 0,
             "output_tokens": 0,
             "total_tokens": 0,
@@ -223,7 +222,7 @@ class BatA2AAdapter:
         usage_seen: set[str] = set()
         tool_calls_seen: set[str] = set()
 
-        last_status: Optional[str] = None
+        last_status: str | None = None
         last_content = ""
 
         async with AsyncClient(timeout=self.request_timeout_s) as httpx_client:

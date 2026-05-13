@@ -1,25 +1,17 @@
-# llm_evaluators.py
-"""
-LLM-as-Judge evaluators for qualitative metrics:
-- Response Relevance
-- Task Completion Quality
-- Hallucination Detection
-
-Uses bat-adk ChatModelClient for LLM calls.
-"""
 from __future__ import annotations
 
 import concurrent.futures
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from langchain_core.messages import HumanMessage
 
 from bat.chat_model_client import ChatModelClient, ChatModelClientConfig
 from bat.logging import create_logger
-logger = create_logger(__name__, level="info")
 from ..contracts import QualitativeScores
+
+logger = create_logger(__name__, level="info")
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +51,7 @@ def _get_judge_client() -> ChatModelClient:
     logger.info(f"LLM Judge initialized: {provider}:{model}")
     return _judge_client
 
-def _call_llm_judge(prompt: str, max_retries: int = 2) -> Dict[str, Any]:
+def _call_llm_judge(prompt: str, max_retries: int = 2) -> dict[str, Any]:
     client = _get_judge_client()
     for attempt in range(max_retries):
         try:
@@ -79,13 +71,10 @@ def _call_llm_judge(prompt: str, max_retries: int = 2) -> Dict[str, Any]:
 # Prompt templates
 # ---------------------------------------------------------------------------
 
-RESPONSE_RELEVANCE_PROMPT = """You are an evaluator of response RELEVANCE and CORRECTNESS.
+RESPONSE_RELEVANCE_PROMPT = """You are an evaluator of TOPICAL RELEVANCE only.
 
 **User Queries:**
 {query}
-
-**Expected Behavior:**
-{expected_desc}
 
 **Full Conversation:**
 {context}
@@ -93,22 +82,25 @@ RESPONSE_RELEVANCE_PROMPT = """You are an evaluator of response RELEVANCE and CO
 **Final Response:**
 {response}
 
-Score how well the response addresses the user's query and aligns with the expected behavior. Consider three things: whether the response is on the right topic, whether its factual claims are correct, and whether it matches the expected behavior.
+Your ONLY job is to judge whether the conversation stays on-topic with what the user asked about — does the agent talk about the right subject matter, address the user's actual request, and keep the dialogue coherent across turns? Do NOT judge whether the outcome is correct, whether the agent succeeded, whether the final answer matches any expected behavior, or whether the technical content is accurate. Those are scored by other evaluators. A response can be on-topic and completely wrong, and that is still high relevance.
 
-Beyond the final response, look at the intermediate steps in the conversation. Is the agent making genuine progress toward the goal at each step, or is it drifting, looping, or going off-track? A response that looks acceptable at the end but got there through confused or contradictory intermediate steps should score lower than one where the whole trajectory was coherent and purposeful.
+Look at both the final response and the intermediate steps. The questions to ask are:
+- Is the agent discussing the subject the user raised, or has it drifted to unrelated topics?
+- Are intermediate agent turns coherent extensions of the user's request, or do they wander, repeat themselves, or address something the user never asked about?
+- Does the final response actually respond to what the user asked, even if the answer is wrong?
 
-  1.0  — Fully on-topic, every claim correct, full alignment with expected behavior, and a clear, coherent progression through the conversation.
-  0.8  — On-topic and mostly correct; one minor inaccuracy or small omission, or a mostly coherent progression with a small detour.
-  0.6  — Right topic but partially correct, or the intermediate steps show meaningful confusion or drift before landing on a mostly acceptable answer.
-  0.4  — Partially relevant — either correct topic with mostly wrong content, or the conversation shows significant drift or confusion even if the final response partially addresses the query.
-  0.2  — Mostly off-topic or mostly contradicts expected behavior; only a small kernel of relevance survives.
-  0.0  — Wrong topic entirely or directly contradicts expected behavior with no redeeming content.
+  1.0  — The whole conversation, including intermediate steps, is squarely on the topic the user raised. No drift, no off-topic detours, no irrelevant tangents.
+  0.8  — Mostly on-topic with one small detour or briefly irrelevant intermediate step, but the main thread stays focused.
+  0.6  — On the right general topic, but with noticeable drift or some turns that don't connect to the user's request.
+  0.4  — Partially on-topic — the agent addresses something related, but a meaningful portion of the conversation is off the user's actual subject.
+  0.2  — Mostly off-topic; only a small thread relates to what the user asked.
+  0.0  — Wrong topic entirely — the agent is talking about something unrelated to the user's request.
 
-Do not default to 0.7–0.85 because the response "seems fine". Actively look for mismatches. If you cannot cite a specific flaw in the response or the conversation progression, the score should be 1.0, not 0.8.
+Do NOT lower the score because the agent's answer was incorrect, because the deployment failed, because the expected outcome wasn't reached, or because intermediate validation errors occurred. Those are correctness signals, not relevance signals.
 
 Return JSON:
 {{
-    "reasoning": "1-2 sentences citing specific evidence from the response or conversation steps",
+    "reasoning": "1-2 sentences strictly about whether the conversation stays on the user's topic. Do not mention correctness or expected outcomes.",
     "score": float
 }}
 """
@@ -177,11 +169,13 @@ The conversation uses three event labels:
 - [AGENT OUTPUT] — content the agent generated and sent to the user. Values here are agent proposals, NOT trusted external data. Any specific value in an [AGENT OUTPUT] that does not trace back to a [USER] line is a hallucination candidate.
 - [SYSTEM] — internal runtime status messages. Values returned here (e.g. validation errors, schema constraints) are legitimate system feedback and may be used by the agent without being hallucination.
 
-Use the "All facts the user explicitly stated" section as your ground-truth checklist. For each specific claim in the final response (concrete value, name, number, identifier, field), ask: is it in the user facts list, or was it returned by a [SYSTEM] validation message? If neither, it is UNINVITED.
+IMPORTANT — backend feedback that isn't in the trace: when the agent reports a deployment failure, validation rejection, or schema/type error, it is paraphrasing a response from a backend system (webhook, API, validator) that this trace does NOT separately show as a [SYSTEM] event. Technical strings that look like backend error vocabulary — type names (e.g. `security.AuthenticationKey`), schema field names, validator messages, regex patterns, HTTP error codes, library/class identifiers — should be treated as legitimate backend-returned facts, not as agent hallucination, EVEN IF you don't see the literal [SYSTEM] line for them. Only flag values as UNINVITED when they are clearly user-domain content (deployment names, network parameters, business values, configuration the user controls) that the user never stated.
+
+Use the "All facts the user explicitly stated" section as your ground-truth checklist. For each specific claim in the final response (concrete value, name, number, identifier, field), ask: is it in the user facts list, or was it returned by a [SYSTEM] message, or is it plausibly a backend error/type string the agent is relaying? If none of those, it is UNINVITED.
 
 Label each significant claim as one of:
 - CORRECT — the user stated or requested this, and the agent reproduced it faithfully.
-- UNINVITED — the agent asserted a specific fact or value the user never mentioned and no [SYSTEM] message provided. This is hallucination.
+- UNINVITED — the agent asserted a user-domain fact or value the user never mentioned and no plausible system/backend source provided. This is hallucination.
 - DISTORTED — the agent changed something the user did specify (user said X, agent produced Y). This is also hallucination.
 
   1.0  — Every specific claim traces back to a user statement or system-returned fact.
@@ -248,13 +242,11 @@ def evaluate_response_relevance(
     query: str,
     response: str,
     context: str = "",
-    expected_desc: str = "No specific expectations defined.",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     prompt = RESPONSE_RELEVANCE_PROMPT.format(
         query=query,
         response=response,
         context=context or "No conversation history available",
-        expected_desc=expected_desc,
     )
     return _call_llm_judge(prompt)
 
@@ -265,7 +257,7 @@ def evaluate_task_completion(
     status: str,
     expected_desc: str = "Task should complete successfully",
     context: str = ""
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Evaluate task completion quality including process and outcome."""
     prompt = TASK_COMPLETION_PROMPT.format(
         query=query,
@@ -283,7 +275,7 @@ def evaluate_hallucination(
     context: str = "",
     expected_desc: str = "No specific expectations defined.",
     user_facts: str = "No explicit user statements recorded.",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     prompt = HALLUCINATION_DETECTION_PROMPT.format(
         query=query,
         response=response,
@@ -297,16 +289,13 @@ def evaluate_hallucination(
 def evaluate_tool_call_appropriateness(
     query: str,
     response: str,
-    status: str,
     context: str = "",
     tool_calls: str = "[]",
     expected_desc: str = "Task should complete successfully",
-) -> Dict[str, Any]:
-    """Evaluate whether tool calls were appropriate for the task."""
+) -> dict[str, Any]:
     prompt = TOOL_CALL_APPROPRIATENESS_PROMPT.format(
         query=query,
         response=response,
-        status=status,
         context=context or "No conversation history available",
         tool_calls=tool_calls or "[]",
         expected_desc=expected_desc,
@@ -327,15 +316,15 @@ def evaluate_episode_quality(
     scores = QualitativeScores()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        futures: Dict[str, Any] = {
-            "relevance": pool.submit(evaluate_response_relevance, query, response, context, expected_desc),
+        futures: dict[str, Any] = {
+            "relevance": pool.submit(evaluate_response_relevance, query, response, context),
             "completion": pool.submit(evaluate_task_completion, query, response, status, expected_desc, context),
             "hallucination": pool.submit(evaluate_hallucination, query, response, context, expected_desc, user_facts),
         }
         if has_expected_tools:
             futures["tool_calls"] = pool.submit(
                 evaluate_tool_call_appropriateness,
-                query, response, status, context, tool_calls, expected_desc,
+                query, response, context, tool_calls, expected_desc,
             )
         else:
             scores.judge_reasoning["tool_call_appropriateness"] = "skipped: no tool calls expected for this task"

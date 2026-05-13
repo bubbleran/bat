@@ -1,8 +1,8 @@
 from __future__ import annotations
 from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
-from typing import Any, Dict, List, Literal, Optional
 
 
 AgentTaskStatus = Literal["working", "input-required", "completed", "error"]
@@ -12,7 +12,7 @@ class ExpectedToolCall(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str
-    args_subset: Dict[str, Any] = Field(default_factory=dict)
+    args_subset: dict[str, Any] = Field(default_factory=dict)
     times: int = 1
 
 
@@ -20,21 +20,21 @@ class TaskExpected(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     # Expected final status from the agent. None = skip status check entirely.
-    status: Optional[AgentTaskStatus] = "completed"
+    status: AgentTaskStatus | None = "completed"
     # Free-text description of the desired outcome, evaluated semantically by the LLM judges.
-    expected_outcome: Optional[str] = None
+    expected_outcome: str | None = None
     # All phrases must appear in the final output text. None/empty = skip substring check.
-    output_must_contain: Optional[List[str]] = None
-    tool_calls: List[ExpectedToolCall] = Field(default_factory=list)
+    output_must_contain: list[str] | None = None
+    tool_calls: list[ExpectedToolCall] = Field(default_factory=list)
 
 
 class TaskSpec(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str
-    turns: List[str]
+    turns: list[str]
     expected: TaskExpected = Field(default_factory=TaskExpected)
-    meta: Dict[str, Any] = Field(default_factory=dict)
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class TraceEvent(BaseModel):
@@ -43,26 +43,26 @@ class TraceEvent(BaseModel):
     t_ms: float
     task_status: AgentTaskStatus
     content_preview: str
-    user_input: Optional[str] = None
+    user_input: str | None = None
 
 
 class EpisodeTrace(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    events: List[TraceEvent] = Field(default_factory=list)
-    usage: Dict[str, Any] = Field(default_factory=dict)
-    timings: Dict[str, float] = Field(default_factory=dict)
-    tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
+    events: list[TraceEvent] = Field(default_factory=list)
+    usage: dict[str, Any] = Field(default_factory=dict)
+    timings: dict[str, float] = Field(default_factory=dict)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class QualitativeScores(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    response_relevance: Optional[float] = None
-    task_completion_quality: Optional[float] = None
-    hallucination_score: Optional[float] = None
-    tool_call_appropriateness: Optional[float] = None
-    judge_reasoning: Dict[str, str] = Field(default_factory=dict)
+    response_relevance: float | None = None
+    task_completion_quality: float | None = None
+    hallucination_score: float | None = None
+    tool_call_appropriateness: float | None = None
+    judge_reasoning: dict[str, str] = Field(default_factory=dict)
 
 
 class CheckResult(BaseModel):
@@ -76,7 +76,7 @@ class EpisodeVerdict(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     passed: bool
-    checks: Dict[str, CheckResult] = Field(default_factory=dict)
+    checks: dict[str, CheckResult] = Field(default_factory=dict)
 
 
 class EpisodeResult(BaseModel):
@@ -85,12 +85,12 @@ class EpisodeResult(BaseModel):
     task_id: str
     status: AgentTaskStatus
     output_text: str
-    expected_outcome: Optional[str] = None
-    verdict: Optional[EpisodeVerdict] = None
+    expected_outcome: str | None = None
+    verdict: EpisodeVerdict | None = None
     trace: EpisodeTrace = Field(default_factory=EpisodeTrace)
-    aux: Dict[str, Any] = Field(default_factory=dict)
-    model_name: Optional[str] = None
-    qualitative_scores: Optional[QualitativeScores] = None
+    aux: dict[str, Any] = Field(default_factory=dict)
+    model_name: str | None = None
+    qualitative_scores: QualitativeScores | None = None
 
     @computed_field
     @property

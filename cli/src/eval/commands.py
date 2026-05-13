@@ -16,7 +16,7 @@ import typer
 from dotenv import dotenv_values
 
 from .engine.contracts import JudgeSpec
-from .engine.orchestrator import run_agent
+from .engine.orchestrator import run_evaluation
 from .engine.eval_config import default_eval_yaml, default_tasks_json, load_eval_config
 
 
@@ -107,7 +107,7 @@ def _run_eval_orchestrator(
 ) -> None:
     with _temporary_env(env):
         asyncio.run(
-            run_agent(
+            run_evaluation(
                 agent_url=agent_url,
                 model=model,
                 model_provider=model_provider,
@@ -297,74 +297,30 @@ def eval_init(
     typer.secho("Evaluation scaffold ready in eval/", fg=typer.colors.GREEN)
 
 
-def _eval_config_to_dict(cfg) -> dict[str, object]:
-    models = [f"{model.provider}:{model.model}" for model in cfg.models]
+def _print_eval_show(cfg) -> None:
     judge_model = f"{cfg.judge.provider}:{cfg.judge.model}" if cfg.judge is not None else "not configured"
 
-    return {
-        "dataset": str(cfg.dataset),
-        "k": cfg.k,
-        "qualitative": cfg.qualitative,
-        "models": models,
-        "judge_model": judge_model,
-    }
-
-
-def _render_eval_show(payload: dict[str, object]) -> str:
-    lines = [
-        "============================",
-        "  EVALUATION CONFIGURATION",
-        "============================",
-        f"Dataset     : {payload['dataset']}",
-        f"k           : {payload['k']}",
-        f"Qualitative : {'yes' if payload['qualitative'] else 'no'}",
-        "",
-        "Models:",
-    ]
-
-    models = payload["models"]
-    if isinstance(models, list) and models:
-        lines.extend([f"  [{idx}] {model}" for idx, model in enumerate(models, start=1)])
-    else:
-        lines.append("  [0] none")
-
-    lines.extend(
-        [
-            "",
-            f"Judge model : {payload['judge_model']}",
-            "============================",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _print_eval_show(payload: dict[str, object]) -> None:
     typer.secho("============================", fg=typer.colors.BLUE)
     typer.secho("  EVALUATION CONFIGURATION", fg=typer.colors.BLUE, bold=True)
     typer.secho("============================", fg=typer.colors.BLUE)
 
     typer.secho("Dataset", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
-    typer.echo(f"     : {payload['dataset']}")
+    typer.echo(f"     : {cfg.dataset}")
 
     typer.secho("k", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
-    typer.echo(f"           : {payload['k']}")
+    typer.echo(f"           : {cfg.k}")
 
     typer.secho("Qualitative", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
-    typer.echo(f" : {'yes' if payload['qualitative'] else 'no'}")
+    typer.echo(f" : {'yes' if cfg.qualitative else 'no'}")
 
     typer.secho("", nl=True)
     typer.secho("Models:", fg=typer.colors.CYAN, bold=True)
-
-    models = payload["models"]
-    if isinstance(models, list) and models:
-        for idx, model in enumerate(models, start=1):
-            typer.echo(f"  [{idx}] {model}")
-    else:
-        typer.echo("  [0] none")
+    for idx, model in enumerate(cfg.models, start=1):
+        typer.echo(f"  [{idx}] {model.provider}:{model.model}")
 
     typer.secho("", nl=True)
     typer.secho("Judge model", fg=typer.colors.MAGENTA, bold=True, nl=False)
-    typer.echo(f" : {payload['judge_model']}")
+    typer.echo(f" : {judge_model}")
     typer.secho("============================", fg=typer.colors.BLUE)
 
 
@@ -381,7 +337,7 @@ def eval_show() -> None:
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    _print_eval_show(_eval_config_to_dict(cfg))
+    _print_eval_show(cfg)
 
 
 def eval_run() -> None:

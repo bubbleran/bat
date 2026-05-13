@@ -5,7 +5,6 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List
 
 from .adapter import BatA2AAdapter
 from .bench_runner import BenchRunner, RunConfig
@@ -30,12 +29,17 @@ def load_tasks(path: str | Path) -> List[TaskSpec]:
         raise ValueError(f"Dataset not formatted correctly in {dataset_path}") from exc
 
 
-async def _evaluate_qualitative(results: list[EpisodeResult], tasks_by_id: Dict[str, TaskSpec]) -> None:
-    for episode in results:
+_QUALITATIVE_CONCURRENCY = 8
+
+
+async def _evaluate_qualitative(results: list[EpisodeResult], tasks_by_id: dict[str, TaskSpec]) -> None:
+    sem = asyncio.Semaphore(_QUALITATIVE_CONCURRENCY)
+
+    async def _score(episode: EpisodeResult) -> None:
         task = tasks_by_id.get(episode.task_id)
         if task is None:
-            continue
-        print(f"Evaluating qualitative scores for episode: {episode} (task_id={episode.task_id})")
+            return
+        logger.info(f"Evaluating qualitative scores for episode {episode.task_id}")
         query = " -> ".join(task.turns)
         raw_events = [event.model_dump() for event in episode.trace.events]
         context = build_context_from_events(raw_events)
@@ -48,21 +52,22 @@ async def _evaluate_qualitative(results: list[EpisodeResult], tasks_by_id: Dict[
             expected_tool_calls=task.expected.tool_calls or None,
         )
 
-        episode.qualitative_scores = await asyncio.to_thread(
-            evaluate_episode_quality,
-            query,
-            episode.output_text,
-            episode.status,
-            context,
-            expected_desc,
-            tool_calls,
-            bool(task.expected.tool_calls),
-            user_facts,
-        )
-        
+        async with sem:
+            episode.qualitative_scores = await asyncio.to_thread(
+                evaluate_episode_quality,
+                query,
+                episode.output_text,
+                episode.status,
+                context,
+                expected_desc,
+                tool_calls,
+                bool(task.expected.tool_calls),
+                user_facts,
+            )
 
+    await asyncio.gather(*(_score(ep) for ep in results))
 
-async def run_agent(
+async def run_evaluation(
     agent_url: str,
     model: str,
     model_provider: str,
@@ -130,7 +135,7 @@ def main() -> int:
     output_dir = Path(args.output_dir).resolve()
 
     asyncio.run(
-        run_agent(
+        run_evaluation(
             agent_url=args.agent_url,
             model=args.model,
             model_provider=args.model_provider,

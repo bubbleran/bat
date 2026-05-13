@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 from .contracts import CheckResult, EpisodeVerdict, ExpectedToolCall, TaskExpected
 
@@ -35,7 +35,7 @@ def _is_subset(expected: Any, actual: Any) -> bool:
     return expected == actual
 
 
-def _count_matches(expected: ExpectedToolCall, observed: List[Dict[str, Any]]) -> int:
+def _count_matches(expected: ExpectedToolCall, observed: list[dict[str, Any]]) -> int:
     total = 0
     for call in observed:
         if call.get("name") != expected.name:
@@ -51,10 +51,10 @@ class EpisodeEvaluator:
         self,
         status: str,
         output_text: str,
-        tool_calls: List[Dict[str, Any]],
+        tool_calls: list[dict[str, Any]],
         expected: TaskExpected,
     ) -> EpisodeVerdict:
-        checks: Dict[str, CheckResult] = {}
+        checks: dict[str, CheckResult] = {}
 
         if expected.status is not None:
             passed = status == expected.status
