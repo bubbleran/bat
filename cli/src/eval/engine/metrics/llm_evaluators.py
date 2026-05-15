@@ -20,7 +20,7 @@ logger = create_logger(__name__, level="info")
 
 _JUDGE_SYSTEM = "You are a precise evaluator. Always respond with valid JSON only."
 
-_judge_client: Optional[ChatModelClient] = None
+_judge_client: ChatModelClient | None = None
 
 
 def _get_judge_client() -> ChatModelClient:
@@ -71,7 +71,7 @@ def _call_llm_judge(prompt: str, max_retries: int = 2) -> dict[str, Any]:
 # Prompt templates
 # ---------------------------------------------------------------------------
 
-RESPONSE_RELEVANCE_PROMPT = """You are an evaluator of TOPICAL RELEVANCE only.
+RESPONSE_RELEVANCE_PROMPT = """You are an evaluator of CONVERSATIONAL RELEVANCE.
 
 **User Queries:**
 {query}
@@ -82,25 +82,33 @@ RESPONSE_RELEVANCE_PROMPT = """You are an evaluator of TOPICAL RELEVANCE only.
 **Final Response:**
 {response}
 
-Your ONLY job is to judge whether the conversation stays on-topic with what the user asked about — does the agent talk about the right subject matter, address the user's actual request, and keep the dialogue coherent across turns? Do NOT judge whether the outcome is correct, whether the agent succeeded, whether the final answer matches any expected behavior, or whether the technical content is accurate. Those are scored by other evaluators. A response can be on-topic and completely wrong, and that is still high relevance.
+Your job is to judge whether the agent stays on the topic the user raised and avoids detours. There are two axes, scored together on one scale:
 
-Look at both the final response and the intermediate steps. The questions to ask are:
-- Is the agent discussing the subject the user raised, or has it drifted to unrelated topics?
-- Are intermediate agent turns coherent extensions of the user's request, or do they wander, repeat themselves, or address something the user never asked about?
-- Does the final response actually respond to what the user asked, even if the answer is wrong?
+1. **On-topic / no detours (primary axis, 0.0–0.8).** Does the agent keep the conversation on the subject the user actually asked about? Penalize:
+   - drifting to unrelated subjects mid-conversation
+   - addressing something the user never asked about
+   - going off on tangents and not coming back
+   Reward staying consistently on the user's subject across all turns, even if intermediate steps don't immediately resolve the question.
 
-  1.0  — The whole conversation, including intermediate steps, is squarely on the topic the user raised. No drift, no off-topic detours, no irrelevant tangents.
-  0.8  — Mostly on-topic with one small detour or briefly irrelevant intermediate step, but the main thread stays focused.
-  0.6  — On the right general topic, but with noticeable drift or some turns that don't connect to the user's request.
-  0.4  — Partially on-topic — the agent addresses something related, but a meaningful portion of the conversation is off the user's actual subject.
-  0.2  — Mostly off-topic; only a small thread relates to what the user asked.
-  0.0  — Wrong topic entirely — the agent is talking about something unrelated to the user's request.
+2. **Response craft (refinement axis, 0.8–1.0).** Of the responses that are on-topic, refine the score based on shape:
+   - heavy padding, restating system errors verbatim as new analysis, hedging instead of answering → stay at 0.8
+   - clean, direct, proportionate response → 0.9–1.0
+   This axis only matters once the on-topic floor of 0.8 is reached. Do NOT lower an on-topic response below 0.8 for padding or verbosity alone — mild verbosity is acceptable.
 
-Do NOT lower the score because the agent's answer was incorrect, because the deployment failed, because the expected outcome wasn't reached, or because intermediate validation errors occurred. Those are correctness signals, not relevance signals.
+Score bands:
+  1.0 — On-topic throughout, no detours, AND a clean direct response.
+  0.9 — On-topic throughout, no detours, with light padding or one small hedge.
+  0.8 — On-topic throughout, no detours, but noticeable padding / restating / verbosity. This is the floor for "the agent did not go off-topic".
+  0.6 — Mostly on-topic with one meaningful detour that the agent recovered from, OR briefly drifted before returning to the subject.
+  0.4 — Significant off-topic content — a real portion of the conversation is about something the user didn't ask.
+  0.2 — Mostly off-topic, only a small thread relates to the user's actual subject.
+  0.0 — Wrong topic entirely, non-sequitur, raw error dump with no engagement.
+
+Do NOT score based on whether the agent's answer is factually correct, whether the deployment succeeded, or whether the expected outcome was reached. Those are scored by other evaluators. An on-topic wrong answer scores at least 0.8 here.
 
 Return JSON:
 {{
-    "reasoning": "1-2 sentences strictly about whether the conversation stays on the user's topic. Do not mention correctness or expected outcomes.",
+    "reasoning": "1-2 sentences: first whether the agent stayed on topic / had any detours, then briefly note the response shape if it affected the 0.8–1.0 band.",
     "score": float
 }}
 """
@@ -172,6 +180,8 @@ The conversation uses three event labels:
 IMPORTANT — backend feedback that isn't in the trace: when the agent reports a deployment failure, validation rejection, or schema/type error, it is paraphrasing a response from a backend system (webhook, API, validator) that this trace does NOT separately show as a [SYSTEM] event. Technical strings that look like backend error vocabulary — type names (e.g. `security.AuthenticationKey`), schema field names, validator messages, regex patterns, HTTP error codes, library/class identifiers — should be treated as legitimate backend-returned facts, not as agent hallucination, EVEN IF you don't see the literal [SYSTEM] line for them. Only flag values as UNINVITED when they are clearly user-domain content (deployment names, network parameters, business values, configuration the user controls) that the user never stated.
 
 Use the "All facts the user explicitly stated" section as your ground-truth checklist. For each specific claim in the final response (concrete value, name, number, identifier, field), ask: is it in the user facts list, or was it returned by a [SYSTEM] message, or is it plausibly a backend error/type string the agent is relaying? If none of those, it is UNINVITED.
+
+**Policy: echoed user values.** If the user explicitly stated a value in a [USER] line — whether the value is valid or invalid for the underlying schema — and the agent reproduces that same value back in its response, YAML, or reasoning, this is NEVER hallucination. The user said it; the agent is faithfully echoing it. DISTORTED applies only when the agent silently changes a user-stated value to a different one (user said X, agent produced Y, where X ≠ Y as written). When in doubt about whether a value was user-stated, consult the "All facts the user explicitly stated" checklist above.
 
 Label each significant claim as one of:
 - CORRECT — the user stated or requested this, and the agent reproduced it faithfully.
