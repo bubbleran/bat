@@ -48,8 +48,8 @@ class AgentApplication:
         from bat.agent import AgentApplication
 
         agent = AgentApplication(
-            agent_card_path='./agent.json',
-            agent_graph=MyAgentGraph(),
+            AgentGraphType=MyAgentGraph,
+            AgentStateType=MyAgentState,
         )
         agent.run()
     ```
