@@ -7,15 +7,19 @@ from typing_extensions import Literal
 logger = create_logger(__name__, "debug")
 
 ModelProvider = Literal[
-    "openai",
+    "anthropic",
+    "deepseek",
     "nvidia",
     "ollama",
+    "openai",
 ]
 """`ModelProvider` is a type alias for the supported model providers.
 The currently supported providers are:
-- `openai`
+- `anthropic`
+- `deepseek`
 - `nvidia`
 - `ollama`
+- `openai`
 """
 
 class ChatModelClientConfig(BaseModel):
