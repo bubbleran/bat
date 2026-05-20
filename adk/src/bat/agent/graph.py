@@ -82,7 +82,16 @@ class AgentGraph(ABC):
         Returns:
             StateGraph: The state graph builder.
         """
-        return self._graph_builder        
+        return self._graph_builder
+
+    @property
+    def compiled_graph(self) -> CompiledStateGraph:
+        """Get the compiled state graph.
+        
+        Returns:
+            CompiledStateGraph: The compiled state graph of the agent.
+        """
+        return self._graph
 
     @abstractmethod
     def setup(
