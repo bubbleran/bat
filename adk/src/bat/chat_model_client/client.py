@@ -13,7 +13,7 @@ from langchain_core.messages import (
 from langchain.chat_models.base import BaseChatModel
 from langchain_core.tools import BaseTool
 from langchain.chat_models import init_chat_model
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ValidationError, model_validator
 from typing import (
     Any,
     Callable,
@@ -21,6 +21,8 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Tuple,
+    Union,
 )
 from typing_extensions import Self
 
@@ -132,6 +134,7 @@ class ChatModelClient:
         chat_model_config: ChatModelClientConfig | None = None,
         system_instructions: str = "You are a helpful assistant.",
         tools: Sequence[Dict[str, Any] | type | Callable | BaseTool | None] = None,
+        output_schema: Optional[type[BaseModel]] = None,
     ):
         """Initialize the ChatModelClient with the given configuration, system instructions, and tools.
 
@@ -162,7 +165,18 @@ class ChatModelClient:
         logger.info(f"ChatModelClient {self.config.client_name or ''} initialized with: model={_full_model_name}, #tools={len(self.tools or [])}")
         if self.tools:
             self._chat_model = self._chat_model.bind_tools(self.tools)
-        
+
+        if output_schema:
+            if not isinstance(output_schema, type) or not issubclass(output_schema, BaseModel):
+                raise TypeError(f"Expected output_schema {output_schema} to be a subclass of pydantic BaseModel")
+            self.output_schema = output_schema
+            self._chat_model = self._chat_model.with_structured_output(
+                schema=output_schema,
+                include_raw=True,
+            )
+        else:
+            self.output_schema = AIMessage
+
         self.usage_metadatas = []
         
     @property
@@ -193,6 +207,7 @@ class ChatModelClient:
         
         The system instructions are always included as the first message.
         If `history` is provided, it is prepended to the messages list.
+        If the `input` is a `str`, it is converted to a `HumanMessage` and appended to the messages list.
         If the `input` is a `HumanMessage`, it is appended to the messages list.
         If the `input` is a list of `ToolMessage`, they are appended to the messages list.
 
@@ -229,12 +244,59 @@ class ChatModelClient:
         else:
             history += input
         history.append(response)
+    
+    def _process_response(
+        self,
+        response: AIMessage | Dict[str, Any],
+    ) -> Tuple[AIMessage, Any]:
+        """
+        Process the response from the chat model, checking for its type and parsing it according to the
+        output schema if provided.
+
+        Args:
+            response (AIMessage | Dict[str, Any]): The response from the chat model.
+
+        Returns:
+            Tuple[AIMessage, Any]: A tuple containing the processed AIMessage and the parsed output.
+        
+        Raises:
+            ValueError: If the response is not of the expected type or if there is an
+                error parsing the response according to the output schema.
+            KeyError: If the expected keys are not found in the response when the output schema is used.
+            ValidationError: If the parsed response does not conform to the output schema.
+        """
+        if not isinstance(response, AIMessage) and not isinstance(response, Dict):
+            raise ValueError(
+                "Expected AIMessage or dict after invocation of chat model, "
+                f"got {type(response)}, value={response}"
+            )
+        if isinstance(response, AIMessage):
+            return response, response.model_copy()
+        if 'raw' not in response:
+            raise KeyError(f"Key 'raw' not found in response after chat model invocation")
+        if 'parsed' not in response:
+            raise KeyError(f"Key 'parsed' not found in response after chat model invocation")
+        if 'parsing_error' not in response:
+            raise KeyError(f"Key 'parsing_error' not found in response after chat model invocation")
+        raw: AIMessage = response['raw']
+        parsed = response['parsed']
+        parsing_error = response['parsing_error']
+        if parsing_error is not None:
+            raise ValueError(
+                f"Error parsing chat model response into the output schema {self.output_schema}: "
+                f"{parsing_error}. Raw response: {raw}"
+            )
+        try:
+            parsed_obj = self.output_schema.model_validate(parsed)
+        except ValidationError as e:
+            raise e
+        return raw, parsed_obj
 
     def invoke(
         self,
         input: str | HumanMessage | List[ToolMessage],
         history: Optional[List[BaseMessage]] = None,
-    ) -> AIMessage:
+    ) -> Union[AIMessage, Any]:
         """Invoke the chat model with user instructions or tool call results.
 
         If the `history` is provided, it will be prepended to the input message.
@@ -245,9 +307,12 @@ class ChatModelClient:
             history (Optional[List[BaseMessage]]): Optional history of messages.
         
         Returns:
-            AIMessage: The response from the chat model.
+            AIMessage | Any: The response from the chat model.
         Raises:
-            ValueError: If the input type is invalid or if the response from the chat model is not an `AIMessage`.
+            ValueError: If the input/output type is invalid or if there is an error parsing the
+                response according to the output schema.
+            KeyError: If the expected keys are not found in the response when the output schema is used.
+            ValidationError: If the parsed response does not conform to the output schema.
         """
         assert self._validate_input_type(input), f"Invalid input type: {type(input)}. Expected str or HumanMessage or List[ToolMessage]."
 
@@ -261,20 +326,19 @@ class ChatModelClient:
         except Exception as e:
             raise e
         t_end = time.time()
-        if not isinstance(response, AIMessage):
-            raise ValueError(f"Expected AIMessage after invocation of chat model, got {type(response)}")
+        r_for_history, r_to_return = self._process_response(response)
 
-        if not response.usage_metadata:
+        if not r_for_history.usage_metadata:
             logger.warning("Chat model did not return usage metadata.")
-        usage_metadata = {**(response.usage_metadata or {}) | {'inference_time': t_end - t_start}}
+        usage_metadata = {**(r_for_history.usage_metadata or {}) | {'inference_time': t_end - t_start}}
         self.usage_metadatas.append((t_start, UsageMetadata.model_validate(usage_metadata)))
 
         # Update the history
         if history is not None:
-            self._update_history(history, input, response)
+            self._update_history(history, input, r_for_history)
         
         # Return the response
-        return response
+        return r_to_return
 
     def batch(
         self,
