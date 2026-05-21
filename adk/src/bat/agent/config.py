@@ -392,15 +392,32 @@ class AgentConfig(BaseModel):
         logger.debug(f"Retrieved alias for {len(aliases)}/{len(self.remote_agents)} Agents.")
         self._remote_agents_aliases = aliases
 
-
 async def _request_mcp_name(
     client: MultiServerMCPClient,
     server_name: str,
 ) -> str:
-    async with client.session(server_name, auto_initialize=False) as session:
+    result = None
+    error = None
+
+    session_context = client.session(server_name)
+    session = await session_context.__aenter__()
+    try:
         initialized_session = await session.initialize()
-        return initialized_session.serverInfo.name
-    raise ValueError(f"Cannot retrieve name for {server_name} (MCP).")
+        result = initialized_session.serverInfo.name
+    except Exception as e:
+        error = e
+    finally:
+        # Give the server-side HTTP transport a split second to finish
+        # background writes before we forcefully tear the session down.
+        await asyncio.sleep(0.1)
+        await session_context.__aexit__(None, None, None)
+
+    if result is None:
+        if error:
+            raise ValueError(f"Cannot retrieve name for {server_name} (MCP): {error}")
+        raise ValueError(f"Cannot retrieve name for {server_name} (MCP).")
+
+    return result
 
 async def _request_a2a_name(
     client: AsyncClient,
