@@ -21,7 +21,7 @@ dependencies = [
   "a2a-sdk[http-server]",
   "httpx>=0.28.1",
   "langchain>=0.3.24",
-  "langchain-mcp-adapters>=0.1.13,<0.2.0",
+  "langchain-mcp-adapters>=0.2.0",
   "langgraph>=1.0.0",
   "mcp[cli]>=1.17.0",
   "pydantic>=2.10.6",
