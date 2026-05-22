@@ -46,8 +46,8 @@ def episode_metrics(ep: EpisodeResult) -> dict[str, Any]:
     metrics: dict[str, Any] = {
         "task_id": ep.task_id,
         "expected_outcome": ep.expected_outcome,
-        "status": ep.status,
-        "success": ep.success,
+        "status": ep.final_status,
+        "success": ep.verdict.passed if ep.verdict is not None else False,
         "time": {"wall_ms": wall_ms},
         "tokens": {
             "prompt_tokens": prompt,
@@ -59,10 +59,7 @@ def episode_metrics(ep: EpisodeResult) -> dict[str, Any]:
     if ep.verdict:
         metrics["verdict"] = {
             "passed": ep.verdict.passed,
-            "checks": {
-                k: {"passed": v.passed, "reason": v.reason}
-                for k, v in ep.verdict.checks.items()
-            },
+            "reason": ep.verdict.reason,
         }
 
     if ep.qualitative_scores:
@@ -71,6 +68,7 @@ def episode_metrics(ep: EpisodeResult) -> dict[str, Any]:
             "task_completion_quality": ep.qualitative_scores.task_completion_quality,
             "hallucination_score": ep.qualitative_scores.hallucination_score,
             "tool_call_appropriateness": ep.qualitative_scores.tool_call_appropriateness,
+            "judge_reasoning": ep.qualitative_scores.judge_reasoning,
         }
 
     return metrics

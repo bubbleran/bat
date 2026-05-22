@@ -34,17 +34,26 @@ _PROVIDER_API_KEY_ENV: dict[str, str] = {
 def _inject_judge_api_key(judge: JudgeSpec, agent_root: Path, env: dict[str, str]) -> None:
     """Resolve the judge's API key and inject it into env.
 
-    Priority:
-      1. judge.api_key field in eval.yaml
-      2. Key already present in env (exported in the shell)
-      3. Key found in the agent's .env file
+    If judge.api_key_env is set, that env var is the ONLY source — no fallbacks.
+    Otherwise priority is:
+      1. Key already present in env (exported in the shell)
+      2. Key found in the agent's .env file
     """
     api_key_var = _PROVIDER_API_KEY_ENV.get(judge.provider.lower())
     if api_key_var is None:
         return  # local/no-key provider (e.g. ollama)
 
-    if judge.api_key:
-        env[api_key_var] = judge.api_key
+    if judge.api_key_env:
+        value = os.environ.get(judge.api_key_env, "").strip()
+        if not value:
+            typer.secho(
+                f"Warning: judge.api_key_env='{judge.api_key_env}' is not set or is empty; "
+                f"the judge will likely fail when called.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            return
+        env[api_key_var] = value
         return
 
     if api_key_var in env:
@@ -415,6 +424,14 @@ def eval_run() -> None:
                 else:
                     runner_env.pop("JUDGE_BASE_URL", None)
 
+                for prompt_key in ("relevance", "task_completion", "hallucination", "tool_call"):
+                    env_name = f"JUDGE_PROMPT_{prompt_key.upper()}"
+                    text = cfg.judge.prompts.get(prompt_key)
+                    if text:
+                        runner_env[env_name] = text
+                    else:
+                        runner_env.pop(env_name, None)
+
                 _inject_judge_api_key(cfg.judge, agent_root, runner_env)
 
                 _apply_env_overrides(
@@ -426,6 +443,8 @@ def eval_run() -> None:
                 runner_env.pop("JUDGE_PROVIDER", None)
                 runner_env.pop("JUDGE_MODEL", None)
                 runner_env.pop("JUDGE_BASE_URL", None)
+                for prompt_key in ("relevance", "task_completion", "hallucination", "tool_call"):
+                    runner_env.pop(f"JUDGE_PROMPT_{prompt_key.upper()}", None)
 
             _run_eval_orchestrator(
                 agent_url=cfg.agent_url,
@@ -455,6 +474,12 @@ def eval_plot(
         "-f",
         help="Path to an evaluation output folder. Each sub-folder containing a metrics.json is treated as one run.",
     ),
+    filter: str | None = typer.Option(
+        None,
+        "--filter",
+        "-F",
+        help="Substring match on task_id. Restricts the per-task charts to tasks whose id contains this substring. Summary charts are not affected.",
+    ),
 ) -> None:
     folder = folder.resolve()
 
@@ -480,9 +505,15 @@ def eval_plot(
         fg=typer.colors.CYAN,
     )
 
+    if filter:
+        typer.secho(
+            f"Per-task filter active: only task ids containing '{filter}' will be plotted",
+            fg=typer.colors.CYAN,
+        )
+
     from .engine.plotter import generate_and_save_plots
 
-    saved = generate_and_save_plots(metrics, folder)
+    saved = generate_and_save_plots(metrics, folder, task_filter=filter)
 
     for path in saved:
         typer.secho(f"  {path.relative_to(folder)}", fg=typer.colors.GREEN)

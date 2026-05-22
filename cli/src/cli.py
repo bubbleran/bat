@@ -1,6 +1,10 @@
+import shutil
+import subprocess
 from pathlib import Path
 
+import click
 import typer
+from typer.core import TyperGroup
 
 from add.client import add_clients_to_existing_agent
 from build.build import build_image
@@ -10,7 +14,65 @@ from push.push import push_image
 from set.env import set_env_values
 
 
-app = typer.Typer(help="CLI tool to create, build, and manage AI agents developed with the BubbleRAN Agentic Toolkit.")
+_BANNER_COLORS = (51, 45, 39, 63, 99, 135)
+
+_FALLBACK_BANNER = r"""
+ ____    _  _____    ____ _     ___
+| __ )  / \|_   _|  / ___| |   |_ _|
+|  _ \ / _ \ | |   | |   | |    | |
+| |_) / ___ \| |   | |___| |___ | |
+|____/_/   \_\_|    \____|_____|___|
+"""
+
+_BANNER_MOTD = """
+Welcome to BubbleRAN Agentic Toolkit CLI tool.
+
+Scaffold, build, push, and evaluate BAT agents from one place.
+
+"""
+
+
+def _figlet_banner(text: str) -> str | None:
+    if shutil.which("figlet") is None:
+        return None
+    try:
+        return subprocess.check_output(
+            ["figlet", "-f", "standard", text],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _colorize_line(line: str) -> str:
+    n = len(line)
+    if n == 0:
+        return ""
+    palette = _BANNER_COLORS
+    pieces = []
+    for i, ch in enumerate(line):
+        idx = min(int(i * len(palette) / n), len(palette) - 1)
+        pieces.append(f"\033[38;5;{palette[idx]}m{ch}")
+    pieces.append("\033[0m")
+    return "".join(pieces)
+
+
+def _render_banner() -> str:
+    art = _figlet_banner("BAT-CLI") or _FALLBACK_BANNER
+    colored = "\n".join(_colorize_line(line) for line in art.splitlines())
+    return f"{colored}\n{_BANNER_MOTD}"
+
+
+class BannerGroup(TyperGroup):
+    def format_help(self, ctx, formatter):
+        click.echo(_render_banner().rstrip("\n") + "\n", nl=False)
+        super().format_help(ctx, formatter)
+
+
+app = typer.Typer(
+    cls=BannerGroup
+)
 init_app = typer.Typer(help="Create new BAT resources.")
 add_app = typer.Typer(help="Add new components to existing BAT agents.")
 set_app = typer.Typer(help="Set configuration values for existing BAT agents.")

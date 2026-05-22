@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .contracts import CheckResult, EpisodeVerdict, ExpectedToolCall, TaskExpected
+from .contracts import EpisodeVerdict, ExpectedToolCall, TaskExpected
 
 
 def _is_subset(expected: Any, actual: Any) -> bool:
@@ -54,36 +54,32 @@ class EpisodeEvaluator:
         tool_calls: list[dict[str, Any]],
         expected: TaskExpected,
     ) -> EpisodeVerdict:
-        checks: dict[str, CheckResult] = {}
+        checks: list[tuple[bool, str]] = []
 
         if expected.status is not None:
-            passed = status == expected.status
-            checks["status"] = CheckResult(
-                passed=passed,
-                reason=f"'{status}'"
-                if passed
-                else f"got '{status}', expected '{expected.status}'",
-            )
+            ok = status == expected.status
+            reason = f"status: '{status}'" if ok else f"status: got '{status}', expected '{expected.status}'"
+            checks.append((ok, reason))
 
         phrases = expected.output_must_contain or []
         n = len(phrases)
         for i, phrase in enumerate(phrases):
-            key = f"output[{i}]" if n > 1 else "output"
-            passed = phrase in output_text
-            checks[key] = CheckResult(
-                passed=passed,
-                reason=f"contains '{phrase}'" if passed else f"missing '{phrase}'",
-            )
+            label = f"output[{i}]" if n > 1 else "output"
+            ok = phrase in output_text
+            reason = f"{label}: contains '{phrase}'" if ok else f"{label}: missing '{phrase}'"
+            checks.append((ok, reason))
 
         for exp_call in expected.tool_calls:
             count = _count_matches(exp_call, tool_calls)
-            passed = count >= exp_call.times
-            checks[f"tool_call:{exp_call.name}"] = CheckResult(
-                passed=passed,
-                reason=f"called {count}×"
-                if passed
-                else f"called {count}×, expected ≥{exp_call.times}×",
+            ok = count >= exp_call.times
+            label = f"tool_call:{exp_call.name}"
+            reason = (
+                f"{label}: called {count}×"
+                if ok
+                else f"{label}: called {count}×, expected ≥{exp_call.times}×"
             )
+            checks.append((ok, reason))
 
-        overall = all(c.passed for c in checks.values()) if checks else True
-        return EpisodeVerdict(passed=overall, checks=checks)
+        overall = all(ok for ok, _ in checks) if checks else True
+        reason = "; ".join(r for _, r in checks)
+        return EpisodeVerdict(passed=overall, reason=reason)

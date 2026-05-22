@@ -9,6 +9,32 @@ from .contracts import EpisodeResult, TaskSpec
 from .evaluator import EpisodeEvaluator
 
 
+_QUALITATIVE_FIELDS = (
+    "response_relevance",
+    "task_completion_quality",
+    "hallucination_score",
+    "tool_call_appropriateness",
+)
+
+
+def _episode_passed(ep: EpisodeResult) -> bool:
+    return ep.verdict.passed if ep.verdict is not None else False
+
+
+def _average_qualitative_scores(results: list[EpisodeResult]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for field in _QUALITATIVE_FIELDS:
+        values = [
+            getattr(r.qualitative_scores, field)
+            for r in results
+            if r.qualitative_scores is not None
+            and getattr(r.qualitative_scores, field) is not None
+        ]
+        if values:
+            out[field] = sum(values) / len(values)
+    return out
+
+
 def _safe_task_id(task_id: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in task_id)
 
@@ -64,17 +90,7 @@ class BenchRunner:
         self.task_dir = Path(self.config.out_dir) / task_id
         self.run_dir = self.task_dir / f"{self.config.run_name}_{safe_model_name}"
         self._episodes_dir().mkdir(parents=True, exist_ok=True)
-
-        display_model_name = self.config.model.split(":")[-1] if ":" in self.config.model else self.config.model
-        _write_json(
-            self.run_dir / "run.json",
-            {
-                "run_name": self.config.run_name,
-                "timestamp_utc": stamp,
-                "k": self.config.k,
-                "model_name": display_model_name,
-            },
-        )
+        self._run_timestamp = stamp
 
         all_attempts: list[EpisodeResult] = []
 
@@ -83,7 +99,7 @@ class BenchRunner:
                 thread_id = f"{task.id}__try{i}"
                 episode = await self.adapter.run_task(task=task, thread_id=thread_id)
                 episode.verdict = self.evaluator.evaluate(
-                    episode.status, episode.output_text, episode.trace.tool_calls, task.expected
+                    episode.final_status, episode.final_output, episode.trace.tool_calls, task.expected
                 )
                 episode.expected_outcome = task.expected.expected_outcome
                 episode.model_name = self.config.model
@@ -91,46 +107,43 @@ class BenchRunner:
                 all_attempts.append(episode)
 
         self.persist_results(all_attempts)
+        return all_attempts
+
+    def write_summary(self, results: list[EpisodeResult]) -> None:
+        if self.run_dir is None:
+            raise ValueError("run_dir is not initialized; call run() first")
+
+        display_model_name = (
+            self.config.model.split(":")[-1] if ":" in self.config.model else self.config.model
+        )
 
         attempts_by_task: dict[str, list[EpisodeResult]] = {}
-        for attempt in all_attempts:
+        for attempt in results:
             attempts_by_task.setdefault(attempt.task_id, []).append(attempt)
 
-        per_task = []
-        for task in tasks:
-            task_attempts = attempts_by_task.get(task.id, [])
-            task_total = len(task_attempts)
-            task_passed = sum(1 for attempt in task_attempts if attempt.success)
-            per_task.append(
+        attempts = []
+        for task_id, task_attempts in attempts_by_task.items():
+            total = len(task_attempts)
+            passed = sum(1 for ep in task_attempts if _episode_passed(ep))
+            attempts.append(
                 {
-                    "task_id": task.id,
-                    "attempts": task_total,
-                    "passed": task_passed,
-                    "failed": task_total - task_passed,
-                    "success_percentage": (task_passed / task_total) * 100.0 if task_total else 0.0,
+                    "task_id": task_id,
+                    "attempts": total,
+                    "passed": passed,
+                    "failed": total - passed,
+                    "success_percentage": (passed / total) * 100.0 if total else 0.0,
                 }
             )
-
-        passed = sum(1 for result in all_attempts if result.success)
-        failed = len(all_attempts) - passed
-        avg_latency = (
-            sum(result.trace.timings.get("wall_ms", 0.0) for result in all_attempts) / len(all_attempts)
-            if all_attempts
-            else 0.0
-        )
 
         _write_json(
             self.run_dir / "summary.json",
             {
-                "episodes": len(all_attempts),
-                "passed": passed,
-                "failed": failed,
-                "pass_rate": (passed / len(all_attempts)) if all_attempts else 0.0,
-                "avg_latency_ms": avg_latency,
-                "k_attempts": self.config.k,
-                "total_attempts": len(all_attempts),
-                "per_task": per_task,
+                "run_name": self.config.run_name,
+                "timestamp_utc": getattr(self, "_run_timestamp", ""),
+                "k": self.config.k,
+                "model_name": display_model_name,
+                "attempts": attempts,
+                "qualitative_scores": _average_qualitative_scores(results),
+                "passed": sum(1 for ep in results if _episode_passed(ep)),
             },
         )
-
-        return all_attempts

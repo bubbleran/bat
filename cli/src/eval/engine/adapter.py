@@ -287,13 +287,13 @@ class BatA2AAdapter:
         trace.timings["wall_ms"] = (time.perf_counter() - t0_perf) * 1000.0
         trace.usage = usage_total
 
-        status = last_status or "error"
-        output_text = last_content or ""
+        final_status = last_status or "error"
+        final_output = last_content or ""
 
         return EpisodeResult(
             task_id=task.id,
-            status=status,
-            output_text=output_text,
+            final_status=final_status,
+            final_output=final_output,
             trace=trace,
             aux={"agent_url": self.agent_url},
         )

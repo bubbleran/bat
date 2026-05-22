@@ -214,8 +214,15 @@ def _plot_comparison(metrics: Dict[str, dict]) -> List[Tuple[str, plt.Figure]]:
     return figures
 
 
-def _plot_per_episode_comparison(metrics: Dict[str, dict]) -> List[Tuple[str, plt.Figure]]:
-    """Build per-task charts comparing all runs. Returns (name, figure) pairs."""
+def _plot_per_episode_comparison(
+    metrics: Dict[str, dict],
+    task_filter: str | None = None,
+) -> List[Tuple[str, plt.Figure]]:
+    """Build per-task charts comparing all runs. Returns (name, figure) pairs.
+
+    If ``task_filter`` is provided, only tasks whose id contains the substring
+    are plotted.
+    """
     if not metrics:
         return []
 
@@ -229,6 +236,11 @@ def _plot_per_episode_comparison(metrics: Dict[str, dict]) -> List[Tuple[str, pl
 
     if not all_task_ids:
         return []
+
+    if task_filter:
+        all_task_ids = {tid for tid in all_task_ids if task_filter in tid}
+        if not all_task_ids:
+            return []
 
     sorted_tasks = sorted(all_task_ids)
     model_names = list(metrics.keys())
@@ -319,8 +331,17 @@ def _save_figures(figures: List[Tuple[str, plt.Figure]], output_dir: Path) -> Li
     return saved
 
 
-def generate_and_save_plots(metrics: Dict[str, dict], output_dir: Path) -> List[Path]:
-    """Generate all comparison and per-task charts and save them to output_dir."""
+def generate_and_save_plots(
+    metrics: Dict[str, dict],
+    output_dir: Path,
+    task_filter: str | None = None,
+) -> List[Path]:
+    """Generate all comparison and per-task charts and save them to output_dir.
+
+    ``task_filter`` is a substring match against ``task_id`` and restricts
+    the per-task charts only. Summary/comparison charts always reflect the
+    full run.
+    """
     figures = _plot_comparison(metrics)
-    figures += _plot_per_episode_comparison(metrics)
+    figures += _plot_per_episode_comparison(metrics, task_filter=task_filter)
     return _save_figures(figures, output_dir)

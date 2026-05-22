@@ -56,8 +56,8 @@ async def _evaluate_qualitative(results: list[EpisodeResult], tasks_by_id: dict[
             episode.qualitative_scores = await asyncio.to_thread(
                 evaluate_episode_quality,
                 query,
-                episode.output_text,
-                episode.status,
+                episode.final_output,
+                episode.final_status,
                 context,
                 expected_desc,
                 tool_calls,
@@ -103,6 +103,8 @@ async def run_evaluation(
         logger.info("Running qualitative evaluation...")
         await _evaluate_qualitative(results, tasks_by_id)
         bench_runner.persist_results(results)
+
+    bench_runner.write_summary(results)
 
     if not enable_scoring:
         if bench_runner.run_dir:

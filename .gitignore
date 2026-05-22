@@ -7,3 +7,13 @@ uv.lock
 CLAUDE.md
 __pycache__/
 
+# snapcraft build artifacts
+parts/
+stage/
+prime/
+overlay/
+.craft/
+*.snap
+snap/
+.snapcraftignore
+

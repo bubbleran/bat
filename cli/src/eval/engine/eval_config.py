@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from .contracts import EvalConfig, JudgeSpec, ModelSpec
+
+_ENV_VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _to_bool(value: Any, *, default: bool) -> bool:
@@ -59,6 +62,42 @@ def _split_provider_model(value: str, *, field_name: str) -> tuple[str, str]:
             f"{field_name} must use '<provider>:<model>' format when provider is omitted"
         )
     return provider, model
+
+
+_JUDGE_PROMPT_KEYS = ("relevance", "task_completion", "hallucination", "tool_call")
+_JUDGE_PROMPT_MAX_LEN = 1000
+
+
+def _parse_judge_prompts(raw: Any) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("judge.prompts must be a mapping")
+
+    unknown = set(raw) - set(_JUDGE_PROMPT_KEYS)
+    if unknown:
+        raise ValueError(
+            f"judge.prompts has unknown key(s) {sorted(unknown)}; "
+            f"allowed: {list(_JUDGE_PROMPT_KEYS)}"
+        )
+
+    out: dict[str, str] = {}
+    for key in _JUDGE_PROMPT_KEYS:
+        value = raw.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"judge.prompts.{key} must be a string")
+        text = value.strip()
+        if not text:
+            continue
+        if len(text) > _JUDGE_PROMPT_MAX_LEN:
+            raise ValueError(
+                f"judge.prompts.{key} exceeds the {_JUDGE_PROMPT_MAX_LEN}-character limit "
+                f"(got {len(text)})"
+            )
+        out[key] = text
+    return out
 
 
 def _parse_env_map(raw: Any, *, section_name: str) -> dict[str, str]:
@@ -119,11 +158,15 @@ def _parse_judge_spec(item: Any) -> JudgeSpec | None:
     provider = _to_optional_str(item.get("provider"))
     model = _to_optional_str(item.get("model"))
     base_url = _to_optional_str(item.get("base_url"))
-    api_key = _to_optional_str(item.get("api_key"))
+    api_key_env = _to_optional_str(item.get("api_key_env"))
     env = _parse_env_map(item.get("env"), section_name="judge")
+    prompts = _parse_judge_prompts(item.get("prompts"))
 
-    if not any([provider, model, base_url, api_key, env]):
+    if not any([provider, model, base_url, api_key_env, env, prompts]):
         return None
+
+    if api_key_env and not _ENV_VAR_NAME.fullmatch(api_key_env):
+        raise ValueError(f"judge.api_key_env is not a valid environment variable name: {api_key_env}")
 
     if model and not provider and ":" in model:
         provider, model = _split_provider_model(model, field_name="judge.model")
@@ -137,8 +180,9 @@ def _parse_judge_spec(item: Any) -> JudgeSpec | None:
         provider=provider,
         model=model,
         base_url=base_url,
-        api_key=api_key,
+        api_key_env=api_key_env,
         env=env,
+        prompts=prompts,
     )
 
 
@@ -219,6 +263,7 @@ def default_eval_yaml() -> str:
         "  provider: ollama\n"
         "  model: local-judge-model\n"
         "  base_url: http://localhost:11434\n"
+        "  # api_key_env: BAT_JUDGE_API_KEY   # name of the env var holding the judge's API key\n"
         "\n"
         "models:\n"
         "  - provider: openai\n"

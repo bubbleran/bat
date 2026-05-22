@@ -18,41 +18,53 @@ logger = create_logger(__name__, level="info")
 # Judge ChatModelClient (bat-adk based)
 # ---------------------------------------------------------------------------
 
-_JUDGE_SYSTEM = "You are a precise evaluator. Always respond with valid JSON only."
+_JUDGE_SYSTEM_BASE = "You are a precise evaluator. Always respond with valid JSON only."
 
-_judge_client: ChatModelClient | None = None
+_judge_clients: dict[str, ChatModelClient] = {}
 
 
-def _get_judge_client() -> ChatModelClient:
+def _compose_system(custom: str | None) -> str:
+    if not custom:
+        return _JUDGE_SYSTEM_BASE
+    return (
+        f"{_JUDGE_SYSTEM_BASE}\n\n"
+        "AGENT-SPECIFIC CONTEXT (operator-supplied; use to disambiguate, "
+        f"do not override the scoring rubric):\n{custom}"
+    )
+
+
+def _get_judge_client(judge_name: str = "default") -> ChatModelClient:
     """
     Lazy-init a ChatModelClient configured for the judge model.
-    
+
     Reads JUDGE_PROVIDER / JUDGE_MODEL env vars (falls back to MODEL_PROVIDER / MODEL).
+    For named judges, also reads JUDGE_PROMPT_<NAME> as an optional system-message suffix.
     """
-    global _judge_client
-    if _judge_client is not None:
-        return _judge_client
+    if judge_name in _judge_clients:
+        return _judge_clients[judge_name]
 
     provider = os.getenv("JUDGE_PROVIDER", os.getenv("MODEL_PROVIDER", "openai"))
     model = os.getenv("JUDGE_MODEL", "gpt-4.1-mini")
     base_url = os.getenv("JUDGE_BASE_URL", os.getenv("BASE_URL"))
+    custom = os.getenv(f"JUDGE_PROMPT_{judge_name.upper()}") if judge_name != "default" else None
 
     config = ChatModelClientConfig(
         model=model,
         model_provider=provider,
         base_url=base_url,
-        client_name="LLMJudge",
+        client_name=f"LLMJudge[{judge_name}]",
     )
 
-    _judge_client = ChatModelClient(
+    client = ChatModelClient(
         chat_model_config=config,
-        system_instructions=_JUDGE_SYSTEM,
+        system_instructions=_compose_system(custom),
     )
-    logger.info(f"LLM Judge initialized: {provider}:{model}")
-    return _judge_client
+    _judge_clients[judge_name] = client
+    logger.info(f"LLM Judge initialized: {provider}:{model} [{judge_name}]")
+    return client
 
-def _call_llm_judge(prompt: str, max_retries: int = 2) -> dict[str, Any]:
-    client = _get_judge_client()
+def _call_llm_judge(prompt: str, judge_name: str = "default", max_retries: int = 2) -> dict[str, Any]:
+    client = _get_judge_client(judge_name)
     for attempt in range(max_retries):
         try:
             logger.info (f"Calling LLM judge (attempt {attempt + 1}/{max_retries}) ")
@@ -146,16 +158,14 @@ When the expected outcome was not reached, the score must be at most 0.4 regardl
 
 After establishing the base score, look at the intermediate steps in the conversation. Even when the agent reached the right terminal status, check whether it made significant errors, unnecessary detours, or wrong turns along the way. If the path had clear missteps (e.g. tried an invalid value multiple times, looped on the same error, went in circles), adjust down by up to 0.2. If the execution was clean, direct, and correct, nudge up by 0.1. For cases where the expected outcome was not reached, intermediate steps can still lift the score from 0.2 to 0.4 if the agent made genuine meaningful progress before diverging.
 
-Do not cluster at 0.7–0.85. State expected vs actual explicitly.
-
 Return JSON:
 {{
-    "reasoning": "Expected: <...> | Actual: <...> | Match: yes/no | Steps: <any notable errors or clean execution> | Final: <base band> ±<adjustment>",
+    "reasoning": "1-2 sentences summarizing how the actual outcome compared to expected, and noting any significant execution flaws or merits that influenced the score. State the adjustment from the base score based on the execution quality.",
     "score": float
 }}
 """
 
-HALLUCINATION_DETECTION_PROMPT = """You are a hallucination detector. Hallucination means the agent asserted specific facts, values, or entities that the user never provided — or distorted something the user did specify.
+HALLUCINATION_DETECTION_PROMPT = """You are an evaluator of GROUNDEDNESS. Your job is to score how closely the agent's response stays anchored to what the user actually said. Hallucination happens when the agent introduces specifics the user never provided, or silently alters something the user did provide.
 
 **User Queries:**
 {query}
@@ -174,34 +184,32 @@ HALLUCINATION_DETECTION_PROMPT = """You are a hallucination detector. Hallucinat
 
 The conversation uses three event labels:
 - [USER] — explicit user input. This is the only ground truth for what the user stated.
-- [AGENT OUTPUT] — content the agent generated and sent to the user. Values here are agent proposals, NOT trusted external data. Any specific value in an [AGENT OUTPUT] that does not trace back to a [USER] line is a hallucination candidate.
-- [SYSTEM] — internal runtime status messages. Values returned here (e.g. validation errors, schema constraints) are legitimate system feedback and may be used by the agent without being hallucination.
+- [AGENT OUTPUT] — content the agent generated and sent to the user. Specific values here are agent assertions, not ground truth — any concrete value here that does not trace back to a [USER] line is a candidate for hallucination.
+- [SYSTEM] — internal runtime status messages. Values returned here are legitimate non-user input and may be used by the agent without being hallucination.
 
-IMPORTANT — backend feedback that isn't in the trace: when the agent reports a deployment failure, validation rejection, or schema/type error, it is paraphrasing a response from a backend system (webhook, API, validator) that this trace does NOT separately show as a [SYSTEM] event. Technical strings that look like backend error vocabulary — type names (e.g. `security.AuthenticationKey`), schema field names, validator messages, regex patterns, HTTP error codes, library/class identifiers — should be treated as legitimate backend-returned facts, not as agent hallucination, EVEN IF you don't see the literal [SYSTEM] line for them. Only flag values as UNINVITED when they are clearly user-domain content (deployment names, network parameters, business values, configuration the user controls) that the user never stated.
+Walk through every specific claim the agent makes (concrete value, name, number, identifier, field) and compare it against the user's stated facts. Classify each significant claim:
 
-Use the "All facts the user explicitly stated" section as your ground-truth checklist. For each specific claim in the final response (concrete value, name, number, identifier, field), ask: is it in the user facts list, or was it returned by a [SYSTEM] message, or is it plausibly a backend error/type string the agent is relaying? If none of those, it is UNINVITED.
+- GROUNDED — the user stated or requested this, and the agent reproduced it faithfully.
+- FABRICATED — the agent introduced a specific user-domain fact or value the user never mentioned.
+- ALTERED — the agent changed something the user did specify (user said X, agent produced Y, where X ≠ Y as written).
 
-**Policy: echoed user values.** If the user explicitly stated a value in a [USER] line — whether the value is valid or invalid for the underlying schema — and the agent reproduces that same value back in its response, YAML, or reasoning, this is NEVER hallucination. The user said it; the agent is faithfully echoing it. DISTORTED applies only when the agent silently changes a user-stated value to a different one (user said X, agent produced Y, where X ≠ Y as written). When in doubt about whether a value was user-stated, consult the "All facts the user explicitly stated" checklist above.
+**Policy: echoed user values.** If the user explicitly stated a value in a [USER] line — valid or invalid for any underlying schema — and the agent reproduces it faithfully, it is GROUNDED, never hallucination. ALTERED applies only when the agent silently substitutes a different value for one the user provided.
 
-Label each significant claim as one of:
-- CORRECT — the user stated or requested this, and the agent reproduced it faithfully.
-- UNINVITED — the agent asserted a user-domain fact or value the user never mentioned and no plausible system/backend source provided. This is hallucination.
-- DISTORTED — the agent changed something the user did specify (user said X, agent produced Y). This is also hallucination.
+**Policy: legitimate non-user sources.** Not every specific value an agent emits is a fabrication. Information the agent obtained from a legitimate source other than the user — tool outputs, [SYSTEM] messages, backend responses the agent is relaying, or widely-known public facts — is not hallucination. Flag a claim as FABRICATED only when it is user-domain content (something the user would have had to provide) and the user never provided it.
 
-  1.0  — Every specific claim traces back to a user statement or system-returned fact.
-  0.8  — One minor uninvited detail that is harmless and doesn't affect the outcome.
-  0.6  — One or two uninvited or distorted non-trivial claims the user would notice.
-  0.4  — Several uninvited or distorted claims, or one that directly caused a concrete failure or wrong outcome.
-  0.2  — The agent substantially filled in specifics the user never provided; most claims are uninvited.
-  0.0  — Almost nothing corresponds to what the user stated; the response is largely the agent's invention.
+Score bands:
+  1.0  — Every specific claim is GROUNDED or comes from a legitimate non-user source.
+  0.8  — One minor FABRICATED detail, harmless, no effect on outcome.
+  0.6  — One or two non-trivial FABRICATED or ALTERED claims the user would notice.
+  0.4  — Several FABRICATED or ALTERED claims, or a single one that caused a concrete failure or wrong outcome.
+  0.2  — The agent substantially filled in specifics the user never provided; most claims are FABRICATED.
+  0.0  — Almost nothing in the response corresponds to what the user said; the answer is largely the agent's invention.
 
 If the response makes no specific claims (only clarifying questions or acknowledged uncertainty), score 1.0. A hallucination that directly caused a task failure weighs more than a harmless one.
 
-Only describe UNINVITED or DISTORTED claims in your reasoning — cite what the agent said and confirm the user never stated it. If all claims are accounted for, write "No uninvited values found."
-
 Return JSON:
 {{
-    "reasoning": "Only note uninvited or distorted claims with their impact. If none: 'No uninvited values found.'",
+    "reasoning": "List the FABRICATED or ALTERED claims with their impact. If everything is grounded, write 'Fully grounded.'",
     "score": float
 }}
 """
@@ -258,7 +266,7 @@ def evaluate_response_relevance(
         response=response,
         context=context or "No conversation history available",
     )
-    return _call_llm_judge(prompt)
+    return _call_llm_judge(prompt, judge_name="relevance")
 
 
 def evaluate_task_completion(
@@ -276,7 +284,7 @@ def evaluate_task_completion(
         expected_desc=expected_desc,
         context=context or "No conversation history available"
     )
-    return _call_llm_judge(prompt)
+    return _call_llm_judge(prompt, judge_name="task_completion")
 
 
 def evaluate_hallucination(
@@ -293,7 +301,7 @@ def evaluate_hallucination(
         expected_desc=expected_desc,
         user_facts=user_facts,
     )
-    return _call_llm_judge(prompt)
+    return _call_llm_judge(prompt, judge_name="hallucination")
 
 
 def evaluate_tool_call_appropriateness(
@@ -310,7 +318,7 @@ def evaluate_tool_call_appropriateness(
         tool_calls=tool_calls or "[]",
         expected_desc=expected_desc,
     )
-    return _call_llm_judge(prompt)
+    return _call_llm_judge(prompt, judge_name="tool_call")
 
 
 def evaluate_episode_quality(

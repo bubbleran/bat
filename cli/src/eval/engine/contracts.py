@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 AgentTaskStatus = Literal["working", "input-required", "completed", "error"]
@@ -65,37 +65,25 @@ class QualitativeScores(BaseModel):
     judge_reasoning: dict[str, str] = Field(default_factory=dict)
 
 
-class CheckResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    passed: bool
-    reason: str
-
-
 class EpisodeVerdict(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     passed: bool
-    checks: dict[str, CheckResult] = Field(default_factory=dict)
+    reason: str = ""
 
 
 class EpisodeResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    task_id: str
-    status: AgentTaskStatus
-    output_text: str
-    expected_outcome: str | None = None
-    verdict: EpisodeVerdict | None = None
-    trace: EpisodeTrace = Field(default_factory=EpisodeTrace)
-    aux: dict[str, Any] = Field(default_factory=dict)
     model_name: str | None = None
+    task_id: str
+    expected_outcome: str | None = None
+    final_status: AgentTaskStatus
+    final_output: str
+    verdict: EpisodeVerdict | None = None
     qualitative_scores: QualitativeScores | None = None
-
-    @computed_field
-    @property
-    def success(self) -> bool:
-        return self.verdict.passed if self.verdict is not None else False
+    aux: dict[str, Any] = Field(default_factory=dict)
+    trace: EpisodeTrace = Field(default_factory=EpisodeTrace)
 
 
 class ModelSpec(BaseModel):
@@ -109,8 +97,9 @@ class JudgeSpec(BaseModel):
     provider: str
     model: str
     base_url: str | None = None
-    api_key: str | None = None
+    api_key_env: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    prompts: dict[str, str] = Field(default_factory=dict)
 
 
 class EvalConfig(BaseModel):
