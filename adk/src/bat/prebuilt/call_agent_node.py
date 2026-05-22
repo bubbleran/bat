@@ -605,19 +605,24 @@ class CallAgentNode(PrebuiltWorkflow):
         )
         stream = client.send_message(SendMessageRequest(message=message))
         try:
-            async for item in stream:
+            async for chunk in stream:
                 # Track usage metadata
                 t=time.time()
-                if isinstance(item, Message):
-                    metadata = item.metadata
+                if chunk.HasField('message'):
+                    metadata = chunk.message.metadata
+                elif chunk.HasField('status_update'):
+                    metadata = chunk.status_update.metadata
+                elif chunk.HasField('artifact_update'):
+                    metadata = chunk.artifact_update.metadata
+                elif chunk.HasField('task'):
+                    metadata = chunk.task.metadata
                 else:
-                    event = item[1]
-                    metadata = event.metadata if event else None
+                    metadata = None
 
                 if metadata and USAGE_METADATA_KEY in metadata:
                     usage = metadata[USAGE_METADATA_KEY]
                     self._usage_metadatas.append((t, UsageMetadata.model_validate(usage)))
-                yield item
+                yield chunk
 
         except Exception as e:
             logger.error(f"consume_agent_stream: Streaming failed: {e}")
