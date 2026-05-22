@@ -257,6 +257,7 @@ class AgentGraph(ABC):
                 )
         return total
 
+    @staticmethod
     def build_message(
         config: RunnableConfig,
         text: str

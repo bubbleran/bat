@@ -3,7 +3,7 @@ import bisect
 import time
 import warnings
 from ..agent.config import AgentConfig
-from ..agent.state import AgentState, AgentTaskResult
+from ..agent.state import AgentState, AgentTaskResult, AgentTaskStatus
 from ..chat_model_client import UsageMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
@@ -11,12 +11,14 @@ from a2a.client import ClientConfig, create_client
 from a2a.helpers import get_stream_response_text
 from a2a.types import (
     AgentCard,
+    AgentInterface,
     Message,
     SendMessageRequest,
     StreamResponse,
     TaskState,
 )
 from functools import reduce
+from google.protobuf.json_format import MessageToDict
 from httpx import AsyncClient
 from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
@@ -226,13 +228,11 @@ class CallAgentNode(PrebuiltWorkflow):
             input_key = "input"
         if output_key is None:
             output_key = "output"
-        if status_key is None:
-            status_key = "status"
         if agent_response_status is None:
             agent_response_status = "agent_response_status"
         if agent_response_content is None:
             agent_response_content = "agent_response_content"
-        
+
         keys = [
             input_key,
             output_key,
@@ -242,6 +242,8 @@ class CallAgentNode(PrebuiltWorkflow):
             agent_response_status,
         ]
         for key in keys:
+            if key is None:
+                continue
             if key not in StateType.model_fields:
                 warnings.warn(
                     f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'",
@@ -295,7 +297,7 @@ class CallAgentNode(PrebuiltWorkflow):
         *,
         input: str = "question",
         output: str = "answer",
-        global_status: str = "status",
+        global_status: Optional[str] = None,
         agent_input_required: str = "agent_input",
         agent_response_status: str = "agent_response_status",
         agent_response_content: str = "agent_response_content",
@@ -409,7 +411,14 @@ class CallAgentNode(PrebuiltWorkflow):
         if self._agent_card is None or self._agent_card.name != self._agent_name:
             cards = await self.agent_config.list_agent_cards([self._agent_name])
             self._agent_card = cards[self._agent_name]
-            self._agent_card.url = url
+            if self._agent_card.supported_interfaces:
+                self._agent_card.supported_interfaces[0].url = url
+            else:
+                self._agent_card.supported_interfaces.append(AgentInterface(
+                    url=url,
+                    protocol_binding="JSONRPC",
+                    protocol_version="2.0",
+                ))
             logger.debug(f"Node `{self.loop_name}.call_agent`: Set agent card URL to {url} for agent {self._agent_card.name}")
 
         # Reset dynamic fields
@@ -426,7 +435,8 @@ class CallAgentNode(PrebuiltWorkflow):
         request = self._build_message(config, text)
 
         # Update global state
-        setattr(state, self.global_status, "working")
+        if self.global_status:
+            setattr(state, self.global_status, AgentTaskStatus.AGENT_TASK_STATUS_WORKING)
         setattr(state, self.output, f"Forwarding request to {self.loop_name}…")
 
         # Start streaming worker
@@ -478,7 +488,8 @@ class CallAgentNode(PrebuiltWorkflow):
         setattr(state, self.agent_response_content, atr.content)
 
         # Update global fields
-        setattr(state, self.global_status, atr.task_status)
+        if self.global_status:
+            setattr(state, self.global_status, atr.task_status)
         if atr.content:
             setattr(state, self.output, atr.content)
 
@@ -620,12 +631,12 @@ class CallAgentNode(PrebuiltWorkflow):
                     metadata = None
 
                 if metadata and USAGE_METADATA_KEY in metadata:
-                    usage = metadata[USAGE_METADATA_KEY]
+                    usage = MessageToDict(metadata)[USAGE_METADATA_KEY]
                     self._usage_metadatas.append((t, UsageMetadata.model_validate(usage)))
                 yield chunk
 
         except Exception as e:
-            logger.error(f"consume_agent_stream: Streaming failed: {e}")
+            logger.exception(f"consume_agent_stream: Streaming failed: {type(e).__name__}: {e!r}")
             raise
     
     def get_usage_metadata(
