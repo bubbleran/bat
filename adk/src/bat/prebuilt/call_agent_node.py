@@ -1,10 +1,9 @@
 import asyncio
-import bisect
 import time
 import warnings
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState, AgentTaskResult, AgentTaskStatus
-from ..chat_model_client import UsageMetadata
+from ..chat_model_client.metadata import MetadataCollector, UsageMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
 from a2a.client import ClientConfig, create_client
@@ -17,17 +16,15 @@ from a2a.types import (
     StreamResponse,
     TaskState,
 )
-from functools import reduce
 from google.protobuf.json_format import MessageToDict
 from httpx import AsyncClient
 from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
-from typing import Any, AsyncIterable, Callable, Dict, List, Literal, Optional, Type
+from typing import Any, AsyncIterable, Callable, Dict, Literal, Optional, Type
 from typing_extensions import override
 
 
 logger = create_logger(__name__, level="debug")
-USAGE_METADATA_KEY = "usage"
 
 class CallAgentNode(PrebuiltWorkflow):
     """CallAgentNode implements agent-to-agent communication using the A2A protocol.
@@ -340,7 +337,7 @@ class CallAgentNode(PrebuiltWorkflow):
         self.stream_done: bool = False
         self._queue: Optional[asyncio.Queue[Optional[AgentTaskResult]]] = None
         self._stream_task: Optional[asyncio.Task[None]] = None
-        self._usage_metadatas: List[tuple[float,UsageMetadata]] = []
+        self._metadata_collector = MetadataCollector()
 
         self.graph_builder.add_node("call_agent", self._call_agent)
         self.graph_builder.add_node("consume_stream", self._consume_stream)
@@ -617,8 +614,7 @@ class CallAgentNode(PrebuiltWorkflow):
         stream = client.send_message(SendMessageRequest(message=message))
         try:
             async for chunk in stream:
-                # Track usage metadata
-                t=time.time()
+                t = time.time()
                 if chunk.HasField('message'):
                     metadata = chunk.message.metadata
                 elif chunk.HasField('status_update'):
@@ -630,15 +626,17 @@ class CallAgentNode(PrebuiltWorkflow):
                 else:
                     metadata = None
 
-                if metadata and USAGE_METADATA_KEY in metadata:
-                    usage = MessageToDict(metadata)[USAGE_METADATA_KEY]
-                    self._usage_metadatas.append((t, UsageMetadata.model_validate(usage)))
+                if metadata:
+                    self._metadata_collector.observe_metadata(
+                        MessageToDict(metadata),
+                        timestamp=t,
+                    )
                 yield chunk
 
         except Exception as e:
             logger.exception(f"consume_agent_stream: Streaming failed: {type(e).__name__}: {e!r}")
             raise
-    
+
     def get_usage_metadata(
         self,
         from_timestamp: Optional[float] = None,
@@ -649,19 +647,24 @@ class CallAgentNode(PrebuiltWorkflow):
         Args:
             from_timestamp (Optional[float]): If provided, only usage metadata after this timestamp will be considered.
                 If None, all usage metadata will be considered.
-        
+
         Returns:
             UsageMetadata: The aggregated usage metadata from all stream events.
         """
-        # lower bound binary search to find the first usage metadata after the timestamp
-        i = bisect.bisect_left(
-            self._usage_metadatas,
-            0 if from_timestamp is None else from_timestamp,
-            key=lambda x: x[0]
-        )
-        # call reduce to aggregate usage metadata
-        return reduce(
-            lambda acc, metadata: acc + metadata[1],
-            self._usage_metadatas[i:],
-            UsageMetadata(),
-        )
+        return self._metadata_collector.get_usage_metadata(from_timestamp=from_timestamp)
+
+    def get_trace_metadata(
+        self,
+        from_timestamp: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Get aggregated trace metadata (tool calls) forwarded from the called agent.
+
+        Args:
+            from_timestamp (Optional[float]): If provided, only entries after this
+                timestamp are returned.
+
+        Returns:
+            Dict[str, Any]: Trace metadata in the shape {"tool_calls": [...]}.
+                Returns an empty dict when no tool-call trace was forwarded.
+        """
+        return self._metadata_collector.get_trace_metadata(from_timestamp=from_timestamp)

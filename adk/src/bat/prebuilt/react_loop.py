@@ -2,13 +2,14 @@ import warnings
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState
 from ..chat_model_client import ChatModelClient
+from ..chat_model_client.metadata import MetadataCollector
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
 from langgraph.graph import START, END
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
-from typing import List, Literal, Optional, Type
+from typing import Any, Dict, List, Literal, Optional, Type
 from typing_extensions import override, AsyncIterable
 from pydantic import ValidationError
 
@@ -149,6 +150,8 @@ class ReActLoop(PrebuiltWorkflow):
         self.status_key = status_key
         self._internal_messages_key = messages_key or f"{loop_name}.messages"
         self._internal_final_response_key = f"{loop_name}.final_response"
+        self._internal_trace_key = f"{loop_name}.trace.tool_calls"
+        self._metadata_collector = MetadataCollector()
 
         def _tools_or_cleanup(state) -> Literal["tools", "cleanup"]:
             if state.bat_buffer:
@@ -228,6 +231,7 @@ class ReActLoop(PrebuiltWorkflow):
             state.bat_extra[self._internal_messages_key] = getattr(state, self.messages_key)
         else:
             state.bat_extra[self._internal_messages_key] = []
+        state.bat_extra[self._internal_trace_key] = []
         state.bat_buffer = []
         if self.status_key:
             state = state.model_copy(update={
@@ -267,6 +271,9 @@ class ReActLoop(PrebuiltWorkflow):
         except Exception as e:
             raise RuntimeError(f"Error invoking chat model client: {e}") from e
         if response.tool_calls:
+            tool_calls = list(response.tool_calls)
+            state.bat_extra[self._internal_trace_key].extend(tool_calls)
+            self._metadata_collector.add_tool_calls(tool_calls)
             tool_names = [tool_call.get('name', '') for tool_call in response.tool_calls]
             state.bat_buffer = [response]
             if self.status_key:
@@ -294,6 +301,24 @@ class ReActLoop(PrebuiltWorkflow):
         })
         if self._internal_messages_key in state.bat_extra:
             del state.bat_extra[self._internal_messages_key]
+        if self._internal_trace_key in state.bat_extra:
+            del state.bat_extra[self._internal_trace_key]
         del state.bat_extra[self._internal_final_response_key]
         logger.debug(f"Node `{self.loop_name}.cleanup`: completed")
         return state
+
+    def get_trace_metadata(
+        self,
+        from_timestamp: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Get aggregated trace metadata (tool calls) collected during this loop.
+
+        Args:
+            from_timestamp (Optional[float]): If provided, only tool calls after this
+                timestamp are returned.
+
+        Returns:
+            Dict[str, Any]: Trace metadata in the shape {"tool_calls": [...]}.
+                Returns an empty dict when no tool calls have been recorded.
+        """
+        return self._metadata_collector.get_trace_metadata(from_timestamp=from_timestamp)

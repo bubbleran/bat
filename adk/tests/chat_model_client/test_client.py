@@ -162,7 +162,7 @@ def test_invoke_and_usage_metadata(client):
     history = []
     response = client.invoke(human_msg, history)
     assert isinstance(response, AIMessage)
-    assert len(client.usage_metadatas) == 1
+    assert len(client._metadata_collector._usage_metadatas) == 1
     assert history[-1] == response
     # Check aggregated usage metadata
     agg_meta = client.get_usage_metadata()
@@ -175,7 +175,7 @@ def test_invoke_and_usage_metadata_with_string_input(client):
     history = []
     response = client.invoke(str_input, history)
     assert isinstance(response, AIMessage)
-    assert len(client.usage_metadatas) == 1
+    assert len(client._metadata_collector._usage_metadatas) == 1
     assert history[-1] == response
     # Check aggregated usage metadata
     agg_meta = client.get_usage_metadata()
@@ -187,10 +187,11 @@ def test_batch_invocation(client):
     msgs = [HumanMessage("hi1"), HumanMessage("hi2")]
     responses = client.batch(msgs)
     assert all(isinstance(r, AIMessage) for r in responses)
-    assert len(client.usage_metadatas) == 1
-    assert client.usage_metadatas[0][1].input_tokens == 2
-    assert client.usage_metadatas[0][1].output_tokens == 4
-    assert client.usage_metadatas[0][1].total_tokens == 6
+    recorded = client._metadata_collector._usage_metadatas
+    assert len(recorded) == 1
+    assert recorded[0][1].input_tokens == 2
+    assert recorded[0][1].output_tokens == 4
+    assert recorded[0][1].total_tokens == 6
 
 def test_get_usage_metadata_from_timestamp(client):
     human_msg = HumanMessage("hi")
