@@ -567,36 +567,6 @@ class CallAgentNode(PrebuiltWorkflow):
 
         self._stream_task = asyncio.create_task(_worker())
 
-
-    def _map_stream_item(self, chunk: StreamResponse) -> tuple[TaskState, str]:
-        """Map a stream item to (status, content) tuple.
-        Handles different types of stream items:
-        1. Message: Direct message response → (completed, message_text)
-        2. TaskArtifactUpdateEvent: Artifact update → (completed, artifact_text)
-        3. TaskStatusUpdateEvent: Status update → (state, status_message)
-        4. Other events: Default → (working, empty_string)
-        
-        The extracted status and content are used to update the workflow state
-        and provide feedback to the user.
-        
-        Args:
-            item (StreamResponse): Stream item from the agent, either a task
-                update event or a direct message.
-            
-        Returns:
-            tuple[TaskState, str]: A tuple containing the task state and the extracted
-                text content.
-        """
-        text = get_stream_response_text(chunk)
-        state = TaskState.TASK_STATE_WORKING
-
-        if chunk.HasField('message') or chunk.HasField('artifact_update'):
-            state = TaskState.TASK_STATE_COMPLETED
-        elif chunk.HasField('status_update'):
-            state = chunk.status_update.status.state
-
-        return state, text
-
     async def consume_agent_stream(
         self,
         agent_card: AgentCard,
