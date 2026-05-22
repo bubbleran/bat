@@ -148,6 +148,7 @@ class ReActLoop(PrebuiltWorkflow):
         self.messages_key = messages_key
         self.status_key = status_key
         self._internal_messages_key = messages_key or f"{loop_name}.messages"
+        self._internal_final_response_key = f"{loop_name}.final_response"
 
         def _tools_or_cleanup(state) -> Literal["tools", "cleanup"]:
             if state.bat_buffer:
@@ -273,7 +274,8 @@ class ReActLoop(PrebuiltWorkflow):
                     self.status_key: f"Running tools: {', '.join(tool_names)}",
                 })
         else:
-            state = state.model_copy(update={self.output_key: response.content})  
+            # state = state.model_copy(update={self.output_key: response.content})
+            state.bat_extra[self._internal_final_response_key] = response.content
         logger.debug(f"Node `{self.loop_name}.llm`: completed")
         yield state
     
@@ -287,9 +289,11 @@ class ReActLoop(PrebuiltWorkflow):
         """
         logger.debug(f"Node `{self.loop_name}.cleanup`: invoked")
         state = state.model_copy(update={
-            self.messages_key: state.bat_extra[self._internal_messages_key]
+            self.messages_key: state.bat_extra[self._internal_messages_key],
+            self.output_key: state.bat_extra[self._internal_final_response_key],
         })
         if self._internal_messages_key in state.bat_extra:
             del state.bat_extra[self._internal_messages_key]
+        del state.bat_extra[self._internal_final_response_key]
         logger.debug(f"Node `{self.loop_name}.cleanup`: completed")
         return state

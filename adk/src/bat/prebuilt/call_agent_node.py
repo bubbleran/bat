@@ -3,25 +3,24 @@ import bisect
 import time
 import warnings
 from ..agent.config import AgentConfig
-from ..agent.state import AgentState
+from ..agent.state import AgentState, AgentTaskResult
 from ..chat_model_client import UsageMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
-from a2a.client import ClientConfig, ClientEvent, ClientFactory
+from a2a.client import ClientConfig, create_client
+from a2a.helpers import get_stream_response_text
 from a2a.types import (
     AgentCard,
     Message,
-    TaskArtifactUpdateEvent,
-    TaskStatusUpdateEvent,
+    SendMessageRequest,
+    StreamResponse,
     TaskState,
-    Part,
 )
-from a2a.utils.parts import get_text_parts, get_data_parts, get_file_parts
 from functools import reduce
 from httpx import AsyncClient
 from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
-from typing import Any, AsyncIterable, Callable, Dict, List, Literal, Optional, Sequence, Type
+from typing import Any, AsyncIterable, Callable, Dict, List, Literal, Optional, Type
 from typing_extensions import override
 
 
@@ -265,8 +264,8 @@ class CallAgentNode(PrebuiltWorkflow):
             agent_response_content=agent_response_content,
             recursion_limit=recursion_limit,
         )
-        
-        
+
+
     def _router(self, state: Type[AgentState]) -> Literal["consume_stream", "cleanup"]:
         """Route between consuming more stream data or cleaning up.
         
@@ -286,7 +285,7 @@ class CallAgentNode(PrebuiltWorkflow):
         needs_input_val = bool(getattr(state, self.agent_input_required))
 
         return "cleanup" if stream_done_val or needs_input_val else "consume_stream"
-    
+
     @override
     def _setup(
         self,
@@ -337,7 +336,7 @@ class CallAgentNode(PrebuiltWorkflow):
         self.loop_name = loop_name
         self._agent_card = None  
         self.stream_done: bool = False
-        self._queue: Optional[asyncio.Queue[Optional[tuple[str, str]]]] = None
+        self._queue: Optional[asyncio.Queue[Optional[AgentTaskResult]]] = None
         self._stream_task: Optional[asyncio.Task[None]] = None
         self._usage_metadatas: List[tuple[float,UsageMetadata]] = []
 
@@ -412,8 +411,7 @@ class CallAgentNode(PrebuiltWorkflow):
             self._agent_card = cards[self._agent_name]
             self._agent_card.url = url
             logger.debug(f"Node `{self.loop_name}.call_agent`: Set agent card URL to {url} for agent {self._agent_card.name}")
-        
-            
+
         # Reset dynamic fields
         self.stream_done = False
         setattr(state, self.agent_response_status, None)
@@ -466,30 +464,27 @@ class CallAgentNode(PrebuiltWorkflow):
             yield state
             return
 
-        item = await q.get()
+        atr = await q.get()
 
         # Sentinel: end of stream
-        if item is None:
+        if atr is None:
             self.stream_done = True
             await self._stop_stream()
             yield state
             return
 
-        status, content = item
-
         # Update agent-specific fields
-        setattr(state, self.agent_response_status, status)
-        setattr(state, self.agent_response_content, content)
+        setattr(state, self.agent_response_status, atr.task_status)
+        setattr(state, self.agent_response_content, atr.content)
 
         # Update global fields
-        setattr(state, self.global_status, status)
-        if content:
-            setattr(state, self.output, content)
+        setattr(state, self.global_status, atr.task_status)
+        if atr.content:
+            setattr(state, self.output, atr.content)
 
-        needs_input = (status == "input-required")
-        setattr(state, self.agent_input_required, needs_input)
+        setattr(state, self.agent_input_required, atr.requires_input())
 
-        if needs_input:
+        if atr.requires_input():
             # If user input is required, stop the stream
             self.stream_done = True
             await self._stop_stream()
@@ -547,20 +542,25 @@ class CallAgentNode(PrebuiltWorkflow):
         async def _worker():
             """Background worker that consumes agent stream and pushes items to queue."""
             try:
-                async for item in self.consume_agent_stream(
+                async for chunk in self.consume_agent_stream(
                     agent_card=self._agent_card,
                     message=request,
                 ):
-                    status, content = self._map_stream_item(item)
-                    status = status.value
-                    await q.put((status, content))
-                    logger.debug(f"Worker: put {(status, content)}")
-                    if status in ("completed", "error", "input-required"):
+                    atr = AgentTaskResult.from_send_message_stream(chunk)
+                    await q.put(atr)
+                    logger.debug(f"Worker: put {(atr.task_status, atr.content)}")
+                    if atr.task_status in [
+                        TaskState.TASK_STATE_COMPLETED,
+                        TaskState.TASK_STATE_INPUT_REQUIRED,
+                        TaskState.TASK_STATE_FAILED,
+                    ]:
                         break
-
             except Exception as e:
-                await q.put(("error", f"AgentLoop stream error: {e}"))
-
+                atr = AgentTaskResult(
+                    task_status=TaskState.TASK_STATE_FAILED,
+                    content=f"CallAgentNode stream error: {e}",
+                )
+                await q.put(atr)
             finally:
                 # Sentinel: end of stream
                 await q.put(None)
@@ -568,38 +568,7 @@ class CallAgentNode(PrebuiltWorkflow):
         self._stream_task = asyncio.create_task(_worker())
 
 
-
-    @staticmethod
-    def _parts_to_text(parts: Sequence[Part] | None) -> str:
-        """Convert A2A message parts to a text string.
-        
-        This utility method extracts text content from A2A message parts, which can
-        contain different types of content (text, data, files). It prioritizes:
-        1. Text parts: Joined with double newlines
-        2. Data parts: Converted to string representation
-        3. File parts: Summarized as "Length: N files"
-        
-        Args:
-            parts (Sequence[Part] | None): The message parts to convert.
-            
-        Returns:
-            str: The extracted text content, or an empty string if no parts are provided.
-        """
-        if not parts:
-            return ""
-        texts = get_text_parts(list(parts))
-        if texts:
-            return "\n\n".join(texts)
-        datas = get_data_parts(list(parts))
-        if datas:
-            return str(datas)
-        files = get_file_parts(list(parts))
-        if files:
-            return f"Length: {len(files)} files"
-        return ""
-
-
-    def _map_stream_item(self, item: ClientEvent | Message) -> tuple[TaskState, str]:
+    def _map_stream_item(self, chunk: StreamResponse) -> tuple[TaskState, str]:
         """Map a stream item to (status, content) tuple.
         Handles different types of stream items:
         1. Message: Direct message response → (completed, message_text)
@@ -611,39 +580,28 @@ class CallAgentNode(PrebuiltWorkflow):
         and provide feedback to the user.
         
         Args:
-            item (ClientEvent | Message): Stream item from the agent, either a task
+            item (StreamResponse): Stream item from the agent, either a task
                 update event or a direct message.
             
         Returns:
             tuple[TaskState, str]: A tuple containing the task state and the extracted
                 text content.
         """
-        if (isinstance(item, Message)):
-            return TaskState.completed, CallAgentNode._parts_to_text(item.parts)
-        
-        _, update = item
+        text = get_stream_response_text(chunk)
+        state = TaskState.TASK_STATE_WORKING
 
-        if isinstance(update, TaskArtifactUpdateEvent):
-            artifact = update.artifact
-            msg = CallAgentNode._parts_to_text(artifact.parts)
-            return TaskState.completed, msg
+        if chunk.HasField('message') or chunk.HasField('artifact_update'):
+            state = TaskState.TASK_STATE_COMPLETED
+        elif chunk.HasField('status_update'):
+            state = chunk.status_update.status.state
 
-        if isinstance(update, TaskStatusUpdateEvent):
-            status_obj = update.status
-            message = status_obj.message
-            msg = CallAgentNode._parts_to_text(message.parts)
-            st = getattr(status_obj, "state", None)
-
-            return st, msg if st else (TaskState.working, msg)
-
-        return TaskState.working, ""
-
+        return state, text
 
     async def consume_agent_stream(
         self,
         agent_card: AgentCard,
         message: Message,
-    ) -> AsyncIterable[ClientEvent | Message]:
+    ) -> AsyncIterable[StreamResponse]:
         """Consume the agent stream from another A2A agent.
         The following operations are performed:
         1. Creates an A2A client configured for streaming (120s timeout)
@@ -661,21 +619,21 @@ class CallAgentNode(PrebuiltWorkflow):
             message (Message): The A2A message to send to the agent.
         
         Yields:
-            ClientEvent | Message: Stream items from the agent, including status
+            StreamResponse: Stream items from the agent, including status
                 updates, artifacts, and final messages.
                 
         Raises:
             Exception: If the streaming connection fails or encounters an error.
         """
         TIMEOUT = 120.0  # seconds
-        client_factory = ClientFactory(
-            ClientConfig(
+        client = await create_client(
+            agent=agent_card,
+            client_config=ClientConfig(
                 httpx_client=AsyncClient(timeout=TIMEOUT),
                 streaming=True,
             )
         )
-        client = client_factory.create(card=agent_card)
-        stream = client.send_message(request=message)
+        stream = client.send_message(SendMessageRequest(message=message))
         try:
             async for item in stream:
                 # Track usage metadata
