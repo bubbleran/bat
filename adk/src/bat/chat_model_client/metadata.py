@@ -46,7 +46,6 @@ class UsageMetadata(BaseModel):
             total_tokens=self.total_tokens + other.total_tokens,
             inference_time=self.inference_time + other.inference_time,
         )
-    
     def __sub__(
         self,
         other: Self | Dict
@@ -65,7 +64,6 @@ class UsageMetadata(BaseModel):
             total_tokens=self.total_tokens - other.total_tokens,
             inference_time=self.inference_time - other.inference_time,
         )
-    
     @model_validator(mode="after")
     def check_non_negative(
         self

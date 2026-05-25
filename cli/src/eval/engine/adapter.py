@@ -6,13 +6,30 @@ import uuid
 from typing import Any
 
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
-from a2a.types import Message, TextPart
+from a2a.helpers import (
+    get_artifact_text,
+    get_message_text,
+    new_text_message,
+)
+from a2a.types import Role, StreamResponse, TaskState
+from google.protobuf.json_format import MessageToDict
 from httpx import AsyncClient
 
 from .contracts import EpisodeResult, EpisodeTrace, TaskSpec, TraceEvent
 
 
 TERMINAL_STATUSES = {"completed", "error", "input-required"}
+
+
+_TASK_STATE_TO_STR = {
+    TaskState.TASK_STATE_SUBMITTED: "working",
+    TaskState.TASK_STATE_WORKING: "working",
+    TaskState.TASK_STATE_INPUT_REQUIRED: "input-required",
+    TaskState.TASK_STATE_COMPLETED: "completed",
+    TaskState.TASK_STATE_FAILED: "error",
+    TaskState.TASK_STATE_CANCELED: "error",
+    TaskState.TASK_STATE_REJECTED: "error",
+}
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -23,136 +40,75 @@ def _to_dict(value: Any) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
         dumped = value.model_dump(by_alias=True)
         return dumped if isinstance(dumped, dict) else {}
-    if hasattr(value, "dict"):
-        dumped = value.dict()
-        return dumped if isinstance(dumped, dict) else {}
     return {}
 
 
-def _payload(item: Any) -> dict[str, Any]:
-    if isinstance(item, tuple) and len(item) == 2:
-        return _to_dict(item[1])
-    return _to_dict(item)
+def _struct_to_dict(metadata_struct: Any) -> dict[str, Any]:
+    if metadata_struct is None:
+        return {}
+    try:
+        return MessageToDict(metadata_struct) or {}
+    except Exception:
+        return {}
 
 
-def _event_key(payload: dict[str, Any]) -> str:
-    kind = payload.get("kind")
-    if kind == "status-update":
-        status = _to_dict(payload.get("status"))
-        message = _to_dict(status.get("message"))
-        message_id = message.get("messageId")
-        if isinstance(message_id, str) and message_id:
+def _chunk_key(chunk: StreamResponse) -> str:
+    if chunk.HasField("status_update"):
+        message_id = chunk.status_update.status.message.message_id
+        if message_id:
             return f"status:{message_id}"
-    if kind == "artifact-update":
-        artifact = _to_dict(payload.get("artifact"))
-        artifact_id = artifact.get("artifactId")
-        if isinstance(artifact_id, str) and artifact_id:
+    if chunk.HasField("artifact_update"):
+        artifact_id = chunk.artifact_update.artifact.artifact_id
+        if artifact_id:
             return f"artifact:{artifact_id}"
-    message_id = payload.get("messageId")
-    if isinstance(message_id, str) and message_id:
-        return f"message:{message_id}"
-    return json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
+    if chunk.HasField("message"):
+        if chunk.message.message_id:
+            return f"message:{chunk.message.message_id}"
+    if chunk.HasField("task"):
+        if chunk.task.id:
+            return f"task:{chunk.task.id}"
+    return f"raw:{chunk.SerializeToString().hex()}"
 
 
-def _extract_text_from_parts(parts: Any) -> str:
-    if not isinstance(parts, list):
-        return ""
-
-    chunks: list[str] = []
-    for part in parts:
-        if not isinstance(part, dict):
-            continue
-
-        if part.get("kind") == "text" and isinstance(part.get("text"), str):
-            chunks.append(part["text"])
-            continue
-
-        root = _to_dict(part.get("root"))
-        if root.get("kind") == "text" and isinstance(root.get("text"), str):
-            chunks.append(root["text"])
-
-    return "\n\n".join(chunk for chunk in chunks if chunk)
-
-
-def _extract_text(value: Any) -> str:
-    data = _to_dict(value)
-    if not data:
-        return ""
-
-    parts = data.get("parts")
-    if isinstance(parts, list):
-        return _extract_text_from_parts(parts)
-
-    status = _to_dict(data.get("status"))
-    if status:
-        message = _to_dict(status.get("message"))
-        text = _extract_text(message)
-        if text:
-            return text
-
-    artifact = _to_dict(data.get("artifact"))
-    if artifact:
-        text = _extract_text(artifact)
-        if text:
-            return text
-
-    message = _to_dict(data.get("message"))
-    if message:
-        text = _extract_text(message)
-        if text:
-            return text
-
-    return ""
-
-
-def _normalize_status(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-
-    normalized = value.strip().lower().replace("_", "-")
-    if normalized in {"submitted", "working", "in-progress", "inprogress"}:
-        return "working"
-    if normalized in {"input-required", "inputrequired"}:
-        return "input-required"
-    if normalized in {"completed", "complete", "done"}:
-        return "completed"
-    if normalized in {"failed", "error"}:
-        return "error"
-    return None
-
-
-def _extract_status_and_content(item: Any) -> tuple[str | None, str]:
-    data = _payload(item)
-    if not data:
-        return None, ""
-
-    kind = data.get("kind")
-    if kind == "artifact-update":
-        return "completed", _extract_text(_to_dict(data.get("artifact")))
-    if kind == "message":
-        return "completed", _extract_text(data)
-
-    if kind in {"status-update", "task"}:
-        status = _to_dict(data.get("status"))
-        return _normalize_status(status.get("state")), _extract_text(_to_dict(status.get("message")))
-
-    status = _to_dict(data.get("status"))
-    if status:
-        return _normalize_status(status.get("state")), _extract_text(_to_dict(status.get("message")))
-
+def _extract_status_and_content(chunk: StreamResponse) -> tuple[str | None, str]:
+    if chunk.HasField("message"):
+        return "completed", get_message_text(chunk.message)
+    if chunk.HasField("artifact_update"):
+        return "completed", get_artifact_text(chunk.artifact_update.artifact)
+    if chunk.HasField("status_update"):
+        state = chunk.status_update.status.state
+        status = _TASK_STATE_TO_STR.get(state)
+        content = ""
+        if chunk.status_update.status.HasField("message"):
+            content = get_message_text(chunk.status_update.status.message)
+        return status, content
+    if chunk.HasField("task"):
+        state = chunk.task.status.state
+        status = _TASK_STATE_TO_STR.get(state)
+        texts = [get_artifact_text(a) for a in chunk.task.artifacts]
+        return status, "\n".join(t for t in texts if t)
     return None, ""
 
 
-def _extract_metadata(item: Any) -> dict[str, Any]:
-    data = _payload(item)
-    metadata = _to_dict(data.get("metadata"))
+def _extract_metadata(chunk: StreamResponse) -> dict[str, Any]:
+    metadata_struct: Any = None
+    if chunk.HasField("status_update"):
+        metadata_struct = chunk.status_update.metadata
+    elif chunk.HasField("artifact_update"):
+        metadata_struct = chunk.artifact_update.metadata
+    elif chunk.HasField("message"):
+        metadata_struct = chunk.message.metadata
+    elif chunk.HasField("task"):
+        metadata_struct = chunk.task.metadata
 
-    artifact = _to_dict(data.get("artifact"))
-    artifact_metadata = _to_dict(artifact.get("metadata"))
-    if artifact_metadata:
-        merged = dict(artifact_metadata)
-        merged.update(metadata)
-        metadata = merged
+    metadata = _struct_to_dict(metadata_struct)
+
+    if chunk.HasField("artifact_update"):
+        artifact_metadata = _struct_to_dict(chunk.artifact_update.artifact.metadata)
+        if artifact_metadata:
+            merged = dict(artifact_metadata)
+            merged.update(metadata)
+            metadata = merged
 
     return metadata
 
@@ -234,22 +190,20 @@ class BatA2AAdapter:
             try:
                 for turn in task.turns:
                     turn_started = False
-                    stream = client.send_message(
-                        request=Message(
-                            context_id=thread_id,
-                            message_id=str(uuid.uuid4()),
-                            role="user",
-                            parts=[TextPart(text=turn)],
-                        )
+                    message = new_text_message(
+                        text=turn,
+                        context_id=thread_id,
+                        task_id=str(uuid.uuid4()),
+                        role=Role.ROLE_USER,
                     )
+                    stream = client.send_message(message)
 
-                    async for item in stream:
-                        payload = _payload(item)
-                        metadata = _extract_metadata(item)
+                    async for chunk in stream:
+                        metadata = _extract_metadata(chunk)
 
                         usage = _normalize_usage(metadata)
                         if usage:
-                            usage_key = f"{_event_key(payload)}::{json.dumps(usage, sort_keys=True, ensure_ascii=True)}"
+                            usage_key = f"{_chunk_key(chunk)}::{json.dumps(usage, sort_keys=True, ensure_ascii=True)}"
                             if usage_key not in usage_seen:
                                 usage_seen.add(usage_key)
                                 usage_total = _add_usage(usage_total, usage)
@@ -261,7 +215,7 @@ class BatA2AAdapter:
                             tool_calls_seen.add(key)
                             trace.tool_calls.append(tool_call)
 
-                        status, content = _extract_status_and_content(item)
+                        status, content = _extract_status_and_content(chunk)
                         if status is None:
                             continue
 

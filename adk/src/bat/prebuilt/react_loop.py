@@ -1,7 +1,9 @@
+import warnings
 from ..agent.config import AgentConfig
 from ..chat_model_client.metadata import MetadataCollector
 from ..agent.state import AgentState
 from ..chat_model_client import ChatModelClient
+from ..chat_model_client.metadata import MetadataCollector
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
 from langgraph.graph import START, END
@@ -12,7 +14,7 @@ from typing import Any, Dict, List, Literal, Optional, Type
 from typing_extensions import override, AsyncIterable
 from pydantic import ValidationError
 
-_logger = create_logger(__name__, level="debug")
+logger = create_logger(__name__, level="debug")
 
 class ReActLoop(PrebuiltWorkflow):
     """ReActLoop implements a ReAct-style loop using a ChatModelClient with associated tools.
@@ -105,6 +107,21 @@ class ReActLoop(PrebuiltWorkflow):
                 If provided, the value at this key is updated with the current status of the loop.
                 Useful to beautify the streamed output of the loop.        
         """
+
+        keys = [
+            input_key,
+            output_key,
+            status_key,
+            messages_key,
+        ]
+        for key in keys:
+            if key not in StateType.model_fields:
+                warnings.warn(
+                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'",
+                    Warning,
+                    stacklevel=2,
+                )
+
         super().__init__(
             config=config,
             StateType=StateType,
@@ -133,6 +150,7 @@ class ReActLoop(PrebuiltWorkflow):
         self.messages_key = messages_key
         self.status_key = status_key
         self._internal_messages_key = messages_key or f"{loop_name}.messages"
+        self._internal_final_response_key = f"{loop_name}.final_response"
         self._internal_trace_key = f"{loop_name}.trace.tool_calls"
         self._metadata_collector = MetadataCollector()
 
@@ -209,7 +227,7 @@ class ReActLoop(PrebuiltWorkflow):
         Initializes the conversation history and buffer, and updates the status if a status_key is provided.
         The buffer is used to hold AI/Tool Messages between iterations of the loop.
         """
-        _logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: invoked")
+        logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: invoked")
         if self.messages_key:
             state.bat_extra[self._internal_messages_key] = getattr(state, self.messages_key)
         else:
@@ -220,7 +238,7 @@ class ReActLoop(PrebuiltWorkflow):
             state = state.model_copy(update={
                 self.status_key: "Calling LLM..."
             })
-        _logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: prepared")
+        logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: prepared")
         return state
     
     async def _llm(
@@ -233,7 +251,7 @@ class ReActLoop(PrebuiltWorkflow):
         If the chat model produces tool calls, they are added to the buffer for processing in the ToolNode.
         If a status_key is provided, the status is updated to reflect the current operation.
         """
-        _logger.debug(f"Node `{self.loop_name}.llm`: invoked")
+        logger.debug(f"Node `{self.loop_name}.llm`: invoked")
         tool_messages = state.bat_buffer
         state.bat_buffer = []
         if self.status_key:
@@ -264,8 +282,9 @@ class ReActLoop(PrebuiltWorkflow):
                     self.status_key: f"Running tools: {', '.join(tool_names)}",
                 })
         else:
-            state = state.model_copy(update={self.output_key: response.content})  
-        _logger.debug(f"Node `{self.loop_name}.llm`: completed")
+            # state = state.model_copy(update={self.output_key: response.content})
+            state.bat_extra[self._internal_final_response_key] = response.content
+        logger.debug(f"Node `{self.loop_name}.llm`: completed")
         yield state
     
     def _cleanup_after_loop(
@@ -276,20 +295,24 @@ class ReActLoop(PrebuiltWorkflow):
         Restores the conversation history from the internal key to the messages_key in the state
         and removes the internal key from the `bat_extra` dictionary in the state.
         """
-        _logger.debug(f"Node `{self.loop_name}.cleanup`: invoked")
+        logger.debug(f"Node `{self.loop_name}.cleanup`: invoked")
         state = state.model_copy(update={
-            self.messages_key: state.bat_extra[self._internal_messages_key]
+            self.messages_key: state.bat_extra[self._internal_messages_key],
+            self.output_key: state.bat_extra[self._internal_final_response_key],
         })
         if self._internal_messages_key in state.bat_extra:
             del state.bat_extra[self._internal_messages_key]
-        _logger.debug(f"Node `{self.loop_name}.cleanup`: completed")
+        if self._internal_trace_key in state.bat_extra:
+            del state.bat_extra[self._internal_trace_key]
+        del state.bat_extra[self._internal_final_response_key]
+        logger.debug(f"Node `{self.loop_name}.cleanup`: completed")
         return state
 
     def get_trace_metadata(
         self,
         from_timestamp: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Get aggregated trace metadata collected by this loop.
+        """Get aggregated trace metadata (tool calls) collected during this loop.
 
         Args:
             from_timestamp (Optional[float]): If provided, only tool calls after this
@@ -297,6 +320,6 @@ class ReActLoop(PrebuiltWorkflow):
 
         Returns:
             Dict[str, Any]: Trace metadata in the shape {"tool_calls": [...]}.
-                Returns an empty dict when no tool calls are available.
+                Returns an empty dict when no tool calls have been recorded.
         """
         return self._metadata_collector.get_trace_metadata(from_timestamp=from_timestamp)

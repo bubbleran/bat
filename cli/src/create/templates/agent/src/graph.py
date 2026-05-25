@@ -1,4 +1,4 @@
-from bat.agent import AgentGraph, AgentState, AgentTaskResult
+from bat.agent import AgentGraph, AgentState, AgentTaskResult, AgentTaskStatus
 from bat.prebuilt import ReActLoop
 from langgraph.graph import START, END
 from typing import Optional, Self
@@ -24,7 +24,11 @@ class __AGENT_CLASS_NAME__AgentState(AgentState):
         self,
     ) -> AgentTaskResult:
         return AgentTaskResult(
-            task_status="completed" if self.response else "working",
+            task_status=(
+                AgentTaskStatus.AGENT_TASK_STATUS_COMPLETED
+                if self.response
+                else AgentTaskStatus.AGENT_TASK_STATUS_WORKING
+            ),
             content=self.response or "Generating response...",
         )
 
@@ -35,10 +39,10 @@ class __AGENT_CLASS_NAME__AgentGraph(AgentGraph):
         self,
         config,
     ) -> None:
-        #Client setup 
+        #Client setup
 __CLIENT_SETUP__
 
-    # Graph wiring 
+    # Graph wiring
     self.graph_builder.add_edge(
         START,
         END,

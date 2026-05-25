@@ -75,13 +75,16 @@ def test_create_new_agent_custom_name() -> None:
         assert 'description = "DEMO Agent"' in pyproject_content
         assert 'readme = "README.md"' in pyproject_content
         assert 'requires-python = ">=3.12"' in pyproject_content
-        assert '"bat-adk>=2026.3"' in pyproject_content
+        assert '"bat-adk>=2026.4.23"' in pyproject_content
 
         agent_json_content = (root / "agent.json").read_text(encoding="utf-8")
-        assert '"version": "2026_3"' in agent_json_content
+        assert '"version": "1.0.0"' in agent_json_content
         assert '"name": "demo_agent"' in agent_json_content
         assert '"description": ""' in agent_json_content
         assert '"skills": []' in agent_json_content
+        assert '"defaultInputModes"' in agent_json_content
+        assert '"defaultOutputModes"' in agent_json_content
+        assert '"capabilities"' in agent_json_content
 
         dockerfile_content = (root / "Dockerfile").read_text(encoding="utf-8")
         assert "strip dist/demo" in dockerfile_content

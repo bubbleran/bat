@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 
 
-BAT_ADK_VERSION = "2026.3"
+BAT_ADK_VERSION = "2026.4.23"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "agent"
 _DYNAMIC_TEMPLATE_FILES = {
@@ -153,7 +153,6 @@ def _build_agent_json_content(agent_dir_name: str) -> str:
     return _render_template(
         "agent.json.template",
         {
-            "ADK_API_VERSION": BAT_ADK_VERSION.replace(".", "_"),
             "AGENT_NAME": agent_dir_name,
         },
     )
