@@ -1,0 +1,44 @@
+name: bat-cli
+version: '0.1.0'
+title: BubbleRAN Agentic Toolkit CLI
+summary: CLI to scaffold, build, and evaluate BAT agents
+description: |
+  bat-cli (BubbleRAN Agentic Toolkit) is a CLI to scaffold,
+  build, push, and evaluate BAT agent projects.
+type: app
+license: Apache-2.0
+platforms:
+    amd64:
+confinement: strict
+grade: stable
+base: core24
+
+apps:
+    bat:
+        command: bin/bat
+        plugs:
+            - home
+            - network
+            - network-bind
+
+parts:
+    bat-cli:
+        plugin: nil
+        source: .
+        build-packages:
+            - python3
+            - python3-venv
+            - python3-dev
+            - binutils
+            - build-essential
+        override-build: |
+            set -eux
+            python3 -m venv "$CRAFT_PART_BUILD/.venv"
+            . "$CRAFT_PART_BUILD/.venv/bin/activate"
+            pip install --upgrade pip wheel
+            pip install pyinstaller
+            pip install "$CRAFT_PART_SRC/adk" "$CRAFT_PART_SRC/cli"
+            cd "$CRAFT_PART_SRC/cli"
+            pyinstaller --clean --noconfirm bat_cli.spec
+            install -Dm755 "$CRAFT_PART_SRC/cli/dist/bat" \
+              "$CRAFT_PART_INSTALL/bin/bat"
