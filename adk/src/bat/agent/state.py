@@ -117,7 +117,19 @@ class AgentTaskResult(BaseModel):
         elif chunk.HasField('status_update'):
             status = chunk.status_update.status.state
         elif chunk.HasField('task'):
-            logger.warning("received unexpected 'task' chunk")
+            match chunk.task.status.state:
+                case TaskState.TASK_STATE_SUBMITTED:
+                    status = TaskState.TASK_STATE_WORKING
+                case (
+                    TaskState.TASK_STATE_WORKING
+                    | TaskState.TASK_STATE_COMPLETED
+                    | TaskState.TASK_STATE_FAILED
+                    | TaskState.TASK_STATE_INPUT_REQUIRED
+                ) as s:
+                    status = s
+                case _ as s:
+                    status = TaskState.TASK_STATE_FAILED
+                    logger.error(f"'task' chunk has unexpected status '{s}'")
 
         return cls(
             task_status=status,
