@@ -1,6 +1,5 @@
 import asyncio
 import time
-import warnings
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState, AgentTaskResult, AgentTaskStatus
 from ..chat_model_client.metadata import MetadataCollector, TraceMetadata, UsageMetadata
@@ -40,31 +39,6 @@ class CallAgentNode(PrebuiltWorkflow):
     - The target agent requests user input
     - An error occurs
 
-    Args
-    -------
-        config (AgentConfig): Configuration for the agent, including checkpointing options.
-        StateType (Type[AgentState]): The AgentState schema used in the loop.
-        loop_name (str): The name of this workflow loop (e.g., "domain_agent_loop").
-        agent_name (str): The name of the target agent to call (e.g., "SMO Agent").
-        build_message (Callable[[RunnableConfig, str], Message]): Callback function to build
-            the request message from the input text.
-        input (str, optional): A key pointing to a string in the state. Defaults to "question".
-            The value at this key is used as input to send to the target agent.
-        output (str, optional): A key pointing to a string in the state. Defaults to "answer".
-            The value at this key is updated with responses from the target agent.
-        global_status (str, optional): A key pointing to a string in the state. Defaults to "status".
-            The value at this key is updated with the overall status of the communication.
-        agent_input_required (str, optional): A key pointing to a bool in the state. Defaults to "agent_input".
-            The value at this key is set to True when the target agent requests user input.
-        agent_response_status (str, optional): A key pointing to a string in the state. Defaults to "agent_response_status".
-            The value at this key is updated with the status from the target agent.
-        agent_response_content (str, optional): A key pointing to a string in the state. Defaults to "agent_response_content".
-            The value at this key is updated with the content from the target agent.
-        agent_status (str, optional): **DEPRECATED** Use agent_response_status instead.
-        agent_content (str, optional): **DEPRECATED** Use agent_response_content instead.
-        input_required (str, optional): **DEPRECATED** This parameter is no longer used and will be dropped in future versions.
-        recursion_limit (int, optional): Maximum recursion depth for nested calls. Defaults to 50.
-
     Example
     -------
     ```python
@@ -97,12 +71,12 @@ class CallAgentNode(PrebuiltWorkflow):
                 StateType=MyAgentState,
                 loop_name="domain_agent_loop",
                 agent_name="SMO Agent",
-                input="agent_input_text",
-                output="agent_output_text",
-                global_status="agent_status",
-                agent_input_required="agent_input_required",
-                agent_response_status="agent_response_status",
-                agent_response_content="agent_response_content",
+                input_key="agent_input_text",
+                output_key="agent_output_text",
+                status_key="agent_status",
+                agent_input_required_key="agent_input_required",
+                agent_response_status_key="agent_response_status",
+                agent_response_content_key="agent_response_content",
                 build_message=build_agent_message,
             )
             ...
@@ -118,19 +92,12 @@ class CallAgentNode(PrebuiltWorkflow):
         agent_name: str,
         build_message: Callable[[RunnableConfig, str], Message],
         *,
-        input_key: Optional[str] = None,
-        output_key: Optional[str] = None,
-        status_key: Optional[str] = None,
-        agent_input_required: str = "agent_input",
-        agent_response_status: Optional[str] = None,
-        agent_response_content: Optional[str] = None,
-        # Deprecated parameters
-        input: Optional[str] = None,
-        output: Optional[str] = None,
-        global_status: Optional[str] = None,
-        agent_status: Optional[str] = None,
-        agent_content: Optional[str] = None,
-        input_required: Optional[str] = None,
+        input_key: str = "input",
+        output_key: str = "output",
+        status_key: str = "status",
+        agent_input_required_key: str = "agent_input",
+        agent_response_status_key: str = "agent_response_status",
+        agent_response_content_key: str = "agent_response_content",
         recursion_limit: int = 50,
     ) -> None:
         """Initialize the CallAgentNode workflow with the given configuration and parameters.
@@ -144,102 +111,31 @@ class CallAgentNode(PrebuiltWorkflow):
             build_message (Callable[[RunnableConfig, str], Message]): Callback function to build
                 the request message from the input text. Should accept a RunnableConfig and a
                 string, and return an A2A Message object.
-            input (str, optional): A key pointing to a string in the state. Defaults to "input".
+            input_key (str, optional): A key pointing to a string in the state. Defaults to "input".
                 The value at this key is used as input to send to the target agent.
-            output (str, optional): A key pointing to a string in the state. Defaults to "output".
+            output_key (str, optional): A key pointing to a string in the state. Defaults to "output".
                 The value at this key is updated with responses from the target agent.
             status_key (str, optional): A key pointing to a string in the state. Defaults to "status".
                 The value at this key is updated with the overall status of the communication.
                 Useful to display the current operation to the user.
-            agent_input_required (str, optional): A key pointing to a bool in the state. Defaults to "agent_input".
+            agent_input_required_key (str, optional): A key pointing to a bool in the state. Defaults to "agent_input".
                 The value at this key is set to True when the target agent requests user input.
-            agent_response_status (str, optional): A key pointing to a string in the state. Defaults to "agent_response_status".
+            agent_response_status_key (str, optional): A key pointing to a string in the state. Defaults to "agent_response_status".
                 The value at this key is updated with the status from the target agent.
-            agent_response_content (str, optional): A key pointing to a string in the state. Defaults to "agent_response_content".
+            agent_response_content_key (str, optional): A key pointing to a string in the state. Defaults to "agent_response_content".
                 The value at this key is updated with the content from the target agent.
-            input (str, optional): **DEPRECATED** Use input_key instead.
-            output (str, optional): **DEPRECATED** Use output_key instead.
-            global_status (str, optional): **DEPRECATED** Use status_key instead.
-            agent_status (str, optional): **DEPRECATED** Use agent_response_status instead.
-            agent_content (str, optional): **DEPRECATED** Use agent_response_content instead.
-            input_required (str, optional): **DEPRECATED** This parameter is no longer used.
             recursion_limit (int, optional): Maximum recursion depth for nested calls. Defaults to 50.
                 This prevents infinite loops in agent-to-agent communication.
         """
-        # Handle deprecated parameters
-        if input is not None:
-            warnings.warn(
-                "`input` parameter is deprecated, use `input_key` instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if input_key is None:
-                input_key = input
-        
-        if output is not None:
-            warnings.warn(
-                "`output` parameter is deprecated, use `output_key` instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if output_key is None:
-                output_key = output
-        
-        if global_status is not None:
-            warnings.warn(
-                "`global_status` parameter is deprecated, use `status_key` instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if status_key is None:
-                status_key = global_status
-
-        if agent_status is not None:
-            warnings.warn(
-                "'agent_status' is deprecated, use 'agent_response_status' instead",
-                DeprecationWarning,
-                stacklevel=2
-            )
-            if agent_response_status is None:
-                agent_response_status = agent_status
-        
-        if agent_content is not None:
-            warnings.warn(
-                "'agent_content' is deprecated, use 'agent_response_content' instead",
-                DeprecationWarning,
-                stacklevel=2
-            )
-            if agent_response_content is None:
-                agent_response_content = agent_content
-        
-        if input_required is not None:
-            warnings.warn(
-                "'input_required' parameter is deprecated and will be ignored",
-                DeprecationWarning,
-                stacklevel=2
-            )
-        
-        # Set defaults if not provided
-        if input_key is None:
-            input_key = "input"
-        if output_key is None:
-            output_key = "output"
-        if agent_response_status is None:
-            agent_response_status = "agent_response_status"
-        if agent_response_content is None:
-            agent_response_content = "agent_response_content"
-
         keys = [
             input_key,
             output_key,
             status_key,
-            agent_input_required,
-            agent_response_content,
-            agent_response_status,
+            agent_input_required_key,
+            agent_response_content_key,
+            agent_response_status_key,
         ]
         for key in keys:
-            if key is None:
-                continue
             if key not in StateType.model_fields:
                 logger.error(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
                 raise KeyError(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
@@ -254,9 +150,9 @@ class CallAgentNode(PrebuiltWorkflow):
             input=input_key,
             output=output_key,
             global_status=status_key,
-            agent_input_required=agent_input_required,
-            agent_response_status=agent_response_status,
-            agent_response_content=agent_response_content,
+            agent_input_required=agent_input_required_key,
+            agent_response_status=agent_response_status_key,
+            agent_response_content=agent_response_content_key,
             recursion_limit=recursion_limit,
         )
 
