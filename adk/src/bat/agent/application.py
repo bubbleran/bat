@@ -1,6 +1,5 @@
 import asyncio
 import httpx
-import json
 import os
 import uuid
 import uvicorn
@@ -10,11 +9,13 @@ from .config import AgentConfig
 from .graph import AgentGraph
 from .state import AgentState
 from a2a.client import ClientConfig, ClientFactory
-from a2a.server.apps import A2AStarletteApplication
-from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.helpers import new_text_message, get_stream_response_text, display_agent_card
+from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
+from a2a.server.request_handlers import DefaultRequestHandlerV2
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCard, Message, TextPart
+from a2a.types import AgentCard, AgentInterface, Role
 from dotenv import load_dotenv
+from google.protobuf.json_format import Parse
 from jsonschema import ValidationError
 from mcp.server import FastMCP
 from starlette.applications import Starlette
@@ -22,20 +23,22 @@ from threading import Thread
 from typing import Optional, Type
 
 load_dotenv()
-_logger = create_logger(__name__, "debug")
+logger = create_logger(__name__, "debug")
 
 A2A_APPLICATION_DEFAULT_PORT = 9900
 MCP_APPLICATION_DEFAULT_PORT = 9800
 DEFAULT_HTTPX_CLIENT_TIMEOUT = 180
 
 class AgentApplication:
-    f"""Agent Application based on `Starlette`.
+    """Agent Application based on `Starlette`.
     This class sets up an agent application that can handle A2A and MCP protocols.
+
     Supported Environment Variables:
         - `URL` (required): The base URL where the agent will be hosted.
-        - `PORT`: The port for the A2A application. Defaults to `{A2A_APPLICATION_DEFAULT_PORT}`.
-        - `MCP_PORT`: The port for the MCP application. Defaults to `{MCP_APPLICATION_DEFAULT_PORT}`.
-        - `CONFIG`: Path to a configuration file for the agent. Defaults to _"config.yaml"_.
+        - `PORT`: The port for the A2A application. Defaults to 9900.
+        - `MCP_PORT`: The port for the MCP application. Defaults to 9800.
+        - `CONFIG`: Path to a configuration file for the agent. Defaults to "config.yaml".
+        - `AGENT_CARD_DISPLAY`: Whether to display the AgentCard when the agent starts. Defaults to True.
 
     Attributes
     -------
@@ -48,8 +51,8 @@ class AgentApplication:
         from bat.agent import AgentApplication
 
         agent = AgentApplication(
-            agent_card_path='./agent.json',
-            agent_graph=MyAgentGraph(),
+            AgentGraphType=MyAgentGraph,
+            AgentStateType=MyAgentState,
         )
         agent.run()
     ```
@@ -71,7 +74,11 @@ class AgentApplication:
         self.a2a_port = int(os.getenv("PORT", A2A_APPLICATION_DEFAULT_PORT))
         self.mcp_port = int(os.getenv("MCP_PORT", MCP_APPLICATION_DEFAULT_PORT))
 
+        self._agent_card_display = bool(os.getenv("AGENT_CARD_DISPLAY", "1"))
         self._agent_card = self.load_agent_card(agent_card_path)
+        if self._agent_card_display:
+            display_agent_card(self._agent_card)
+        
         self._config_path = os.getenv("CONFIG", "config.yaml")
         self._config = AgentConfig.load(self._config_path)
 
@@ -82,13 +89,21 @@ class AgentApplication:
             StateType=AgentStateType,
         )
         self._agent_executor = MinimalAgentExecutor(agent_graph)
-        self._request_handler = DefaultRequestHandler(
+        self._request_handler = DefaultRequestHandlerV2(
             agent_executor=self._agent_executor,
             task_store=InMemoryTaskStore(),
-        )
-        self._a2a_server = A2AStarletteApplication(
             agent_card=self._agent_card,
-            http_handler=self._request_handler
+            extended_agent_card=self._agent_card,
+        )
+        agent_card_routes = create_agent_card_routes(
+            agent_card=self._agent_card,
+        )
+        json_rpc_routes = create_jsonrpc_routes(
+            request_handler=self._request_handler,
+            rpc_url='/',
+        )
+        self._a2a_server = Starlette(
+            routes=agent_card_routes+json_rpc_routes
         )
     
     def load_agent_card(
@@ -111,19 +126,27 @@ class AgentApplication:
         """
         url = os.getenv("URL")
         if url is None:
-            _logger.error("URL environment variable is not set.")
+            logger.error("URL environment variable is not set.")
             raise EnvironmentError("URL environment variable is not set.")
         if not url.startswith("http://") and not url.startswith("https://"):
             url = "http://" + url
         url = url.rstrip("/")
         port = int(os.getenv("PORT", A2A_APPLICATION_DEFAULT_PORT))
 
+        interfaceUrl = f'{url}:{port}'
         try:
             with open(agent_card_path, 'r') as file:
-                agent_data = json.load(file)
-                agent_data.setdefault('url', f'{url}:{port}')
-                agent_card = AgentCard.model_validate(agent_data)
-                _logger.debug('Agent Card loaded.')
+                json_str = file.read()
+                agent_card = Parse(json_str, AgentCard())
+                
+                if agent_card.supported_interfaces:
+                    logger.error("interfaces already defined: will be ignored")
+                    raise Exception("AgentCard's supportedInterfaces field is set, please remove supportedInterfaces from your agent card.")
+                agent_card.supported_interfaces.append(AgentInterface(
+                    url=interfaceUrl,
+                    protocol_binding="JSONRPC",
+                    protocol_version="2.0",
+                ))
         except FileNotFoundError as e:
             raise FileNotFoundError(f'Agent card file not found.') from e
         except ValidationError as e:
@@ -142,14 +165,6 @@ class AgentApplication:
     def agent_card(self) -> AgentCard:
         """Get the agent card."""
         return self._agent_card
-    
-    def _build_a2a_application(self) -> Starlette:
-        """Build the A2A Starlette application.
-        
-        Returns:
-            Starlette: The built Starlette application.
-        """
-        return self._a2a_server.build()
 
     def _build_mcp_application(self) -> FastMCP:
         mcp = FastMCP(
@@ -198,33 +213,19 @@ class AgentApplication:
                     ),
                 )
                 client = client_factory.create(card=self.agent_card)
-                message = Message(
+                message = new_text_message(
+                    text=query,
                     context_id=context_id or str(uuid.uuid4()),
-                    message_id=message_id,
-                    role="user",
-                    parts=[TextPart(text=query)]
+                    task_id=message_id,
+                    role=Role.ROLE_USER,
                 )
                 stream = client.send_message(message)
-                item = await anext(stream)
+                chunk = await anext(stream)
 
-                response = None
-                if isinstance(item, Message):
-                    if item.parts and item.parts[0].root.kind == "text":
-                        response = item.parts[0].root.text
-                    else:
-                        _logger.warning("Received Message with non-text part; ignoring.")
-                else:
-                    task = item[0]
-                    if task.artifacts:
-                        artifact = task.artifacts[0]
-                        if artifact.parts and artifact.parts[0].root.kind == "text":
-                            response = artifact.parts[0].root.text
-                        else:
-                            _logger.warning("Received Artifact with non-text part; ignoring.")
-
-                if response is None:
+                response = get_stream_response_text(chunk)
+                if not response:
                     response = "No valid response received."
-                    _logger.warning("No valid response was obtained from the agent stream.")
+                    logger.warning("No valid response was obtained from the agent stream.")
                 return response
 
             try:
@@ -254,7 +255,7 @@ class AgentApplication:
                     raise result["error"]
                 response = result["value"]
             except Exception as e:
-                _logger.error(f"Error while getting response from Agent: {e}")
+                logger.error(f"Error while getting response from Agent: {e}")
                 response = f"An error occurred while processing your request: {e}"
             return response
 
@@ -273,7 +274,7 @@ class AgentApplication:
         """
 
         if expose_mcp:
-            a2a_app = self._build_a2a_application()
+            a2a_app = self._a2a_server
             mcp_app = self._build_mcp_application()
 
             a2a_server_config = uvicorn.Config(
@@ -292,7 +293,7 @@ class AgentApplication:
             t_mcp.join()        
             t_a2a.join()
         else:
-            a2a_app = self._build_a2a_application()
+            a2a_app = self._a2a_server
             uvicorn.run(
                 app=a2a_app,
                 host="0.0.0.0",

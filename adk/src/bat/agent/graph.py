@@ -1,18 +1,18 @@
-from ..chat_model_client import ChatModelClient, UsageMetadata
+from ..chat_model_client import ChatModelClient, TraceMetadata, UsageMetadata
+from langchain_core.messages import ToolCall
 from ..logging import create_logger
 from ..prebuilt import CallAgentNode
 from .config import AgentConfig
-from .state import AgentState, AgentTaskResult
-from a2a.types import AgentCard, Message, TextPart
-from a2a.client import ClientConfig, ClientEvent, ClientFactory
+from .state import AgentState, AgentTaskResult, AgentTaskStatus
+from a2a.types import Message, Role
+from a2a.helpers import new_text_message
 from abc import ABC, abstractmethod
-from httpx import AsyncClient
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
-from typing import AsyncIterable, Dict, Optional, Type
+from typing import Any, AsyncIterable, Dict, List, Optional, Type
 
 logger = create_logger(__name__, level="debug")
 
@@ -82,7 +82,16 @@ class AgentGraph(ABC):
         Returns:
             StateGraph: The state graph builder.
         """
-        return self._graph_builder        
+        return self._graph_builder
+
+    @property
+    def compiled_graph(self) -> CompiledStateGraph:
+        """Get the compiled state graph.
+        
+        Returns:
+            CompiledStateGraph: The compiled state graph of the agent.
+        """
+        return self._graph
 
     @abstractmethod
     def setup(
@@ -158,7 +167,7 @@ class AgentGraph(ABC):
             logger.debug(f"[{thread_id}]: State updated")
 
         input = Command(resume=state) if state.is_waiting_for_human_input() else state
-        
+
         stream = self._graph.astream(
             input=input,
             config=config,
@@ -177,16 +186,16 @@ class AgentGraph(ABC):
                 except Exception as ve:
                     logger.error(f"[{thread_id}]: Validation error: {ve}")
                     yield AgentTaskResult(
-                        task_status="error",
+                        task_status=AgentTaskStatus.AGENT_TASK_STATUS_FAILED,
                         content="Invalid state format",
                     )
         except Exception as e:
             logger.error(f"[{thread_id}]: Error during stream processing: {e}")
             yield AgentTaskResult(
-                task_status="error",
+                task_status=AgentTaskStatus.AGENT_TASK_STATUS_FAILED,
                 content=f"Stream error: {str(e)}",
             )
-        
+
         # Checkpoints are possible only if memory is enabled
         if self._memory:
             current_state = self._graph.get_state(config=config)
@@ -194,52 +203,10 @@ class AgentGraph(ABC):
             if intr:
                 logger.debug(f"[{thread_id}]: Yielding Interrupt: {intr.value}")
                 yield AgentTaskResult(
-                    task_status="input-required",
+                    task_status=AgentTaskStatus.AGENT_TASK_STATUS_INPUT_REQUIRED,
                     content=intr.value,
                 )
         logger.debug(f"[{thread_id}]: Graph execution completed")
-
-    async def consume_agent_stream(
-        self,
-        agent_card: AgentCard,
-        message: Message,
-    ) -> AsyncIterable[ClientEvent | Message]:
-        """**WARNING: THIS METHOD IS DEPRECATED AND WILL BE REMOVED IN FUTURE RELEASES. USE THE CallAgentNode INSTEAD.**
-        
-        Consume the agent stream from another A2A agent using the provided agent card and request.
-        
-        Args:
-            agent_card (AgentCard): The agent card of the target agent.
-            request (Message): The message to send to the agent.
-        
-        Yields:
-            AsyncIterable[SendStreamingMessageSuccessResponse]: An asynchronous iterable of streaming message responses.
-        """
-        TIMEOUT = 120.0 # seconds
-        client_factory = ClientFactory(
-            ClientConfig(
-                httpx_client=AsyncClient(timeout=TIMEOUT),
-                streaming=True,
-            )
-        )
-        client = client_factory.create(card=agent_card)
-        stream = client.send_message(request=message)
-        try:
-            async for item in stream:
-                if isinstance(item, Message):
-                    metadata = item.metadata
-                else:
-                    event = item[1]
-                    metadata = event.metadata if event else None
-
-                if metadata and USAGE_METADATA_KEY in metadata:
-                    usage = metadata[USAGE_METADATA_KEY]
-                    self._usage_buffer += UsageMetadata.model_validate(usage)
-                yield item
-
-        except Exception as e:
-            logger.error(f"consume_agent_stream: Streaming failed: {e}")
-            raise
 
     def draw_mermaid(
         self,
@@ -291,16 +258,50 @@ class AgentGraph(ABC):
                 )
         return total
 
-    
-    def _build_request(config:AgentConfig, text: str) -> Message:
-        cfg = (config or {}).get("configurable", {}) or {}
-        thread_id = cfg.get("thread_id")
+    def _get_trace_metadata(
+        self,
+        from_timestamp: Optional[float] = None,
+    ) -> TraceMetadata:
+        """Get aggregated trace metadata for the graph from components that expose it.
 
-        context_id = thread_id or "default"
+        Components opt in by implementing a callable method:
+            get_trace_metadata(from_timestamp: Optional[float]) -> TraceMetadata
 
-        return Message(
-            context_id=context_id,
-            message_id="0",
-            role="user",
-            parts=[TextPart(text=text)],
+        Args:
+            from_timestamp (Optional[float]): If provided, only entries after this
+                timestamp are returned.
+
+        Returns:
+            TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
+                empty when no component has trace data to report.
+        """
+        tool_calls: List[ToolCall] = []
+
+        for _, value in self.__dict__.items():
+            get_trace_metadata = getattr(value, "get_trace_metadata", None)
+            if not callable(get_trace_metadata):
+                continue
+
+            trace_item = get_trace_metadata(from_timestamp=from_timestamp)
+            if not isinstance(trace_item, TraceMetadata):
+                continue
+
+            tool_calls.extend(trace_item.tool_calls)
+
+        return TraceMetadata(tool_calls=tool_calls)
+
+    @staticmethod
+    def build_message(
+        config: RunnableConfig,
+        text: str
+    ) -> Message:
+        cfg = config["configurable"] or {}
+        thread_id = cfg.get("thread_id", "default")
+        task_id = cfg.get("task_id", None)
+
+        return new_text_message(
+            text=text,
+            context_id=thread_id,
+            task_id=task_id,
+            role=Role.ROLE_USER,
         )

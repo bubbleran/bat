@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-adk"
-version = "2026.3"
+version = "2026.6rc1"
 authors = [
   { name="Andrea LEONE", email="andrea.leone@bubbleran.com" },
 ]
@@ -15,27 +15,43 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: OS Independent",
 ]
+
 dependencies = [
-  "a2a-sdk>=0.3.20",
-  "a2a-sdk[http-server]",
+  "a2a-sdk>=1.0.0",
+  "a2a-sdk[http-server]>=1.0.0",
   "httpx>=0.28.1",
   "langchain>=0.3.24",
-  "langchain-anthropic>=0.3.22",
-  "langchain-deepseek>=0.1.4",
-  "langchain-mcp-adapters>=0.1.13,<0.2.0",
-  "langchain-nvidia-ai-endpoints>=0.3.9",
-  "langchain-ollama>=0.3.3",
-  "langchain-openai>=0.3.14",
+  "langchain-mcp-adapters>=0.2.0",
   "langgraph>=1.0.0",
   "mcp[cli]>=1.17.0",
   "pydantic>=2.10.6",
   "pyyaml>=6.0.1",
   "uvicorn>=0.37.0",
 ]
+
+[project.optional-dependencies]
+anthropic = [
+  "langchain-anthropic>=0.3.22",
+]
+deepseek = [
+  "langchain-deepseek>=0.1.4",
+]
+nvidia = [
+  "langchain-nvidia-ai-endpoints>=0.3.9",
+]
+ollama = [
+  "langchain-ollama>=0.3.3",
+]
+openai = [
+  "langchain-openai>=0.3.14",
+]
+
 [dependency-groups]
 dev = [
   "build",
   "twine",
+  "pytest>=9.0.2",
+  "pytest-cov>=7.0.0",
 ]
 [project.urls]
 "Homepage" = "https://bubbleran.com/"

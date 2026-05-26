@@ -1,23 +1,38 @@
-from a2a.client import ClientEvent
-from a2a.types import (
-    Message,
-    TaskArtifactUpdateEvent,
-    TaskState,
-    TaskStatusUpdateEvent,
-)
+from ..logging import create_logger
+from a2a.helpers import get_stream_response_text
+from a2a.types import StreamResponse, TaskState
 from abc import ABC, abstractmethod
+from enum import IntEnum
 from pydantic import BaseModel
-from typing import Any, Dict, List, Literal, Self
+from typing import Any, Dict, List, Self
 
-AgentTaskStatus = Literal["working", "input-required", "completed", "error"]
-"""AgentTaskStatus is a type alias for the status of an agent task.
+logger = create_logger(__name__, 'debug')
 
-The possible values are:
-- `working`: The agent is currently processing the task.
-- `input-required`: The agent requires additional input from the user to proceed.
-- `completed`: The agent has successfully completed the task.
-- `error`: An error occurred during the task execution.
-"""
+class AgentTaskStatus(IntEnum):
+    """**AgentTaskStatus** is an enum type matching the A2A-SDK **TaskState**.
+        The need for this redefinition is due to:
+            - Incompatibility between PydanticV2 and Protobuf.
+            - Not all the A2A-SDK TaskState are currently supported by BAT-ADK.
+
+        Among those defined in the A2A-SDK, BAT-ADK currently supports:
+        - **AGENT_TASK_STATUS_WORKING** -> TASK_STATE_WORKING
+        - **AGENT_TASK_STATUS_INPUT_REQUIRED** -> TASK_STATE_INPUT_REQUIRED
+        - **AGENT_TASK_STATUS_COMPLETED** -> TASK_STATE_COMPLETED
+        - **AGENT_TASK_STATUS_FAILED** -> TASK_STATE_FAILED
+
+        Internally, the following A2A-SDK task states are handles:
+        - **TASK_STATE_SUBMITTED**
+
+        The A2A-SDK defines the following additional task states:
+        - TASK_STATE_UNSPECIFIED
+        - TASK_STATE_CANCELED
+        - TASK_STATE_REJECTED
+        - TASK_STATE_AUTH_REQUIRED
+    """
+    AGENT_TASK_STATUS_WORKING = 2
+    AGENT_TASK_STATUS_COMPLETED = 3
+    AGENT_TASK_STATUS_FAILED = 4
+    AGENT_TASK_STATUS_INPUT_REQUIRED = 6
 
 class AgentTaskResult(BaseModel):
     """Result of an agent invocation.
@@ -29,70 +44,102 @@ class AgentTaskResult(BaseModel):
     
     Attributes meaning
     ----------
-    | `task_status`  | `content`                                                            |
-    |----------------|----------------------------------------------------------------------|
-    | working        | Ongoing task description or progress update.                         |
-    | input-required | Description of the required user input or context.                   |
-    | completed      | Final response or result of the agent's processing.                  |
-    | error          | Error message indicating what went wrong during the task execution.  |
+    | **task_status**            | **content**                                                          |
+    |----------------------------|----------------------------------------------------------------------|
+    | TASK_STATE_WORKING         | Ongoing task description or progress update.                         |
+    | TASK_STATE_INPUT_REQUIRED  | Description of the required user input or context.                   |
+    | TASK_STATE_COMPLETED       | Final response or result of the agent's processing.                  |
+    | TASK_STATE_FAILED          | Error message indicating what went wrong during the task execution.  |
     """
-
     task_status: AgentTaskStatus
     content: str
+
+    def __init__(
+        self,
+        task_status: AgentTaskStatus | str,
+        content: str
+    ):
+        """Initialize AgentTaskResult with task status and content.
+
+        Args:
+            task_status (AgentTaskStatus | str): The status of the agent task.
+                Can be provided as an AgentTaskStatus enum or a string (deprecated).
+            content (str): The content of the agent's response or message.
+        
+        Note:
+            -   The `task_status` parameter can be provided as a string for backward compatibility,
+                but this usage is deprecated and will be removed in future versions.
+                It is recommended to use the `AgentTaskStatus` enum for better type safety and clarity.
+        """
+        if isinstance(task_status, str):
+            warning_msg = (
+                "`task_status` of type str is deprecated and won't be supported in future versions. "
+                "Please use the type AgentTaskStatus"
+            )
+            logger.warning(warning_msg)
+            if task_status == "working" or task_status == "2":
+                task_status = AgentTaskStatus.AGENT_TASK_STATUS_WORKING
+            elif task_status == "input_required" or task_status == "6":
+                task_status = AgentTaskStatus.AGENT_TASK_STATUS_INPUT_REQUIRED
+            elif task_status == "completed" or task_status == "3":
+                task_status = AgentTaskStatus.AGENT_TASK_STATUS_COMPLETED
+            elif task_status == "error" or task_status == "failed" or task_status == "4":
+                task_status = AgentTaskStatus.AGENT_TASK_STATUS_FAILED
+            else:
+                raise ValueError(f"unknown task_status '{task_status}'")
+        super().__init__(task_status=task_status, content=content)
 
     @classmethod
     def from_send_message_stream(
         cls,
-        item: ClientEvent | Message,
+        chunk: StreamResponse,
     ) -> Self:
-        if isinstance(item, Message):
-            first_part = item.parts[0].root
-            if first_part.kind != "text":
-                return cls(
-                    task_status="error",
-                    content=f"Unsupported message part kind in streaming response.",
-                )
-            return cls(
-                task_status="completed",
-                content=first_part.text,
-            )
-        _, event = item
-        if isinstance(event, TaskArtifactUpdateEvent):
-            first_part = event.artifact.parts[0].root
-            if first_part.kind != "text":
-                return cls(
-                    task_status="error",
-                    content=f"Unsupported artifact part kind in streaming response.",
-                )
-            return cls(
-                task_status="completed",
-                content=first_part.text,
-            )
-        elif isinstance(event, TaskStatusUpdateEvent):
-            state = event.status.state
-            full_message = event.status.message
-            first_part = full_message.parts[0].root
-            message = first_part.text if first_part.kind == "text" else ""
-            match state:
-                case TaskState.completed:
-                    returned_task_status = "completed"
-                case TaskState.input_required:
-                    returned_task_status = "input-required"
-                case TaskState.working:
-                    returned_task_status = "working"
-                case TaskState.failed:
-                    returned_task_status = "error"
-                case _:
-                    returned_task_status = "error"
-            return cls(
-                task_status=returned_task_status,
-                content=message,
-            )
-        else:
-            return cls(
-                task_status="error",
-                content=f"Received unexpected None event in streaming response.",
-            )
+        """Instantiate an AgentTaskResult from an A2A StreamResponse object.
+        Handles different types of StreamResponse as follows:
+        1. Message: Direct message response → (completed, content)
+        2. TaskArtifactUpdateEvent: Artifact update → (completed, content)
+        3. TaskStatusUpdateEvent: Status update → (TaskStatusUpdateEvent.state, content)
+        4. Task: Not supported yet → (working, undefined content)
+
+        The content is extracted with the `get_stream_response_text` utility function of A2A-SDK.
+
+        Args:
+            item (StreamResponse): Stream chunk generated by A2A-SDK send_message.
+            
+        Returns:
+            AgentTaskResult: as reported above.
+        """
+        content = get_stream_response_text(chunk)
+        status = TaskState.TASK_STATE_WORKING
+
+        if chunk.HasField('message') or chunk.HasField('artifact_update'):
+            status = TaskState.TASK_STATE_COMPLETED
+        elif chunk.HasField('status_update'):
+            status = chunk.status_update.status.state
+        elif chunk.HasField('task'):
+            match chunk.task.status.state:
+                case TaskState.TASK_STATE_SUBMITTED:
+                    status = TaskState.TASK_STATE_WORKING
+                case (
+                    TaskState.TASK_STATE_WORKING
+                    | TaskState.TASK_STATE_COMPLETED
+                    | TaskState.TASK_STATE_FAILED
+                    | TaskState.TASK_STATE_INPUT_REQUIRED
+                ) as s:
+                    status = s
+                case _ as s:
+                    status = TaskState.TASK_STATE_FAILED
+                    logger.error(f"'task' chunk has unexpected status '{s}'")
+
+        return cls(
+            task_status=status,
+            content=content,
+        )
+
+    def requires_input(self) -> bool:
+        """Returns true when task_status indicates that user input is required.
+        """
+        return self.task_status == TaskState.TASK_STATE_INPUT_REQUIRED
 
 class AgentState(BaseModel, ABC):
     """Abstract Pydantic model from which agent's state classes should inherit.
@@ -144,11 +191,11 @@ class AgentState(BaseModel, ABC):
         def to_task_result(self) -> AgentTaskResult:
             if self.answer is None:
                 return AgentTaskResult(
-                    task_status="working",
+                    task_status=AgentTaskStatus.AGENT_TASK_STATUS_WORKING,
                     content="Processing your request..."
                 )
             return AgentTaskResult(
-                task_status="completed",
+                task_status=AgentTaskStatus.AGENT_TASK_STATUS_COMPLETED,
                 content=self.answer
             )
     ```

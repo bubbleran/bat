@@ -1,32 +1,28 @@
 import asyncio
-import bisect
 import time
-import warnings
 from ..agent.config import AgentConfig
-from ..agent.state import AgentState
-from ..chat_model_client import UsageMetadata
+from ..agent.state import AgentState, AgentTaskResult, AgentTaskStatus
+from ..chat_model_client.metadata import MetadataCollector, TraceMetadata, UsageMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
-from a2a.client import ClientConfig, ClientEvent, ClientFactory
+from a2a.client import ClientConfig, create_client
 from a2a.types import (
     AgentCard,
+    AgentInterface,
     Message,
-    TaskArtifactUpdateEvent,
-    TaskStatusUpdateEvent,
+    SendMessageRequest,
+    StreamResponse,
     TaskState,
-    Part,
 )
-from a2a.utils.parts import get_text_parts, get_data_parts, get_file_parts
-from functools import reduce
+from google.protobuf.json_format import MessageToDict
 from httpx import AsyncClient
 from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
-from typing import Any, AsyncIterable, Callable, Dict, List, Literal, Optional, Sequence, Type
+from typing import Any, AsyncIterable, Callable, Dict, Literal, Optional, Type
 from typing_extensions import override
 
 
 logger = create_logger(__name__, level="debug")
-USAGE_METADATA_KEY = "usage"
 
 class CallAgentNode(PrebuiltWorkflow):
     """CallAgentNode implements agent-to-agent communication using the A2A protocol.
@@ -42,31 +38,6 @@ class CallAgentNode(PrebuiltWorkflow):
     - The target agent completes its task
     - The target agent requests user input
     - An error occurs
-
-    Args
-    -------
-        config (AgentConfig): Configuration for the agent, including checkpointing options.
-        StateType (Type[AgentState]): The AgentState schema used in the loop.
-        loop_name (str): The name of this workflow loop (e.g., "domain_agent_loop").
-        agent_name (str): The name of the target agent to call (e.g., "SMO Agent").
-        build_message (Callable[[RunnableConfig, str], Message]): Callback function to build
-            the request message from the input text.
-        input (str, optional): A key pointing to a string in the state. Defaults to "question".
-            The value at this key is used as input to send to the target agent.
-        output (str, optional): A key pointing to a string in the state. Defaults to "answer".
-            The value at this key is updated with responses from the target agent.
-        global_status (str, optional): A key pointing to a string in the state. Defaults to "status".
-            The value at this key is updated with the overall status of the communication.
-        agent_input_required (str, optional): A key pointing to a bool in the state. Defaults to "agent_input".
-            The value at this key is set to True when the target agent requests user input.
-        agent_response_status (str, optional): A key pointing to a string in the state. Defaults to "agent_response_status".
-            The value at this key is updated with the status from the target agent.
-        agent_response_content (str, optional): A key pointing to a string in the state. Defaults to "agent_response_content".
-            The value at this key is updated with the content from the target agent.
-        agent_status (str, optional): **DEPRECATED** Use agent_response_status instead.
-        agent_content (str, optional): **DEPRECATED** Use agent_response_content instead.
-        input_required (str, optional): **DEPRECATED** This parameter is no longer used and will be dropped in future versions.
-        recursion_limit (int, optional): Maximum recursion depth for nested calls. Defaults to 50.
 
     Example
     -------
@@ -100,12 +71,12 @@ class CallAgentNode(PrebuiltWorkflow):
                 StateType=MyAgentState,
                 loop_name="domain_agent_loop",
                 agent_name="SMO Agent",
-                input="agent_input_text",
-                output="agent_output_text",
-                global_status="agent_status",
-                agent_input_required="agent_input_required",
-                agent_response_status="agent_response_status",
-                agent_response_content="agent_response_content",
+                input_key="agent_input_text",
+                output_key="agent_output_text",
+                status_key="agent_status",
+                agent_input_required_key="agent_input_required",
+                agent_response_status_key="agent_response_status",
+                agent_response_content_key="agent_response_content",
                 build_message=build_agent_message,
             )
             ...
@@ -121,16 +92,12 @@ class CallAgentNode(PrebuiltWorkflow):
         agent_name: str,
         build_message: Callable[[RunnableConfig, str], Message],
         *,
-        input: str = "question",
-        output: str = "answer",
-        global_status: str = "status",
-        agent_input_required: str = "agent_input",
-        agent_response_status: Optional[str] = None,
-        agent_response_content: Optional[str] = None,
-        # Deprecated parameters
-        agent_status: Optional[str] = None,
-        agent_content: Optional[str] = None,
-        input_required: Optional[str] = None,
+        input_key: str = "input",
+        output_key: str = "output",
+        status_key: str = "status",
+        agent_input_required_key: str = "agent_input",
+        agent_response_status_key: str = "agent_response_status",
+        agent_response_content_key: str = "agent_response_content",
         recursion_limit: int = 50,
     ) -> None:
         """Initialize the CallAgentNode workflow with the given configuration and parameters.
@@ -144,56 +111,34 @@ class CallAgentNode(PrebuiltWorkflow):
             build_message (Callable[[RunnableConfig, str], Message]): Callback function to build
                 the request message from the input text. Should accept a RunnableConfig and a
                 string, and return an A2A Message object.
-            input (str, optional): A key pointing to a string in the state. Defaults to "question".
+            input_key (str, optional): A key pointing to a string in the state. Defaults to "input".
                 The value at this key is used as input to send to the target agent.
-            output (str, optional): A key pointing to a string in the state. Defaults to "answer".
+            output_key (str, optional): A key pointing to a string in the state. Defaults to "output".
                 The value at this key is updated with responses from the target agent.
-            global_status (str, optional): A key pointing to a string in the state. Defaults to "status".
+            status_key (str, optional): A key pointing to a string in the state. Defaults to "status".
                 The value at this key is updated with the overall status of the communication.
                 Useful to display the current operation to the user.
-            agent_input_required (str, optional): A key pointing to a bool in the state. Defaults to "agent_input".
+            agent_input_required_key (str, optional): A key pointing to a bool in the state. Defaults to "agent_input".
                 The value at this key is set to True when the target agent requests user input.
-            agent_response_status (str, optional): A key pointing to a string in the state. Defaults to "agent_response_status".
+            agent_response_status_key (str, optional): A key pointing to a string in the state. Defaults to "agent_response_status".
                 The value at this key is updated with the status from the target agent.
-            agent_response_content (str, optional): A key pointing to a string in the state. Defaults to "agent_response_content".
+            agent_response_content_key (str, optional): A key pointing to a string in the state. Defaults to "agent_response_content".
                 The value at this key is updated with the content from the target agent.
-            agent_status (str, optional): **DEPRECATED** Use agent_response_status instead.
-            agent_content (str, optional): **DEPRECATED** Use agent_response_content instead.
-            input_required (str, optional): **DEPRECATED** This parameter is no longer used.
             recursion_limit (int, optional): Maximum recursion depth for nested calls. Defaults to 50.
                 This prevents infinite loops in agent-to-agent communication.
         """
-        # Handle deprecated parameters
-        if agent_status is not None:
-            warnings.warn(
-                "'agent_status' is deprecated, use 'agent_response_status' instead",
-                DeprecationWarning,
-                stacklevel=2
-            )
-            if agent_response_status is None:
-                agent_response_status = agent_status
-        
-        if agent_content is not None:
-            warnings.warn(
-                "'agent_content' is deprecated, use 'agent_response_content' instead",
-                DeprecationWarning,
-                stacklevel=2
-            )
-            if agent_response_content is None:
-                agent_response_content = agent_content
-        
-        if input_required is not None:
-            warnings.warn(
-                "'input_required' parameter is deprecated and will be ignored",
-                DeprecationWarning,
-                stacklevel=2
-            )
-        
-        # Set defaults if not provided
-        if agent_response_status is None:
-            agent_response_status = "agent_response_status"
-        if agent_response_content is None:
-            agent_response_content = "agent_response_content"
+        keys = [
+            input_key,
+            output_key,
+            status_key,
+            agent_input_required_key,
+            agent_response_content_key,
+            agent_response_status_key,
+        ]
+        for key in keys:
+            if key not in StateType.model_fields:
+                logger.error(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
+                raise KeyError(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
         
         # Initialize PrebuiltWorkflow 
         super().__init__(
@@ -202,16 +147,16 @@ class CallAgentNode(PrebuiltWorkflow):
             loop_name=loop_name,
             agent_name=agent_name,
             build_message=build_message,
-            input=input,
-            output=output,
-            global_status=global_status,
-            agent_input_required=agent_input_required,
-            agent_response_status=agent_response_status,
-            agent_response_content=agent_response_content,
+            input=input_key,
+            output=output_key,
+            global_status=status_key,
+            agent_input_required=agent_input_required_key,
+            agent_response_status=agent_response_status_key,
+            agent_response_content=agent_response_content_key,
             recursion_limit=recursion_limit,
         )
-        
-        
+
+
     def _router(self, state: Type[AgentState]) -> Literal["consume_stream", "cleanup"]:
         """Route between consuming more stream data or cleaning up.
         
@@ -231,7 +176,7 @@ class CallAgentNode(PrebuiltWorkflow):
         needs_input_val = bool(getattr(state, self.agent_input_required))
 
         return "cleanup" if stream_done_val or needs_input_val else "consume_stream"
-    
+
     @override
     def _setup(
         self,
@@ -241,7 +186,7 @@ class CallAgentNode(PrebuiltWorkflow):
         *,
         input: str = "question",
         output: str = "answer",
-        global_status: str = "status",
+        global_status: Optional[str] = None,
         agent_input_required: str = "agent_input",
         agent_response_status: str = "agent_response_status",
         agent_response_content: str = "agent_response_content",
@@ -282,9 +227,9 @@ class CallAgentNode(PrebuiltWorkflow):
         self.loop_name = loop_name
         self._agent_card = None  
         self.stream_done: bool = False
-        self._queue: Optional[asyncio.Queue[Optional[tuple[str, str]]]] = None
+        self._queue: Optional[asyncio.Queue[Optional[AgentTaskResult]]] = None
         self._stream_task: Optional[asyncio.Task[None]] = None
-        self._usage_metadatas: List[tuple[float,UsageMetadata]] = []
+        self._metadata_collector = MetadataCollector()
 
         self.graph_builder.add_node("call_agent", self._call_agent)
         self.graph_builder.add_node("consume_stream", self._consume_stream)
@@ -355,10 +300,16 @@ class CallAgentNode(PrebuiltWorkflow):
         if self._agent_card is None or self._agent_card.name != self._agent_name:
             cards = await self.agent_config.list_agent_cards([self._agent_name])
             self._agent_card = cards[self._agent_name]
-            self._agent_card.url = url
-            logger.debug(f"Set agent card URL to {url} for agent {self._agent_card.name}")
-        
-            
+            if self._agent_card.supported_interfaces:
+                self._agent_card.supported_interfaces[0].url = url
+            else:
+                self._agent_card.supported_interfaces.append(AgentInterface(
+                    url=url,
+                    protocol_binding="JSONRPC",
+                    protocol_version="2.0",
+                ))
+            logger.debug(f"Node `{self.loop_name}.call_agent`: Set agent card URL to {url} for agent {self._agent_card.name}")
+
         # Reset dynamic fields
         self.stream_done = False
         setattr(state, self.agent_response_status, None)
@@ -373,7 +324,8 @@ class CallAgentNode(PrebuiltWorkflow):
         request = self._build_message(config, text)
 
         # Update global state
-        setattr(state, self.global_status, "working")
+        if self.global_status:
+            setattr(state, self.global_status, AgentTaskStatus.AGENT_TASK_STATUS_WORKING)
         setattr(state, self.output, f"Forwarding request to {self.loop_name}…")
 
         # Start streaming worker
@@ -411,30 +363,28 @@ class CallAgentNode(PrebuiltWorkflow):
             yield state
             return
 
-        item = await q.get()
+        atr = await q.get()
 
         # Sentinel: end of stream
-        if item is None:
+        if atr is None:
             self.stream_done = True
             await self._stop_stream()
             yield state
             return
 
-        status, content = item
-
         # Update agent-specific fields
-        setattr(state, self.agent_response_status, status)
-        setattr(state, self.agent_response_content, content)
+        setattr(state, self.agent_response_status, atr.task_status)
+        setattr(state, self.agent_response_content, atr.content)
 
         # Update global fields
-        setattr(state, self.global_status, status)
-        if content:
-            setattr(state, self.output, content)
+        if self.global_status:
+            setattr(state, self.global_status, atr.task_status)
+        if atr.content:
+            setattr(state, self.output, atr.content)
 
-        needs_input = (status == "input-required")
-        setattr(state, self.agent_input_required, needs_input)
+        setattr(state, self.agent_input_required, atr.requires_input())
 
-        if needs_input:
+        if atr.requires_input():
             # If user input is required, stop the stream
             self.stream_done = True
             await self._stop_stream()
@@ -492,103 +442,36 @@ class CallAgentNode(PrebuiltWorkflow):
         async def _worker():
             """Background worker that consumes agent stream and pushes items to queue."""
             try:
-                async for item in self.consume_agent_stream(
+                async for chunk in self.consume_agent_stream(
                     agent_card=self._agent_card,
                     message=request,
                 ):
-                    status, content = self._map_stream_item(item)
-                    status = status.value
-                    await q.put((status, content))
-                    logger.debug(f"Worker: put {(status, content)}")
-                    if status in ("completed", "error", "input-required"):
+                    atr = AgentTaskResult.from_send_message_stream(chunk)
+                    await q.put(atr)
+                    logger.debug(f"Worker: put {(atr.task_status, atr.content)}")
+                    if atr.task_status in [
+                        TaskState.TASK_STATE_COMPLETED,
+                        TaskState.TASK_STATE_INPUT_REQUIRED,
+                        TaskState.TASK_STATE_FAILED,
+                    ]:
                         break
-
             except Exception as e:
-                await q.put(("error", f"AgentLoop stream error: {e}"))
-
+                atr = AgentTaskResult(
+                    task_status=TaskState.TASK_STATE_FAILED,
+                    content=f"CallAgentNode stream error: {e}",
+                )
+                await q.put(atr)
             finally:
                 # Sentinel: end of stream
                 await q.put(None)
 
         self._stream_task = asyncio.create_task(_worker())
 
-
-
-    @staticmethod
-    def _parts_to_text(parts: Sequence[Part] | None) -> str:
-        """Convert A2A message parts to a text string.
-        
-        This utility method extracts text content from A2A message parts, which can
-        contain different types of content (text, data, files). It prioritizes:
-        1. Text parts: Joined with double newlines
-        2. Data parts: Converted to string representation
-        3. File parts: Summarized as "Length: N files"
-        
-        Args:
-            parts (Sequence[Part] | None): The message parts to convert.
-            
-        Returns:
-            str: The extracted text content, or an empty string if no parts are provided.
-        """
-        if not parts:
-            return ""
-        texts = get_text_parts(list(parts))
-        if texts:
-            return "\n\n".join(texts)
-        datas = get_data_parts(list(parts))
-        if datas:
-            return str(datas)
-        files = get_file_parts(list(parts))
-        if files:
-            return f"Length: {len(files)} files"
-        return ""
-
-
-    def _map_stream_item(self, item: ClientEvent | Message) -> tuple[TaskState, str]:
-        """Map a stream item to (status, content) tuple.
-        Handles different types of stream items:
-        1. Message: Direct message response → (completed, message_text)
-        2. TaskArtifactUpdateEvent: Artifact update → (completed, artifact_text)
-        3. TaskStatusUpdateEvent: Status update → (state, status_message)
-        4. Other events: Default → (working, empty_string)
-        
-        The extracted status and content are used to update the workflow state
-        and provide feedback to the user.
-        
-        Args:
-            item (ClientEvent | Message): Stream item from the agent, either a task
-                update event or a direct message.
-            
-        Returns:
-            tuple[TaskState, str]: A tuple containing the task state and the extracted
-                text content.
-        """
-        if (isinstance(item, Message)):
-            return TaskState.completed, CallAgentNode._parts_to_text(item.parts)
-        
-        _, update = item
-
-        if isinstance(update, TaskArtifactUpdateEvent):
-            artifact = update.artifact
-            msg = CallAgentNode._parts_to_text(artifact.parts)
-            return TaskState.completed, msg
-
-        if isinstance(update, TaskStatusUpdateEvent):
-            status_obj = update.status
-            message = status_obj.message
-            msg = CallAgentNode._parts_to_text(message.parts)
-            st = getattr(status_obj, "state", None)
-
-            return st, msg if st else (TaskState.working, msg)
-
-        return TaskState.working, ""
-
-
     async def consume_agent_stream(
         self,
         agent_card: AgentCard,
         message: Message,
-    ) -> AsyncIterable[ClientEvent | Message]:
+    ) -> AsyncIterable[StreamResponse]:
         """Consume the agent stream from another A2A agent.
         The following operations are performed:
         1. Creates an A2A client configured for streaming (120s timeout)
@@ -606,40 +489,46 @@ class CallAgentNode(PrebuiltWorkflow):
             message (Message): The A2A message to send to the agent.
         
         Yields:
-            ClientEvent | Message: Stream items from the agent, including status
+            StreamResponse: Stream items from the agent, including status
                 updates, artifacts, and final messages.
                 
         Raises:
             Exception: If the streaming connection fails or encounters an error.
         """
         TIMEOUT = 120.0  # seconds
-        client_factory = ClientFactory(
-            ClientConfig(
+        client = await create_client(
+            agent=agent_card,
+            client_config=ClientConfig(
                 httpx_client=AsyncClient(timeout=TIMEOUT),
                 streaming=True,
             )
         )
-        client = client_factory.create(card=agent_card)
-        stream = client.send_message(request=message)
+        stream = client.send_message(SendMessageRequest(message=message))
         try:
-            async for item in stream:
-                # Track usage metadata
-                t=time.time()
-                if isinstance(item, Message):
-                    metadata = item.metadata
+            async for chunk in stream:
+                t = time.time()
+                if chunk.HasField('message'):
+                    metadata = chunk.message.metadata
+                elif chunk.HasField('status_update'):
+                    metadata = chunk.status_update.metadata
+                elif chunk.HasField('artifact_update'):
+                    metadata = chunk.artifact_update.metadata
+                elif chunk.HasField('task'):
+                    metadata = chunk.task.metadata
                 else:
-                    event = item[1]
-                    metadata = event.metadata if event else None
+                    metadata = None
 
-                if metadata and USAGE_METADATA_KEY in metadata:
-                    usage = metadata[USAGE_METADATA_KEY]
-                    self._usage_metadatas.append((t, UsageMetadata.model_validate(usage)))
-                yield item
+                if metadata:
+                    self._metadata_collector.observe_metadata(
+                        MessageToDict(metadata),
+                        timestamp=t,
+                    )
+                yield chunk
 
         except Exception as e:
             logger.error(f"consume_agent_stream: Streaming failed: {e}")
             raise
-    
+
     def get_usage_metadata(
         self,
         from_timestamp: Optional[float] = None,
@@ -650,19 +539,24 @@ class CallAgentNode(PrebuiltWorkflow):
         Args:
             from_timestamp (Optional[float]): If provided, only usage metadata after this timestamp will be considered.
                 If None, all usage metadata will be considered.
-        
+
         Returns:
             UsageMetadata: The aggregated usage metadata from all stream events.
         """
-        # lower bound binary search to find the first usage metadata after the timestamp
-        i = bisect.bisect_left(
-            self._usage_metadatas,
-            0 if from_timestamp is None else from_timestamp,
-            key=lambda x: x[0]
-        )
-        # call reduce to aggregate usage metadata
-        return reduce(
-            lambda acc, metadata: acc + metadata[1],
-            self._usage_metadatas[i:],
-            UsageMetadata(),
-        )
+        return self._metadata_collector.get_usage_metadata(from_timestamp=from_timestamp)
+
+    def get_trace_metadata(
+        self,
+        from_timestamp: Optional[float] = None,
+    ) -> TraceMetadata:
+        """Get aggregated trace metadata (tool calls) forwarded from the called agent.
+
+        Args:
+            from_timestamp (Optional[float]): If provided, only entries after this
+                timestamp are returned.
+
+        Returns:
+            TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
+                empty when no tool-call trace was forwarded.
+        """
+        return self._metadata_collector.get_trace_metadata(from_timestamp=from_timestamp)

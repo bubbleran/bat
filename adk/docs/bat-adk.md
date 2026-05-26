@@ -2,9 +2,9 @@
 
 ## Introduction
 
-The **BR-ADK (BubbleRAN Agent Development Kit)** is a Python SDK built on top of [LangGraph](https://www.langchain.com/langgraph) that helps you build intelligent AI agents with minimal effort. It natively supports two standard protocols:
+**BAT-ADK (BubbleRAN Agent Development Kit)** is a Python SDK built on top of [LangGraph](https://www.langchain.com/langgraph) that helps you build intelligent AI agents with minimal effort. It natively supports two standard protocols:
 
-- **A2A (Agent-to-Agent)**: for communication between agents  
+- **A2A (Agent-to-Agent)**: for JSONRPC 2.0 communication between agents (A2A version >= 1.0)
 - **MCP (Model Context Protocol)**: for accessing external tools, prompts, and contextual data
 
 ### Protocols at a Glance
@@ -15,14 +15,14 @@ The **BR-ADK (BubbleRAN Agent Development Kit)** is a Python SDK built on top of
 
 ### Design Philosophy
 
-BR-ADK is designed to let you focus on **agent behavior and workflows**, not protocol details.  
+BAT-ADK is designed to let you focus on **agent behavior and workflows**, not protocol details.  
 You define your agent’s logic using graph-based workflows, while the SDK handles communication, protocol compliance, and integration under the hood.
 
 
 
 ## Preliminary Concepts
 
-Before using **BR-ADK**, you should be familiar with a few core ideas:
+Before using **BAT-ADK**, you should be familiar with a few core ideas:
 
 - **LangGraph basics**  
   Understand how to define a graph, manage graph state, use streaming, and handle interrupts for **Human-in-the-Loop (HITL)** interactions.
@@ -37,7 +37,7 @@ Before using **BR-ADK**, you should be familiar with a few core ideas:
 
 ## Agent Application
 
-An **Agent Application** is the main object for building agents in **BR-ADK**. It is an instance of the `AgentApplication` class and requires two parameters:
+An **Agent Application** is the entry point object for agents built with **BAT-ADK**. It is an instance of the `AgentApplication` class and requires two parameters:
 
 1. **Graph type** – a class extending `AgentGraph`  
 2. **State type** – a class extending `AgentState`
@@ -47,12 +47,13 @@ An **Agent Application** is the main object for building agents in **BR-ADK**. I
 When you create an `AgentApplication`, it automatically:
 
 - Loads the **Agent Card** from `./agent.json` and the **Agent Configuration** from `./config.yaml`
+  - When loading the Agent Card, it expects the `supportedInterfaces` field to be empty, as it will configure it with the endpoint specified in the apposite environment variables (URL and PORT).
 - Instantiates the **AgentGraph**
-- Sets up the **AgentExecutor**, request handler, and a **Starlette** web application
+- Sets up the **AgentExecutor**, Request Handler, and a **Starlette** web application
 
 ### Running the Agent Application
 
-After creation, call the `run()` method to start the Starlette app and expose the **A2A Server**.  
+After creation, call the `run()` method of the Agent Application to start the **A2A Server**.  
 
 - Use `run(expose_mcp=True)` to also start an **MCP Server**, which provides two tools:
   - `get_agent_card()` – returns the **Agent Card** as a JSON string  
@@ -97,7 +98,7 @@ These methods help you integrate external resources directly into your agent’s
 - In the configuration, you assign **a name** and a **URL** for each MCP Server or Agent.  
 - **Always use the Official name** of the server or agent in your agent logic, not the name you assigned in the config.  
 - The SDK automatically maps your assigned names to the Official names during validation.  
-- Using Official names ensures your agent will work correctly when deployed with tools like the **AIFabric controller** of the **Odin Operator**.
+- Using Official names ensures your agent will work correctly when deployed with tools like the **AIFabric controller** of the **Orama Operator**.
 
 **Example:**  
 ```yaml
@@ -127,7 +128,7 @@ The **Agent Executor** handles task execution and event publishing for an agent.
 
 ## Agent Graph
 
-An **AgentGraph** defines the core logic of an agent using the **LangGraph** library. Agents built with BR-ADK stream their responses as **AgentTaskResult** objects, produced after executing each node in the graph.
+An **AgentGraph** defines the core logic of an agent using the **LangGraph** library. Agents built with BAT-ADK stream their responses as **AgentTaskResult** objects, produced after executing each node in the graph.
 
 ### Creating a Custom Graph
 
@@ -139,7 +140,7 @@ You **cannot instantiate `AgentGraph` directly**. Instead:
    - Instantiate any prebuilt workflows.
    - Define the graph’s nodes and edges via the `graph_builder` property.
 
-After `setup` completes, the **AgentGraph** is compiled by the BR-ADK (you don't need to do it manually) and ready to use.
+After `setup` completes, the **AgentGraph** is compiled by the BAT-ADK (you don't need to do it manually) and ready to use.
 
 ### Streaming Responses
 
@@ -197,7 +198,10 @@ The configuration includes:
 - Optional LLM endpoint URL  
 - Optional client name (developer-defined identifier)
 
+### Structured Output
+A **ChatModelClient** can be configured to provide a Pydantic Model as output of the `invoke` method by setting the `output_schema` parameter in the **ChatModelClient** constructor.
 
+Note: this feature is currently not supported when using the ChatModelClient with tools or in a ReAct Loop. Support will be provided in the near future.
 
 ## Prebuilt Workflows
 
@@ -209,7 +213,7 @@ They help you encapsulate common or complex logic into reusable building blocks,
 
 ### Creating a Prebuilt Workflow
 
-BR-ADK provides the abstract `PrebuiltWorkflow` class. To create one, you must extend it and implement:
+BAT-ADK provides the abstract `PrebuiltWorkflow` class. To create one, you must extend it and implement:
 
 - `_setup()`  
   - Similar to `AgentGraph.setup`  
