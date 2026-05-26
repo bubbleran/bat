@@ -7,7 +7,6 @@ from ..chat_model_client.metadata import MetadataCollector, TraceMetadata, Usage
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
 from a2a.client import ClientConfig, create_client
-from a2a.helpers import get_stream_response_text
 from a2a.types import (
     AgentCard,
     AgentInterface,
