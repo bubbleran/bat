@@ -1,7 +1,7 @@
-import bisect
 import time
 from ..logging import create_logger
 from .config import ChatModelClientConfig
+from .metadata import MetadataCollector, UsageMetadata
 from functools import reduce
 from langchain_core.messages import (
     AIMessage,
@@ -13,7 +13,7 @@ from langchain_core.messages import (
 from langchain.chat_models.base import BaseChatModel
 from langchain_core.tools import BaseTool
 from langchain.chat_models import init_chat_model
-from pydantic import BaseModel, ValidationError, model_validator
+from pydantic import BaseModel, ValidationError
 from typing import (
     Any,
     Callable,
@@ -24,80 +24,8 @@ from typing import (
     Tuple,
     Union,
 )
-from typing_extensions import Self
 
 logger = create_logger(__name__, "debug")
-
-class UsageMetadata(BaseModel):
-    """Metadata about the usage of the chat model.
-
-    Note: Defining a ChatModelClient as a property of an object deriving the `AgentGraph` class
-    allows to automatically collect and aggregate usage metadata from the chat model
-    and return it as part of the streaming response metadata.
-
-    Attributes
-    -------
-        input_tokens (int): Number of input tokens used in the request.
-        output_tokens (int): Number of output tokens generated in the response.
-        total_tokens (int): Total number of tokens used (input + output).
-        inference_time (float): Time taken for the inference in seconds.
-    """
-    input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int = 0
-    inference_time: float = 0.0
-
-    def __add__(
-        self,
-        other: Self | Dict[str, int]
-    ) -> Self:
-        """Add two UsageMetadata instances."""
-        if isinstance(other, Dict):
-            return UsageMetadata(
-                input_tokens=self.input_tokens + other.get("input_tokens", 0),
-                output_tokens=self.output_tokens + other.get("output_tokens", 0),
-                total_tokens=self.total_tokens + other.get("total_tokens", 0),
-                inference_time=self.inference_time + other.get("inference_time", 0.0),
-            )
-        return UsageMetadata(
-            input_tokens=self.input_tokens + other.input_tokens,
-            output_tokens=self.output_tokens + other.output_tokens,
-            total_tokens=self.total_tokens + other.total_tokens,
-            inference_time=self.inference_time + other.inference_time,
-        )
-    
-    def __sub__(
-        self,
-        other: Self | Dict
-    ) -> Self:
-        """Subtract two UsageMetadata instances."""
-        if isinstance(other, Dict):
-            return UsageMetadata(
-                input_tokens=self.input_tokens - other.get("input_tokens", 0),
-                output_tokens=self.output_tokens - other.get("output_tokens", 0),
-                total_tokens=self.total_tokens - other.get("total_tokens", 0),
-                inference_time=self.inference_time - other.get("inference_time", 0.0),
-            )
-        return UsageMetadata(
-            input_tokens=self.input_tokens - other.input_tokens,
-            output_tokens=self.output_tokens - other.output_tokens,
-            total_tokens=self.total_tokens - other.total_tokens,
-            inference_time=self.inference_time - other.inference_time,
-        )
-    
-    @model_validator(mode="after")
-    def check_non_negative(
-        self
-    ) -> Self:
-        if self.input_tokens < 0:
-            raise ValueError("input_tokens count should be non-negative.")
-        if self.output_tokens < 0:
-            raise ValueError("output_tokens count should be non-negative.")
-        if self.total_tokens < 0:
-            raise ValueError("total_tokens count should be non-negative.")
-        if self.inference_time < 0:
-            raise ValueError("inference_time should be non-negative.")
-        return self
 
 class ChatModelClient:
     """Client that facilitates interaction with a chat model.
@@ -177,8 +105,8 @@ class ChatModelClient:
         else:
             self.output_schema = AIMessage
 
-        self.usage_metadatas = []
-        
+        self._metadata_collector = MetadataCollector()
+
     @property
     def chat_model(self) -> BaseChatModel:
         """The chat model instance configured with the provided model and tools."""
@@ -331,7 +259,7 @@ class ChatModelClient:
         if not r_for_history.usage_metadata:
             logger.warning("Chat model did not return usage metadata.")
         usage_metadata = {**(r_for_history.usage_metadata or {}) | {'inference_time': t_end - t_start}}
-        self.usage_metadatas.append((t_start, UsageMetadata.model_validate(usage_metadata)))
+        self._metadata_collector.add_usage(usage_metadata, timestamp=t_start)
 
         # Update the history
         if history is not None:
@@ -380,9 +308,9 @@ class ChatModelClient:
             usage_metadatas,
             UsageMetadata(inference_time=t_end - t_start),
         )
-        self.usage_metadatas.append((t_start, aggregated_metadata))
+        self._metadata_collector.add_usage(aggregated_metadata, timestamp=t_start)
         return responses
-    
+
     def get_usage_metadata(
         self,
         from_timestamp: Optional[float] = None,
@@ -393,19 +321,8 @@ class ChatModelClient:
         Args:
             from_timestamp (Optional[float]): If provided, only usage metadata after this timestamp will be considered.
                 If None, all usage metadata will be considered.
-        
+
         Returns:
             UsageMetadata: The aggregated usage metadata.
         """
-        # lower bound binary search to find the first usage metadata after the timestamp
-        i = bisect.bisect_left(
-            self.usage_metadatas,
-            0 if from_timestamp is None else from_timestamp,
-            key=lambda x: x[0]
-        )
-        # call reduce to aggregate usage metadata
-        return reduce(
-            lambda acc, metadata: acc + metadata[1],
-            self.usage_metadatas[i:],
-            UsageMetadata(),
-        )
+        return self._metadata_collector.get_usage_metadata(from_timestamp=from_timestamp)

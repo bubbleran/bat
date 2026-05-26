@@ -54,9 +54,12 @@ class MinimalAgentExecutor(AgentExecutor):
             async for item in self.agent_graph.astream(query, config):
                 if item != prev_item:
                     if keep_streaming:
-                        usage_metadata = {'usage': self.agent_graph._get_usage_metadata(ts).model_dump()}
+                        metadata: Dict[str, Any] = {
+                            'usage': self.agent_graph._get_usage_metadata(ts).model_dump(),
+                            'trace': self.agent_graph._get_trace_metadata(ts).model_dump(),
+                        }
                         ts = time.time()
-                        keep_streaming = await self._process_task_result(task, item, updater, usage_metadata)
+                        keep_streaming = await self._process_task_result(task, item, updater, metadata)
                     else:
                         logger.warning("Artifact has been updated: ignoring additional streamed item.")
                 prev_item = item
