@@ -77,13 +77,13 @@ class AgentTaskResult(BaseModel):
                 "Please use the type AgentTaskStatus"
             )
             logger.warning(warning_msg)
-            if task_status == "working":
+            if task_status == "working" or task_status == "2":
                 task_status = AgentTaskStatus.AGENT_TASK_STATUS_WORKING
-            elif task_status == "input_required":
+            elif task_status == "input_required" or task_status == "6":
                 task_status = AgentTaskStatus.AGENT_TASK_STATUS_INPUT_REQUIRED
-            elif task_status == "completed":
+            elif task_status == "completed" or task_status == "3":
                 task_status = AgentTaskStatus.AGENT_TASK_STATUS_COMPLETED
-            elif task_status == "error" or task_status == "failed":
+            elif task_status == "error" or task_status == "failed" or task_status == "4":
                 task_status = AgentTaskStatus.AGENT_TASK_STATUS_FAILED
             else:
                 raise ValueError(f"unknown task_status '{task_status}'")
