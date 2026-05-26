@@ -115,11 +115,8 @@ class ReActLoop(PrebuiltWorkflow):
         ]
         for key in keys:
             if key not in StateType.model_fields:
-                warnings.warn(
-                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'",
-                    Warning,
-                    stacklevel=2,
-                )
+                logger.error(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
+                raise KeyError(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
 
         super().__init__(
             config=config,
