@@ -2,7 +2,7 @@ import warnings
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState
 from ..chat_model_client import ChatModelClient
-from ..chat_model_client.metadata import MetadataCollector
+from ..chat_model_client.metadata import MetadataCollector, TraceMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
 from langgraph.graph import START, END
@@ -310,7 +310,7 @@ class ReActLoop(PrebuiltWorkflow):
     def get_trace_metadata(
         self,
         from_timestamp: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> TraceMetadata:
         """Get aggregated trace metadata (tool calls) collected during this loop.
 
         Args:
@@ -318,7 +318,7 @@ class ReActLoop(PrebuiltWorkflow):
                 timestamp are returned.
 
         Returns:
-            Dict[str, Any]: Trace metadata in the shape {"tool_calls": [...]}.
-                Returns an empty dict when no tool calls have been recorded.
+            TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
+                empty when no tool calls have been recorded.
         """
         return self._metadata_collector.get_trace_metadata(from_timestamp=from_timestamp)

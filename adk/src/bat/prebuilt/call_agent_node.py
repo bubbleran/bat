@@ -3,7 +3,7 @@ import time
 import warnings
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState, AgentTaskResult, AgentTaskStatus
-from ..chat_model_client.metadata import MetadataCollector, UsageMetadata
+from ..chat_model_client.metadata import MetadataCollector, TraceMetadata, UsageMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
 from a2a.client import ClientConfig, create_client
@@ -634,7 +634,7 @@ class CallAgentNode(PrebuiltWorkflow):
                 yield chunk
 
         except Exception as e:
-            logger.exception(f"consume_agent_stream: Streaming failed: {type(e).__name__}: {e!r}")
+            logger.error(f"consume_agent_stream: Streaming failed: {e}")
             raise
 
     def get_usage_metadata(
@@ -656,7 +656,7 @@ class CallAgentNode(PrebuiltWorkflow):
     def get_trace_metadata(
         self,
         from_timestamp: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> TraceMetadata:
         """Get aggregated trace metadata (tool calls) forwarded from the called agent.
 
         Args:
@@ -664,7 +664,7 @@ class CallAgentNode(PrebuiltWorkflow):
                 timestamp are returned.
 
         Returns:
-            Dict[str, Any]: Trace metadata in the shape {"tool_calls": [...]}.
-                Returns an empty dict when no tool-call trace was forwarded.
+            TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
+                empty when no tool-call trace was forwarded.
         """
         return self._metadata_collector.get_trace_metadata(from_timestamp=from_timestamp)
