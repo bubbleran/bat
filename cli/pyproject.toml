@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "CLI tool to interact with BAT agents"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.12.3",
-    "bat-adk>=2026.4.23",
+    "bat-adk>=2026.06rc1",
+    "bat-adk[openai]",
     "a2a-sdk>=1.0.0",
     "python-dotenv>=1.0.1",
     "typing-extensions>=4.12.0",
@@ -30,6 +31,7 @@ bat = "cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+py-modules = ["cli", "image_defaults"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -42,9 +44,6 @@ create = [
     "templates/agent/src/llm_clients/*",
     "templates/agent/tests/*",
 ]
-
-[tool.uv.sources]
-bat-adk = { path = "../../bat/adk", editable = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

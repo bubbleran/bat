@@ -5,11 +5,9 @@ from langchain_core.messages import HumanMessage
 class __CLASS_NAME__(ChatModelClient):
 
     SYSTEM_INSTRUCTIONS = (
-        "INSERT INSTRUCTIONS HERE"
+        TODO: "insert instructions here"
     )
-    USER_INSTRUCTIONS = (
-        "USER QUERY: {message}"
-    )
+    
 
     def __init__(
         self,
@@ -19,18 +17,14 @@ class __CLASS_NAME__(ChatModelClient):
             system_instructions=self.SYSTEM_INSTRUCTIONS,
             chat_model_config=ChatModelClientConfig.from_env(client_name="__CLASS_NAME__"),
             tools=tools,
+            # output_schema: YourCustomOutputSchema
         )
 
-    def invoke(
-        self,
-        query: str,
-    ) -> str:
-        """Format the query based on what the client needs to do."""
-        input_message = HumanMessage(
-            content=self.USER_INSTRUCTIONS.format(
-                message=query,
-            )
-        )
-        response = super().invoke(input_message)
-        response_content = response.content.strip()
-        return response_content
+#    def invoke(
+#        self,
+#        query: str,
+#    ) -> str:
+#        """Format the query based on what the client needs to do."""
+#        response = super().invoke(input_message)
+#        TODO: implement cast logic to string
+#        return ...

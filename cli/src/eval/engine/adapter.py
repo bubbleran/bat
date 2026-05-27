@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import time
-import uuid
 from typing import Any
 
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
@@ -11,7 +10,7 @@ from a2a.helpers import (
     get_message_text,
     new_text_message,
 )
-from a2a.types import Role, StreamResponse, TaskState
+from a2a.types import Role, SendMessageRequest, StreamResponse, TaskState
 from google.protobuf.json_format import MessageToDict
 from httpx import AsyncClient
 
@@ -193,10 +192,9 @@ class BatA2AAdapter:
                     message = new_text_message(
                         text=turn,
                         context_id=thread_id,
-                        task_id=str(uuid.uuid4()),
                         role=Role.ROLE_USER,
                     )
-                    stream = client.send_message(message)
+                    stream = client.send_message(SendMessageRequest(message=message))
 
                     async for chunk in stream:
                         metadata = _extract_metadata(chunk)

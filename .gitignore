@@ -17,3 +17,4 @@ overlay/
 snap/
 .snapcraftignore
 
+*.pyc

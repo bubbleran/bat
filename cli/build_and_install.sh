@@ -22,13 +22,29 @@ if [ ! -f "$DIST_BINARY" ]; then
     exit 1
 fi
 
-echo "==> Installing $DIST_BINARY -> $INSTALL_PATH"
-if [ -w "$INSTALL_DIR" ]; then
-    mv "$DIST_BINARY" "$INSTALL_PATH"
-    chmod 755 "$INSTALL_PATH"
-else
-    sudo mv "$DIST_BINARY" "$INSTALL_PATH"
-    sudo chmod 755 "$INSTALL_PATH"
-fi
+echo "==> Build complete: $DIST_BINARY"
+echo ""
+read -r -p "Install $BINARY_NAME to $INSTALL_PATH? [Y/n] " reply
+reply="${reply:-Y}"
 
-echo "==> Done. bat installed at $INSTALL_PATH"
+case "$reply" in
+    [Yy]|[Yy][Ee][Ss])
+        mkdir -p "$INSTALL_DIR"
+        if [ -w "$INSTALL_DIR" ]; then
+            mv "$DIST_BINARY" "$INSTALL_PATH"
+            chmod 755 "$INSTALL_PATH"
+        else
+            sudo mv "$DIST_BINARY" "$INSTALL_PATH"
+            sudo chmod 755 "$INSTALL_PATH"
+        fi
+        echo "==> Done. $BINARY_NAME installed at $INSTALL_PATH"
+        case ":$PATH:" in
+            *":$INSTALL_DIR:"*) ;;
+            *) echo "NOTE: $INSTALL_DIR is not in your PATH. Add it with:"
+               echo "      export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
+        esac
+        ;;
+    *)
+        echo "==> Skipped install. Binary left at: $DIST_BINARY"
+        ;;
+esac

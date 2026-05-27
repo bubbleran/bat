@@ -101,7 +101,7 @@ def _parse_clients_option(raw_clients: str | None) -> list[str] | None:
 
 @init_app.command("agent")
 def create_new_agent(
-    name: str = typer.Argument("default", help="Name of the agent directory to create."),
+    name: str = typer.Argument(help="Name of the agent directory to create."),
     clients: str | None = typer.Option(
         None,
         "--clients",

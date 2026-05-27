@@ -15,6 +15,8 @@ _DYNAMIC_TEMPLATE_FILES = {
     "llm_client.py.template",
     "pyproject.toml.template",
     "src/graph.py",
+    "src/__init__.py",
+    "__main__.py",
 }
 
 
@@ -116,9 +118,31 @@ def _build_makefile_content(agent_dir_name: str) -> str:
     )
 
 
+def _agent_class_name(agent_dir_name: str) -> str:
+    return _normalize_name(agent_dir_name, "pascal") or "Agent"
+
+
+def _build_main_content(agent_dir_name: str) -> str:
+    return _render_template(
+        "__main__.py",
+        {
+            "AGENT_CLASS_NAME": _agent_class_name(agent_dir_name),
+        },
+    )
+
+
+def _build_src_init_content(agent_dir_name: str) -> str:
+    return _render_template(
+        "src/__init__.py",
+        {
+            "AGENT_CLASS_NAME": _agent_class_name(agent_dir_name),
+        },
+    )
+
+
 def _build_graph_content(agent_dir_name: str, clients: list[str] | None) -> str:
     resolved_clients = _resolve_client_specs(clients)
-    agent_class_name = _normalize_name(agent_dir_name, "pascal") or "Agent"
+    agent_class_name = _agent_class_name(agent_dir_name)
 
     client_imports = "\n".join(
         f"from .llm_clients.{file_stem} import {class_name}"
@@ -210,6 +234,35 @@ def _resolve_client_specs(clients: list[str] | None) -> list[tuple[str, str]]:
     return resolved or [("example_client", "ExampleClient")]
 
 
+def _client_specs_from_dir(llm_clients_dir: Path) -> list[tuple[str, str]]:
+    """Derive (file_stem, class_name) for every client module on disk.
+
+    The class name follows the same convention as ``_resolve_client_specs`` so a
+    file ``check_request_client.py`` maps back to ``CheckRequestClient``.
+    """
+    specs: list[tuple[str, str]] = []
+    for path in sorted(llm_clients_dir.glob("*.py")):
+        if path.stem == "__init__":
+            continue
+        class_name = _normalize_name(path.stem, "pascal")
+        if not class_name:
+            continue
+        if not class_name.endswith("Client"):
+            class_name = f"{class_name}Client"
+        specs.append((path.stem, class_name))
+    return specs
+
+
+def _build_llm_clients_init_content(client_specs: list[tuple[str, str]]) -> str:
+    if not client_specs:
+        return ""
+    lines = [
+        f"from .{file_stem} import {class_name}"
+        for file_stem, class_name in client_specs
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _write_llm_clients(
     llm_clients_dir: Path,
     *,
@@ -225,6 +278,17 @@ def _write_llm_clients(
         client_path.parent.mkdir(parents=True, exist_ok=True)
         client_path.write_text(_build_llm_client_content(class_name), encoding="utf-8")
         created.append(client_path)
+
+    # Regenerate the package __init__ so it re-exports every client present in
+    # the directory (covers both `bat create` and `bat add client`).
+    init_path = llm_clients_dir / "__init__.py"
+    new_content = _build_llm_clients_init_content(_client_specs_from_dir(llm_clients_dir))
+    existing_content = init_path.read_text(encoding="utf-8") if init_path.exists() else None
+    if new_content != existing_content:
+        init_path.parent.mkdir(parents=True, exist_ok=True)
+        init_path.write_text(new_content, encoding="utf-8")
+        if init_path not in created:
+            created.append(init_path)
 
     return created
 
@@ -299,6 +363,17 @@ def create_agent_scaffold(
     if force or not graph_path.exists():
         graph_path.write_text(_build_graph_content(target_dir.name, clients), encoding="utf-8")
         created.append(graph_path)
+
+    src_init_path = target_dir / "src" / "__init__.py"
+    if force or not src_init_path.exists() or not src_init_path.read_text(encoding="utf-8").strip():
+        src_init_path.parent.mkdir(parents=True, exist_ok=True)
+        src_init_path.write_text(_build_src_init_content(target_dir.name), encoding="utf-8")
+        created.append(src_init_path)
+
+    main_path = target_dir / "__main__.py"
+    if force or not main_path.exists():
+        main_path.write_text(_build_main_content(target_dir.name), encoding="utf-8")
+        created.append(main_path)
 
     created.extend(
         _write_llm_clients(

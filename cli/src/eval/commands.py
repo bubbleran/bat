@@ -34,21 +34,35 @@ _PROVIDER_API_KEY_ENV: dict[str, str] = {
 def _inject_judge_api_key(judge: JudgeSpec, agent_root: Path, env: dict[str, str]) -> None:
     """Resolve the judge's API key and inject it into env.
 
-    If judge.api_key_env is set, that env var is the ONLY source — no fallbacks.
-    Otherwise priority is:
+    If judge.api_key_env is set, the agent's .env file is the ONLY source: the CLI
+    reads that variable name from <agent_root>/.env and uses it. Nothing else is
+    consulted (not the shell, not other files).
+
+    If judge.api_key_env is NOT set, fall back to:
       1. Key already present in env (exported in the shell)
-      2. Key found in the agent's .env file
+      2. Key found in the agent's .env file under the provider's standard name
     """
     api_key_var = _PROVIDER_API_KEY_ENV.get(judge.provider.lower())
     if api_key_var is None:
         return  # local/no-key provider (e.g. ollama)
 
     if judge.api_key_env:
-        value = os.environ.get(judge.api_key_env, "").strip()
+        agent_env_file = agent_root / ".env"
+        if not agent_env_file.exists():
+            typer.secho(
+                f"Warning: judge.api_key_env='{judge.api_key_env}' was set but no .env file "
+                f"exists at {agent_env_file}; the judge will likely fail when called.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            return
+        agent_dotenv = dotenv_values(agent_env_file)
+        raw_value = agent_dotenv.get(judge.api_key_env)
+        value = (raw_value or "").strip()
         if not value:
             typer.secho(
-                f"Warning: judge.api_key_env='{judge.api_key_env}' is not set or is empty; "
-                f"the judge will likely fail when called.",
+                f"Warning: judge.api_key_env='{judge.api_key_env}' was set but the variable is "
+                f"missing or empty in {agent_env_file}; the judge will likely fail when called.",
                 fg=typer.colors.YELLOW,
                 err=True,
             )
@@ -221,12 +235,16 @@ def _parse_agent_url(agent_url: str) -> tuple[str, int, str]:
     return parsed.hostname, port, base_url
 
 
-def _wait_for_agent_port(agent_url: str, timeout_s: int, process: subprocess.Popen) -> None:
+def _wait_for_agent_port(
+    agent_url: str,
+    timeout_s: int,
+    process: subprocess.Popen | None,
+) -> None:
     host, port, _ = _parse_agent_url(agent_url)
     deadline = time.time() + timeout_s
 
     while time.time() < deadline:
-        if process.poll() is not None:
+        if process is not None and process.poll() is not None:
             raise typer.BadParameter(
                 f"Agent process exited before becoming ready (exit code: {process.returncode})."
             )
@@ -349,7 +367,17 @@ def eval_show() -> None:
     _print_eval_show(cfg)
 
 
-def eval_run() -> None:
+def eval_run(
+    no_start_agent: bool = typer.Option(
+        False,
+        "--no-start-agent",
+        help=(
+            "Do not start (or stop) the agent process. Assume it is already running at the "
+            "agent_url declared in eval.yaml. Useful when the CLI cannot exec 'uv run .' itself "
+            "(e.g. when running from a strictly-confined snap)."
+        ),
+    ),
+) -> None:
     agent_root = Path.cwd()
     _validate_agent_root(agent_root)
 
@@ -367,11 +395,12 @@ def eval_run() -> None:
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
-    agent_python = _find_agent_python(agent_root)
-    if agent_python is None:
-        raise typer.BadParameter(
-            "No agent python found at .venv/bin/python. Create the agent virtual environment first."
-        )
+    if not no_start_agent:
+        agent_python = _find_agent_python(agent_root)
+        if agent_python is None:
+            raise typer.BadParameter(
+                "No agent python found at .venv/bin/python. Create the agent virtual environment first."
+            )
 
     task_id = time.strftime("%Y%m%d_%H%M%S")
     typer.secho(
@@ -401,7 +430,14 @@ def eval_run() -> None:
             section_name=f"models[{idx}]",
         )
 
-        process = _start_agent_process(agent_root, server_env)
+        if no_start_agent:
+            process = None
+            typer.secho(
+                f"  (--no-start-agent) connecting to externally-managed agent at {cfg.agent_url}",
+                fg=typer.colors.YELLOW,
+            )
+        else:
+            process = _start_agent_process(agent_root, server_env)
 
         try:
             _wait_for_agent_port(
@@ -459,7 +495,8 @@ def eval_run() -> None:
                 env=runner_env,
             )
         finally:
-            _stop_agent_process(process, timeout_s=cfg.agent_shutdown_timeout_s)
+            if process is not None:
+                _stop_agent_process(process, timeout_s=cfg.agent_shutdown_timeout_s)
 
     typer.secho(
         f"Evaluation completed. Output: {cfg.output_dir / task_id}",
