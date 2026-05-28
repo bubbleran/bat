@@ -55,3 +55,34 @@ dev = [
 [project.urls]
 "Homepage" = "https://bubbleran.com/"
 "Repository" = "https://github.com/bubbleran/bat"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 80
+
+# Files or directories to ignore entirely
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+# 1. Choose which rule categories to turn ON
+select = [
+    "E",   # pycodestyle errors (standard spacing, formatting)
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes (catches unused imports, undefined variables)
+    "I",   # isort (automatically sorts your imports alphabetically)
+    "B",   # flake8-bugbear (catches tricky hidden Python bugs)
+    "SIM", # flake8-simplify (helps you write simpler, shorter code)
+]
+
+# Custom settings for specific files
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]     # Allow 'assert' statements in tests without warning
+
+[tool.ruff.format]
+indent-style = "space"
