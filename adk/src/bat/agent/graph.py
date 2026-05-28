@@ -250,7 +250,7 @@ class AgentGraph(ABC):
         """
         total = self._pop_usage_metadata_from_buf()
         for _, value in self.__dict__.items():
-            if isinstance(value, ChatModelClient) or isinstance(value, CallAgentNode):
+            if isinstance(value, (ChatModelClient, CallAgentNode)):
                 total += value.get_usage_metadata(
                     from_timestamp=from_timestamp,
                 )

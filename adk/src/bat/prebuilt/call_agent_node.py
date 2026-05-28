@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import time
 from typing import Any, AsyncIterable, Callable, Dict, Literal, Optional, Type
 
@@ -415,10 +416,8 @@ class CallAgentNode(PrebuiltWorkflow):
         """
         if self._stream_task:
             self._stream_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._stream_task
-            except asyncio.CancelledError:
-                pass
         self._stream_task = None
         self._queue = None
 

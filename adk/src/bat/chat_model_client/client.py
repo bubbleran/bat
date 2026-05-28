@@ -127,9 +127,7 @@ class ChatModelClient:
             return True
         if isinstance(input, HumanMessage):
             return True
-        if isinstance(input, list) and all(isinstance(msg, ToolMessage) for msg in input):
-            return True
-        return False
+        return bool(isinstance(input, list) and all(isinstance(msg, ToolMessage) for msg in input))
 
     def _build_messages_list(
         self,
