@@ -73,6 +73,9 @@ class ChatModelClient:
                 System instructions to be used by the chat model.
             tools (Sequence[Dict[str, Any] | type | Callable | BaseTool | None], optional):
                 LangChain-defined tools to be used by the chat model.
+            output_schema (type[BaseModel], optional):
+                If provided, the chat model response will be parsed according to this Pydantic schema. The raw response
+                from the chat model will be included in the output as well.
         Raises:
             EnvironmentError: If the chat model configuration is not provided and cannot be loaded from environment variables.
         """
