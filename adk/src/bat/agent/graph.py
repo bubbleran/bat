@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
-from typing import Any, AsyncIterable, Dict, List, Optional, Type
+from typing import AsyncIterable, Dict, List, Optional, Type
 
 logger = create_logger(__name__, level="debug")
 

@@ -204,11 +204,11 @@ class ChatModelClient:
         if isinstance(response, AIMessage):
             return response, response.model_copy()
         if 'raw' not in response:
-            raise KeyError(f"Key 'raw' not found in response after chat model invocation")
+            raise KeyError("Key 'raw' not found in response after chat model invocation")
         if 'parsed' not in response:
-            raise KeyError(f"Key 'parsed' not found in response after chat model invocation")
+            raise KeyError("Key 'parsed' not found in response after chat model invocation")
         if 'parsing_error' not in response:
-            raise KeyError(f"Key 'parsing_error' not found in response after chat model invocation")
+            raise KeyError("Key 'parsing_error' not found in response after chat model invocation")
         raw: AIMessage = response['raw']
         parsed = response['parsed']
         parsing_error = response['parsing_error']

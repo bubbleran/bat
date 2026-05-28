@@ -206,7 +206,7 @@ class ReActLoop(PrebuiltWorkflow):
         for msg in messages:
             try:
                 BaseMessage.model_validate(msg)
-            except ValidationError as e:
+            except ValidationError:
                 raise ValueError(f"Key '{self.messages_key}' must point to a List[BaseMessage]. Found item of type {type(msg)} instead.")
 
         stream = self.graph.astream(state, config)

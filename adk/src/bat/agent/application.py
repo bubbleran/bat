@@ -148,9 +148,9 @@ class AgentApplication:
                     protocol_version="2.0",
                 ))
         except FileNotFoundError as e:
-            raise FileNotFoundError(f'Agent card file not found.') from e
+            raise FileNotFoundError('Agent card file not found.') from e
         except ValidationError as e:
-            raise ValidationError(f'Invalid agent card format.') from e
+            raise ValidationError('Invalid agent card format.') from e
         except Exception as e:
             raise Exception(f'Error loading agent card: {e}') from e
 

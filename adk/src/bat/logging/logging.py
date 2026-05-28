@@ -64,7 +64,7 @@ def create_logger(
     handler = logging.StreamHandler()
     handler.setFormatter(DynamicFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
     
-    if not "LOG_LEVEL" in os.environ:
+    if "LOG_LEVEL" not in os.environ:
         load_dotenv()
     desired_log_level = os.getenv("LOG_LEVEL", "info").lower()
     handler.setLevel(levels.get(desired_log_level, logging.INFO))

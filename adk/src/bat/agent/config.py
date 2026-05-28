@@ -188,8 +188,8 @@ class AgentConfig(BaseModel):
             asyncio.run(cfg._build_remote_agents_aliases_map())
 
             logger.info(f"Agent configuration loaded [checkpoints={cfg.checkpoints}] [#agents={len(cfg.remote_agents)}] [#mcp={len(cfg.mcp_servers)}]")
-        except FileNotFoundError as e:
-            logger.warning(f"Configuration file not found. The Agent won't have access to remote agents or MCP servers.")
+        except FileNotFoundError:
+            logger.warning("Configuration file not found. The Agent won't have access to remote agents or MCP servers.")
             cfg = cls()
         except Exception as e:
             raise ValueError(f"Failed to load and validate agent configuration: {e}") from e
