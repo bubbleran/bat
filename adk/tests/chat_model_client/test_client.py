@@ -1,24 +1,52 @@
-import pytest
 import time
-from bat.chat_model_client import ChatModelClient, ChatModelClientConfig, UsageMetadata
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from unittest.mock import MagicMock
+
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from bat.chat_model_client import (
+    ChatModelClient,
+    ChatModelClientConfig,
+    UsageMetadata,
+)
 
 # ------------------ UsageMetadata Tests ------------------
 
+
 def test_usage_metadata_add_instance():
-    meta1 = UsageMetadata(input_tokens=5, output_tokens=10, total_tokens=15, inference_time=1.5)
-    meta2 = UsageMetadata(input_tokens=2, output_tokens=3, total_tokens=5, inference_time=0.5)
+    meta1 = UsageMetadata(
+        input_tokens=5,
+        output_tokens=10,
+        total_tokens=15,
+        inference_time=1.5,
+    )
+    meta2 = UsageMetadata(
+        input_tokens=2,
+        output_tokens=3,
+        total_tokens=5,
+        inference_time=0.5,
+    )
 
     result = meta1 + meta2
     assert result.input_tokens == 7
     assert result.output_tokens == 13
     assert result.total_tokens == 20
     assert abs(result.inference_time - 2.0) < 1e-6
+
 
 def test_usage_metadata_add_dict():
-    meta1 = UsageMetadata(input_tokens=5, output_tokens=10, total_tokens=15, inference_time=1.5)
-    meta2 = {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5, "inference_time": 0.5}
+    meta1 = UsageMetadata(
+        input_tokens=5,
+        output_tokens=10,
+        total_tokens=15,
+        inference_time=1.5,
+    )
+    meta2 = {
+        "input_tokens": 2,
+        "output_tokens": 3,
+        "total_tokens": 5,
+        "inference_time": 0.5,
+    }
 
     result = meta1 + meta2
     assert result.input_tokens == 7
@@ -26,25 +54,48 @@ def test_usage_metadata_add_dict():
     assert result.total_tokens == 20
     assert abs(result.inference_time - 2.0) < 1e-6
 
+
 def test_usage_metadata_sub_instance():
-    meta1 = UsageMetadata(input_tokens=5, output_tokens=10, total_tokens=15, inference_time=1.5)
-    meta2 = UsageMetadata(input_tokens=2, output_tokens=3, total_tokens=5, inference_time=0.5)
+    meta1 = UsageMetadata(
+        input_tokens=5,
+        output_tokens=10,
+        total_tokens=15,
+        inference_time=1.5,
+    )
+    meta2 = UsageMetadata(
+        input_tokens=2,
+        output_tokens=3,
+        total_tokens=5,
+        inference_time=0.5,
+    )
 
     result = meta1 - meta2
     assert result.input_tokens == 3
     assert result.output_tokens == 7
     assert result.total_tokens == 10
     assert abs(result.inference_time - 1.0) < 1e-6
+
 
 def test_usage_metadata_sub_dict():
-    meta1 = UsageMetadata(input_tokens=5, output_tokens=10, total_tokens=15, inference_time=1.5)
-    meta2 = {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5, "inference_time": 0.5}
+    meta1 = UsageMetadata(
+        input_tokens=5,
+        output_tokens=10,
+        total_tokens=15,
+        inference_time=1.5,
+    )
+    meta2 = {
+        "input_tokens": 2,
+        "output_tokens": 3,
+        "total_tokens": 5,
+        "inference_time": 0.5,
+    }
 
     result = meta1 - meta2
     assert result.input_tokens == 3
     assert result.output_tokens == 7
     assert result.total_tokens == 10
     assert abs(result.inference_time - 1.0) < 1e-6
+
 
 def test_usage_metadata_non_negative_validator():
     with pytest.raises(ValueError):
@@ -56,37 +107,54 @@ def test_usage_metadata_non_negative_validator():
     with pytest.raises(ValueError):
         UsageMetadata(inference_time=-0.1)
 
+
 # ------------------ ChatModelClient Tests ------------------
+
 
 @pytest.fixture
 def mock_chat_model(monkeypatch):
     mock_model = MagicMock()
-    mock_model.invoke = MagicMock(return_value=AIMessage(
-        content="ok",
-        usage_metadata={"input_tokens": 1,"output_tokens": 2,"total_tokens": 3},
-    ))
+    mock_model.invoke = MagicMock(
+        return_value=AIMessage(
+            content="ok",
+            usage_metadata={
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "total_tokens": 3,
+            },
+        )
+    )
 
     def batch_side_effect(messages_list):
         # Return an AIMessage for each input message
         return [
             AIMessage(
                 content=f"batch ai response #{i}",
-                usage_metadata={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+                usage_metadata={
+                    "input_tokens": 1,
+                    "output_tokens": 2,
+                    "total_tokens": 3,
+                },
             )
             for i, _ in enumerate(messages_list, start=1)
         ]
 
     mock_model.batch = MagicMock(side_effect=batch_side_effect)
-    monkeypatch.setattr("bat.chat_model_client.client.init_chat_model", lambda **kwargs: mock_model)
+    monkeypatch.setattr(
+        "bat.chat_model_client.client.init_chat_model",
+        lambda **kwargs: mock_model,
+    )
     return mock_model
+
 
 @pytest.fixture
 def mock_chat_model_client_config():
     return ChatModelClientConfig(
         model="test-model",
         model_provider="ollama",
-        base_url="http://localhost"
+        base_url="http://localhost",
     )
+
 
 @pytest.fixture
 def client(mock_chat_model, mock_chat_model_client_config):
@@ -95,18 +163,27 @@ def client(mock_chat_model, mock_chat_model_client_config):
         system_instructions="system instructions",
     )
 
+
 def test_system_instructions_type_error():
     with pytest.raises(TypeError):
-        ChatModelClient(system_instructions=['Instruction 1', 'Instruction 2'])
+        ChatModelClient(system_instructions=["Instruction 1", "Instruction 2"])
+
 
 def test_validate_input_type(client):
     assert client._validate_input_type("string input")
     assert client._validate_input_type(HumanMessage("human message input"))
-    assert client._validate_input_type([ToolMessage(
-        tool_call_id="id-123",
-        content="tool_call_result",
-    )])
-    assert not client._validate_input_type([HumanMessage("list of human message inputs")])
+    assert client._validate_input_type(
+        [
+            ToolMessage(
+                tool_call_id="id-123",
+                content="tool_call_result",
+            )
+        ]
+    )
+    assert not client._validate_input_type(
+        [HumanMessage("list of human message inputs")]
+    )
+
 
 def test_build_messages_list_with_human_message(client):
     human_msg = HumanMessage("hello")
@@ -116,6 +193,7 @@ def test_build_messages_list_with_human_message(client):
     assert msgs[1] == history[0]
     assert msgs[2] == human_msg
 
+
 def test_build_messages_list_with_str(client):
     msg = "hello as string"
     history = [AIMessage("prev")]
@@ -124,6 +202,7 @@ def test_build_messages_list_with_str(client):
     assert msgs[1] == history[0]
     assert isinstance(msgs[2], HumanMessage)
     assert msgs[2].content == msg
+
 
 def test_update_history(client):
     # Test with HumanMessage
@@ -157,6 +236,7 @@ def test_update_history(client):
     client._update_history(history, new_human_msg, new_ai_msg)
     assert history == [human_msg, ai_msg, new_human_msg, new_ai_msg]
 
+
 def test_invoke_and_usage_metadata(client):
     human_msg = HumanMessage("hi")
     history = []
@@ -169,6 +249,7 @@ def test_invoke_and_usage_metadata(client):
     assert agg_meta.input_tokens == 1
     assert agg_meta.output_tokens == 2
     assert agg_meta.total_tokens == 3
+
 
 def test_invoke_and_usage_metadata_with_string_input(client):
     str_input = "hi"
@@ -183,6 +264,7 @@ def test_invoke_and_usage_metadata_with_string_input(client):
     assert agg_meta.output_tokens == 2
     assert agg_meta.total_tokens == 3
 
+
 def test_batch_invocation(client):
     msgs = [HumanMessage("hi1"), HumanMessage("hi2")]
     responses = client.batch(msgs)
@@ -192,6 +274,7 @@ def test_batch_invocation(client):
     assert recorded[0][1].input_tokens == 2
     assert recorded[0][1].output_tokens == 4
     assert recorded[0][1].total_tokens == 6
+
 
 def test_get_usage_metadata_from_timestamp(client):
     human_msg = HumanMessage("hi")

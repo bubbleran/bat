@@ -1,38 +1,43 @@
-from ..logging import create_logger
-from a2a.helpers import get_stream_response_text
-from a2a.types import StreamResponse, TaskState
 from abc import ABC, abstractmethod
 from enum import IntEnum
-from pydantic import BaseModel
 from typing import Any, Dict, List, Self
 
-logger = create_logger(__name__, 'debug')
+from a2a.helpers import get_stream_response_text
+from a2a.types import StreamResponse, TaskState
+from pydantic import BaseModel
+
+from ..logging import create_logger
+
+logger = create_logger(__name__, "debug")
+
 
 class AgentTaskStatus(IntEnum):
     """**AgentTaskStatus** is an enum type matching the A2A-SDK **TaskState**.
-        The need for this redefinition is due to:
-            - Incompatibility between PydanticV2 and Protobuf.
-            - Not all the A2A-SDK TaskState are currently supported by BAT-ADK.
+    The need for this redefinition is due to:
+        - Incompatibility between PydanticV2 and Protobuf.
+        - Not all the A2A-SDK TaskState are currently supported by BAT-ADK.
 
-        Among those defined in the A2A-SDK, BAT-ADK currently supports:
-        - **AGENT_TASK_STATUS_WORKING** -> TASK_STATE_WORKING
-        - **AGENT_TASK_STATUS_INPUT_REQUIRED** -> TASK_STATE_INPUT_REQUIRED
-        - **AGENT_TASK_STATUS_COMPLETED** -> TASK_STATE_COMPLETED
-        - **AGENT_TASK_STATUS_FAILED** -> TASK_STATE_FAILED
+    Among those defined in the A2A-SDK, BAT-ADK currently supports:
+    - **AGENT_TASK_STATUS_WORKING** -> TASK_STATE_WORKING
+    - **AGENT_TASK_STATUS_INPUT_REQUIRED** -> TASK_STATE_INPUT_REQUIRED
+    - **AGENT_TASK_STATUS_COMPLETED** -> TASK_STATE_COMPLETED
+    - **AGENT_TASK_STATUS_FAILED** -> TASK_STATE_FAILED
 
-        Internally, the following A2A-SDK task states are handles:
-        - **TASK_STATE_SUBMITTED**
+    Internally, the following A2A-SDK task states are handles:
+    - **TASK_STATE_SUBMITTED**
 
-        The A2A-SDK defines the following additional task states:
-        - TASK_STATE_UNSPECIFIED
-        - TASK_STATE_CANCELED
-        - TASK_STATE_REJECTED
-        - TASK_STATE_AUTH_REQUIRED
+    The A2A-SDK defines the following additional task states:
+    - TASK_STATE_UNSPECIFIED
+    - TASK_STATE_CANCELED
+    - TASK_STATE_REJECTED
+    - TASK_STATE_AUTH_REQUIRED
     """
+
     AGENT_TASK_STATUS_WORKING = 2
     AGENT_TASK_STATUS_COMPLETED = 3
     AGENT_TASK_STATUS_FAILED = 4
     AGENT_TASK_STATUS_INPUT_REQUIRED = 6
+
 
 class AgentTaskResult(BaseModel):
     """Result of an agent invocation.
@@ -41,39 +46,37 @@ class AgentTaskResult(BaseModel):
     ----------
         task_status (AgentTaskStatus): The status of the agent task.
         content (str): The content of the agent's response or message.
-    
+
     Attributes meaning
     ----------
-    | **task_status**            | **content**                                                          |
-    |----------------------------|----------------------------------------------------------------------|
-    | TASK_STATE_WORKING         | Ongoing task description or progress update.                         |
-    | TASK_STATE_INPUT_REQUIRED  | Description of the required user input or context.                   |
-    | TASK_STATE_COMPLETED       | Final response or result of the agent's processing.                  |
-    | TASK_STATE_FAILED          | Error message indicating what went wrong during the task execution.  |
+    | **task_status**            | **content**                                 |
+    |----------------------------|---------------------------------------------|
+    | TASK_STATE_WORKING         | Description of task progress                |
+    | TASK_STATE_INPUT_REQUIRED  | Description of required input or context    |
+    | TASK_STATE_COMPLETED       | Final response of the agent                 |
+    | TASK_STATE_FAILED          | Error message explaining the error          |
     """
+
     task_status: AgentTaskStatus
     content: str
 
     def __init__(
         self,
         task_status: AgentTaskStatus | str,
-        content: str
+        content: str,
     ):
         """Initialize AgentTaskResult with task status and content.
 
         Args:
             task_status (AgentTaskStatus | str): The status of the agent task.
-                Can be provided as an AgentTaskStatus enum or a string (deprecated).
+                Can be provided as an AgentTaskStatus enum or a string
+                (deprecated).
             content (str): The content of the agent's response or message.
-        
-        Note:
-            -   The `task_status` parameter can be provided as a string for backward compatibility,
-                but this usage is deprecated and will be removed in future versions.
-                It is recommended to use the `AgentTaskStatus` enum for better type safety and clarity.
         """
         if isinstance(task_status, str):
             warning_msg = (
-                "`task_status` of type str is deprecated and won't be supported in future versions. "
+                "`task_status` of type str is deprecated and won't be "
+                "supported in future versions. "
                 "Please use the type AgentTaskStatus"
             )
             logger.warning(warning_msg)
@@ -83,7 +86,11 @@ class AgentTaskResult(BaseModel):
                 task_status = AgentTaskStatus.AGENT_TASK_STATUS_INPUT_REQUIRED
             elif task_status == "completed" or task_status == "3":
                 task_status = AgentTaskStatus.AGENT_TASK_STATUS_COMPLETED
-            elif task_status == "error" or task_status == "failed" or task_status == "4":
+            elif (
+                task_status == "error"
+                or task_status == "failed"
+                or task_status == "4"
+            ):
                 task_status = AgentTaskStatus.AGENT_TASK_STATUS_FAILED
             else:
                 raise ValueError(f"unknown task_status '{task_status}'")
@@ -98,25 +105,28 @@ class AgentTaskResult(BaseModel):
         Handles different types of StreamResponse as follows:
         1. Message: Direct message response → (completed, content)
         2. TaskArtifactUpdateEvent: Artifact update → (completed, content)
-        3. TaskStatusUpdateEvent: Status update → (TaskStatusUpdateEvent.state, content)
+        3. TaskStatusUpdateEvent: Status update → (TaskStatusUpdateEvent.state,
+            content)
         4. Task: Not supported yet → (working, undefined content)
 
-        The content is extracted with the `get_stream_response_text` utility function of A2A-SDK.
+        The content is extracted with the `get_stream_response_text` utility
+        function of A2A-SDK.
 
         Args:
-            item (StreamResponse): Stream chunk generated by A2A-SDK send_message.
-            
+            item (StreamResponse): Stream chunk generated by A2A-SDK
+                send_message.
+
         Returns:
             AgentTaskResult: as reported above.
         """
         content = get_stream_response_text(chunk)
         status = TaskState.TASK_STATE_WORKING
 
-        if chunk.HasField('message') or chunk.HasField('artifact_update'):
+        if chunk.HasField("message") or chunk.HasField("artifact_update"):
             status = TaskState.TASK_STATE_COMPLETED
-        elif chunk.HasField('status_update'):
+        elif chunk.HasField("status_update"):
             status = chunk.status_update.status.state
-        elif chunk.HasField('task'):
+        elif chunk.HasField("task"):
             match chunk.task.status.state:
                 case TaskState.TASK_STATE_SUBMITTED:
                     status = TaskState.TASK_STATE_WORKING
@@ -137,31 +147,39 @@ class AgentTaskResult(BaseModel):
         )
 
     def requires_input(self) -> bool:
-        """Returns true when task_status indicates that user input is required.
+        """
+        Returns true when task_status indicates that user input is required.
         """
         return self.task_status == TaskState.TASK_STATE_INPUT_REQUIRED
+
 
 class AgentState(BaseModel, ABC):
     """Abstract Pydantic model from which agent's state classes should inherit.
 
-    This class combines Pydantic's model validation with abstract state management
-    requirements for agent operations. Subclasses should define concrete state models
-    while implementing the required abstract methods.
+    This class combines Pydantic's model validation with abstract state
+    management requirements for agent operations. Subclasses should define
+    concrete state models while implementing the required abstract methods.
 
     Attributes
     -------
-        bat_extra (Dict[str, Any]): A dictionary for storing extra state information.
-            The user should not modify this directly, as it is used internally by the SDK.
+        bat_extra (Dict[str, Any]): A dictionary for storing extra state
+            information.
+            The user should not modify this directly, as it is used internally
+            by the SDK.
         bat_buffer (List): A list used as a buffer for intermediate state data.
-            The user should not modify this directly, as it is used internally by the SDK.
+            The user should not modify this directly, as it is used internally
+            by the SDK.
 
     Methods
     -------
-        from_query (**abstract**): Factory method to create an agent state from an initial query
-        to_task_result (**abstract**): Convert current state to a `AgentTaskResult` object
-        update_after_checkpoint_restore: Refresh state after checkpoint restoration
+        from_query (**abstract**): Factory method to create an agent state from
+            an initial query
+        to_task_result (**abstract**): Convert current state to a
+            `AgentTaskResult` object
+        update_after_checkpoint_restore: Refresh state after checkpoint
+            restoration
         is_waiting_for_human_input: Check if agent requires human input
-    
+
     Example
     -------
     ```python
@@ -181,12 +199,12 @@ class AgentState(BaseModel, ABC):
                 user_inputs=[query],
                 question=query,
             )
-        
+
         @override
         def update_after_checkpoint_restore(self, query: str) -> None:
             self.user_inputs.append(query)
             self.question = query
-        
+
         @override
         def to_task_result(self) -> AgentTaskResult:
             if self.answer is None:
@@ -200,19 +218,19 @@ class AgentState(BaseModel, ABC):
             )
     ```
     """
+
     bat_extra: Dict[str, Any] = {}
     bat_buffer: List = []
 
     @classmethod
     @abstractmethod
-    def from_query(
-        cls,
-        query: str
-    ) -> Self:
+    def from_query(cls, query: str) -> Self:
         """Instantiate agent state from initial query.
 
-        Factory method called by the execution framework to create a new state instance.
-        Alternative to direct initialization, allowing state-specific construction logic.
+        Factory method called by the execution framework to create a new state
+        instance.
+        Alternative to direct initialization, allowing state-specific
+        construction logic.
 
         Args:
             query: Initial user query to bootstrap agent state
@@ -225,8 +243,9 @@ class AgentState(BaseModel, ABC):
     def update_after_checkpoint_restore(self, query: str) -> None:
         """Update state with new query after checkpoint restoration.
 
-        Called by the SDK when restoring from a saved checkpoint. Allows the state
-        to synchronize with new execution parameters before resuming the graph.
+        Called by the SDK when restoring from a saved checkpoint. Allows the
+        state to synchronize with new execution parameters before resuming the
+        graph.
 
         Args:
             query: New query to execute with the restored state
@@ -237,8 +256,9 @@ class AgentState(BaseModel, ABC):
     def to_task_result(self) -> AgentTaskResult:
         """Convert current state to a task result object.
 
-        Used to yield execution results during graph processing. This method defines
-        how the agent's internal state translates to external-facing task results.
+        Used to yield execution results during graph processing. This method
+        defines how the agent's internal state translates to external-facing
+        task results.
 
         Returns:
             AgentTaskResult: Task result representation of current state
@@ -248,8 +268,8 @@ class AgentState(BaseModel, ABC):
     def is_waiting_for_human_input(self) -> bool:
         """Check if agent is blocked waiting for human input.
 
-        Default implementation returns `False`. Override in subclasses to implement
-        human-in-the-loop pausing behavior.
+        Default implementation returns `False`. Override in subclasses to
+        implement human-in-the-loop pausing behavior.
 
         Returns:
             bool: True if agent requires human input to proceed, False otherwise
