@@ -24,6 +24,7 @@ The currently supported providers are:
 - `openai`
 """
 
+
 class ChatModelClientConfig(BaseModel):
     """Configuration for the chat model client.
 
@@ -152,7 +153,7 @@ class ChatModelClientConfig(BaseModel):
                 api_key = "<not-used>"
             result = {
                 "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
         else:
             result = {}

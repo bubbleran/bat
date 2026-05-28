@@ -70,7 +70,6 @@ exclude = [
 ]
 
 [tool.ruff.lint]
-# 1. Choose which rule categories to turn ON
 select = [
     "E",   # pycodestyle errors (standard spacing, formatting)
     "W",   # pycodestyle warnings

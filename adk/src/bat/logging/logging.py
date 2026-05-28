@@ -45,7 +45,9 @@ def create_logger(
     }
     logging_level = levels.get(level.lower())
     if logging_level is None:
-        raise ValueError(f"Invalid logging level. Choose from: {list(levels.keys())}")
+        raise ValueError(
+            f"Invalid logging level. Choose from: {list(levels.keys())}"
+        )
 
     logger = logging.getLogger(name)
     logger.setLevel(logging_level)
@@ -53,6 +55,7 @@ def create_logger(
 
     # compute terminal width for formatting
     columns = get_terminal_size().columns
+
     class DynamicFormatter(logging.Formatter):
         def format(self, record):
             info = f"({record.filename}:{record.lineno})"
@@ -60,7 +63,12 @@ def create_logger(
             msg_width = columns - len(info) - 32
             if msg_width < 0:
                 msg_width = 0
-            self._style._fmt = "%(levelname)-8s %(asctime)s - %(message)-" + str(msg_width) + "s " + info
+            self._style._fmt = (
+                "%(levelname)-8s %(asctime)s - %(message)-"
+                + str(msg_width)
+                + "s "
+                + info
+            )
             return super().format(record)
 
     handler = logging.StreamHandler()

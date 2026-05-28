@@ -20,6 +20,7 @@ logger = create_logger(__name__, level="debug")
 
 USAGE_METADATA_KEY = "usage"
 
+
 class AgentGraph(ABC):
     """Abstract base class for agent graphs.
 
@@ -118,9 +119,7 @@ class AgentGraph(ABC):
             config (AgentConfig): The agent configuration.
         """
         self._memory = MemorySaver() if config.checkpoints else None
-        self._graph = self._graph_builder.compile(
-            checkpointer=self._memory
-        )
+        self._graph = self._graph_builder.compile(checkpointer=self._memory)
 
         self._usage_buffer = UsageMetadata()
 
@@ -168,7 +167,11 @@ class AgentGraph(ABC):
             state.update_after_checkpoint_restore(query)
             logger.debug(f"[{thread_id}]: State updated")
 
-        input = Command(resume=state) if state.is_waiting_for_human_input() else state
+        input = (
+            Command(resume=state)
+            if state.is_waiting_for_human_input()
+            else state
+        )
 
         stream = self._graph.astream(
             input=input,
@@ -176,14 +179,18 @@ class AgentGraph(ABC):
             stream_mode="values",
             subgraphs=True,
         )
-        logger.debug(f"[{thread_id}]: Graph execution started {'with Command' if state.is_waiting_for_human_input() else ''}")
+        logger.debug(
+            f"[{thread_id}]: Graph execution started {'with Command' if state.is_waiting_for_human_input() else ''}"
+        )
 
         try:
             async for item in stream:
                 try:
                     state_item = self.StateType.model_validate(item[1])
                     task_result_item = state_item.to_task_result()
-                    logger.debug(f"[{thread_id}]: Yielding AgentTaskResult: [{task_result_item.task_status}] {task_result_item.content}")
+                    logger.debug(
+                        f"[{thread_id}]: Yielding AgentTaskResult: [{task_result_item.task_status}] {task_result_item.content}"
+                    )
                     yield task_result_item
                 except Exception as ve:
                     logger.error(f"[{thread_id}]: Validation error: {ve}")
@@ -201,7 +208,11 @@ class AgentGraph(ABC):
         # Checkpoints are possible only if memory is enabled
         if self._memory:
             current_state = self._graph.get_state(config=config)
-            intr = current_state.tasks[0].interrupts[0] if current_state.tasks else None
+            intr = (
+                current_state.tasks[0].interrupts[0]
+                if current_state.tasks
+                else None
+            )
             if intr:
                 logger.debug(f"[{thread_id}]: Yielding Interrupt: {intr.value}")
                 yield AgentTaskResult(
@@ -240,13 +251,13 @@ class AgentGraph(ABC):
         from_timestamp: Optional[float] = None,
     ) -> UsageMetadata:
         """Get the total usage metadata for the graph including all ChatModelClient instances
-            and other agents called using the `consume_agent_stream` method.
+        and other agents called using the `consume_agent_stream` method.
 
-            Args:
-                from_timestamp (Optional[float]): If provided, only usage after this timestamp is considered.
-                    If None, all usage metadata is returned.
-            Returns:
-                UsageMetadata: The total usage metadata for the graph.
+        Args:
+            from_timestamp (Optional[float]): If provided, only usage after this timestamp is considered.
+                If None, all usage metadata is returned.
+        Returns:
+            UsageMetadata: The total usage metadata for the graph.
         """
         total = self._pop_usage_metadata_from_buf()
         for _, value in self.__dict__.items():
@@ -291,7 +302,7 @@ class AgentGraph(ABC):
     @staticmethod
     def build_message(
         config: RunnableConfig,
-        text: str
+        text: str,
     ) -> Message:
         cfg = config["configurable"] or {}
         thread_id = cfg.get("thread_id", "default")

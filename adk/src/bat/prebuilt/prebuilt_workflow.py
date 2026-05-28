@@ -12,6 +12,7 @@ from ..logging import create_logger
 
 logger = create_logger(__name__, level="debug")
 
+
 class PrebuiltWorkflow(ABC):
     """Abstract base class for prebuilt workflows.
     Extend this class to implement custom workflows.
@@ -45,9 +46,7 @@ class PrebuiltWorkflow(ABC):
         self._setup(*args, **kwargs)
 
         self._memory = MemorySaver() if config.checkpoints else None
-        self._graph = self._graph_builder.compile(
-            checkpointer=self._memory
-        )
+        self._graph = self._graph_builder.compile(checkpointer=self._memory)
 
     @property
     def StateType(self) -> Type[AgentState]:
@@ -133,7 +132,9 @@ class PrebuiltWorkflow(ABC):
         instance_found = False
         async for item in generator:
             if instance_found:
-                logger.warning("Warning: Multiple instances found in input generator. Only the first will be processed.")
+                logger.warning(
+                    "Warning: Multiple instances found in input generator. Only the first will be processed."
+                )
             else:
                 instance_found = True
                 async for _sub_item in self._astream(item, config):
@@ -142,9 +143,7 @@ class PrebuiltWorkflow(ABC):
                     continue
                 yield _sub_item
 
-    def as_runnable(
-        self
-    ) -> RunnableGenerator:
+    def as_runnable(self) -> RunnableGenerator:
         """Returns a RunnableGenerator for the ReActLoop, wrapping the `astream` method.
         Allows the ReActLoop to be used as a node (subgraph) in a larger graph.
         """

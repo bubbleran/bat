@@ -30,6 +30,7 @@ from .prebuilt_workflow import PrebuiltWorkflow
 
 logger = create_logger(__name__, level="debug")
 
+
 class CallAgentNode(PrebuiltWorkflow):
     """CallAgentNode implements agent-to-agent communication using the A2A protocol.
 
@@ -143,8 +144,12 @@ class CallAgentNode(PrebuiltWorkflow):
         ]
         for key in keys:
             if key not in StateType.model_fields:
-                logger.error(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
-                raise KeyError(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
+                logger.error(
+                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'"
+                )
+                raise KeyError(
+                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'"
+                )
 
         # Initialize PrebuiltWorkflow
         super().__init__(
@@ -162,8 +167,9 @@ class CallAgentNode(PrebuiltWorkflow):
             recursion_limit=recursion_limit,
         )
 
-
-    def _router(self, state: Type[AgentState]) -> Literal["consume_stream", "cleanup"]:
+    def _router(
+        self, state: Type[AgentState]
+    ) -> Literal["consume_stream", "cleanup"]:
         """Route between consuming more stream data or cleaning up.
 
         This method determines the next step in the workflow based on the current state.
@@ -181,7 +187,11 @@ class CallAgentNode(PrebuiltWorkflow):
         stream_done_val = self.stream_done
         needs_input_val = bool(getattr(state, self.agent_input_required))
 
-        return "cleanup" if stream_done_val or needs_input_val else "consume_stream"
+        return (
+            "cleanup"
+            if stream_done_val or needs_input_val
+            else "consume_stream"
+        )
 
     @override
     def _setup(
@@ -269,7 +279,10 @@ class CallAgentNode(PrebuiltWorkflow):
         """
         cfg: Dict[str, Any] = dict(config or {})
 
-        if "recursion_limit" not in cfg or (isinstance(cfg["recursion_limit"], int) and cfg["recursion_limit"] < 200):
+        if "recursion_limit" not in cfg or (
+            isinstance(cfg["recursion_limit"], int)
+            and cfg["recursion_limit"] < 200
+        ):
             cfg["recursion_limit"] = self.recursion_limit
 
         stream = self.graph.astream(state, cfg)
@@ -277,7 +290,6 @@ class CallAgentNode(PrebuiltWorkflow):
         async for item in stream:
             state_item = self.StateType.model_validate(item)
             yield state_item
-
 
     async def _call_agent(
         self,
@@ -303,18 +315,25 @@ class CallAgentNode(PrebuiltWorkflow):
         """
         url = self.agent_config.get_a2a_agent_connection(self._agent_name).url
 
-        if self._agent_card is None or self._agent_card.name != self._agent_name:
+        if (
+            self._agent_card is None
+            or self._agent_card.name != self._agent_name
+        ):
             cards = await self.agent_config.list_agent_cards([self._agent_name])
             self._agent_card = cards[self._agent_name]
             if self._agent_card.supported_interfaces:
                 self._agent_card.supported_interfaces[0].url = url
             else:
-                self._agent_card.supported_interfaces.append(AgentInterface(
-                    url=url,
-                    protocol_binding="JSONRPC",
-                    protocol_version="2.0",
-                ))
-            logger.debug(f"Node `{self.loop_name}.call_agent`: Set agent card URL to {url} for agent {self._agent_card.name}")
+                self._agent_card.supported_interfaces.append(
+                    AgentInterface(
+                        url=url,
+                        protocol_binding="JSONRPC",
+                        protocol_version="2.0",
+                    )
+                )
+            logger.debug(
+                f"Node `{self.loop_name}.call_agent`: Set agent card URL to {url} for agent {self._agent_card.name}"
+            )
 
         # Reset dynamic fields
         self.stream_done = False
@@ -323,7 +342,9 @@ class CallAgentNode(PrebuiltWorkflow):
         setattr(state, self.agent_input_required, False)
 
         # Get input text
-        text = getattr(state, self.input, "") or getattr(state, self.output, None)
+        text = getattr(state, self.input, "") or getattr(
+            state, self.output, None
+        )
         if not isinstance(text, str):
             text = str(text)
 
@@ -331,7 +352,11 @@ class CallAgentNode(PrebuiltWorkflow):
 
         # Update global state
         if self.global_status:
-            setattr(state, self.global_status, AgentTaskStatus.AGENT_TASK_STATUS_WORKING)
+            setattr(
+                state,
+                self.global_status,
+                AgentTaskStatus.AGENT_TASK_STATUS_WORKING,
+            )
         setattr(state, self.output, f"Forwarding request to {self.loop_name}…")
 
         # Start streaming worker
@@ -452,7 +477,9 @@ class CallAgentNode(PrebuiltWorkflow):
                 ):
                     atr = AgentTaskResult.from_send_message_stream(chunk)
                     await q.put(atr)
-                    logger.debug(f"Worker: put {(atr.task_status, atr.content)}")
+                    logger.debug(
+                        f"Worker: put {(atr.task_status, atr.content)}"
+                    )
                     if atr.task_status in [
                         TaskState.TASK_STATE_COMPLETED,
                         TaskState.TASK_STATE_INPUT_REQUIRED,
@@ -505,19 +532,19 @@ class CallAgentNode(PrebuiltWorkflow):
             client_config=ClientConfig(
                 httpx_client=AsyncClient(timeout=TIMEOUT),
                 streaming=True,
-            )
+            ),
         )
         stream = client.send_message(SendMessageRequest(message=message))
         try:
             async for chunk in stream:
                 t = time.time()
-                if chunk.HasField('message'):
+                if chunk.HasField("message"):
                     metadata = chunk.message.metadata
-                elif chunk.HasField('status_update'):
+                elif chunk.HasField("status_update"):
                     metadata = chunk.status_update.metadata
-                elif chunk.HasField('artifact_update'):
+                elif chunk.HasField("artifact_update"):
                     metadata = chunk.artifact_update.metadata
-                elif chunk.HasField('task'):
+                elif chunk.HasField("task"):
                     metadata = chunk.task.metadata
                 else:
                     metadata = None
@@ -547,7 +574,9 @@ class CallAgentNode(PrebuiltWorkflow):
         Returns:
             UsageMetadata: The aggregated usage metadata from all stream events.
         """
-        return self._metadata_collector.get_usage_metadata(from_timestamp=from_timestamp)
+        return self._metadata_collector.get_usage_metadata(
+            from_timestamp=from_timestamp
+        )
 
     def get_trace_metadata(
         self,
@@ -563,4 +592,6 @@ class CallAgentNode(PrebuiltWorkflow):
             TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
                 empty when no tool-call trace was forwarded.
         """
-        return self._metadata_collector.get_trace_metadata(from_timestamp=from_timestamp)
+        return self._metadata_collector.get_trace_metadata(
+            from_timestamp=from_timestamp
+        )

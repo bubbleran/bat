@@ -35,6 +35,7 @@ A2A_APPLICATION_DEFAULT_PORT = 9900
 MCP_APPLICATION_DEFAULT_PORT = 9800
 DEFAULT_HTTPX_CLIENT_TIMEOUT = 180
 
+
 class AgentApplication:
     """Agent Application based on `Starlette`.
     This class sets up an agent application that can handle A2A and MCP protocols.
@@ -68,7 +69,7 @@ class AgentApplication:
         self,
         AgentGraphType: Type[AgentGraph],
         AgentStateType: Type[AgentState],
-        agent_card_path: str = './agent.json',
+        agent_card_path: str = "./agent.json",
     ):
         """
         Initialize the AgentApplication with the given agent card path and agent graph.
@@ -106,11 +107,9 @@ class AgentApplication:
         )
         json_rpc_routes = create_jsonrpc_routes(
             request_handler=self._request_handler,
-            rpc_url='/',
+            rpc_url="/",
         )
-        self._a2a_server = Starlette(
-            routes=agent_card_routes+json_rpc_routes
-        )
+        self._a2a_server = Starlette(routes=agent_card_routes + json_rpc_routes)
 
     def load_agent_card(
         self,
@@ -139,26 +138,30 @@ class AgentApplication:
         url = url.rstrip("/")
         port = int(os.getenv("PORT", A2A_APPLICATION_DEFAULT_PORT))
 
-        interfaceUrl = f'{url}:{port}'
+        interfaceUrl = f"{url}:{port}"
         try:
-            with open(agent_card_path, 'r') as file:
+            with open(agent_card_path, "r") as file:
                 json_str = file.read()
                 agent_card = Parse(json_str, AgentCard())
 
                 if agent_card.supported_interfaces:
                     logger.error("interfaces already defined: will be ignored")
-                    raise Exception("AgentCard's supportedInterfaces field is set, please remove supportedInterfaces from your agent card.")
-                agent_card.supported_interfaces.append(AgentInterface(
-                    url=interfaceUrl,
-                    protocol_binding="JSONRPC",
-                    protocol_version="2.0",
-                ))
+                    raise Exception(
+                        "AgentCard's supportedInterfaces field is set, please remove supportedInterfaces from your agent card."
+                    )
+                agent_card.supported_interfaces.append(
+                    AgentInterface(
+                        url=interfaceUrl,
+                        protocol_binding="JSONRPC",
+                        protocol_version="2.0",
+                    )
+                )
         except FileNotFoundError as e:
-            raise FileNotFoundError('Agent card file not found.') from e
+            raise FileNotFoundError("Agent card file not found.") from e
         except ValidationError as e:
-            raise ValidationError('Invalid agent card format.') from e
+            raise ValidationError("Invalid agent card format.") from e
         except Exception as e:
-            raise Exception(f'Error loading agent card: {e}') from e
+            raise Exception(f"Error loading agent card: {e}") from e
 
         return agent_card
 
@@ -211,11 +214,14 @@ class AgentApplication:
             Returns:
                 str: The Agent's response.
             """
+
             async def get_response_from_stream() -> str:
                 client_factory = ClientFactory(
                     config=ClientConfig(
                         streaming=False,
-                        httpx_client=httpx.AsyncClient(timeout=DEFAULT_HTTPX_CLIENT_TIMEOUT),
+                        httpx_client=httpx.AsyncClient(
+                            timeout=DEFAULT_HTTPX_CLIENT_TIMEOUT
+                        ),
                     ),
                 )
                 client = client_factory.create(card=self.agent_card)
@@ -231,11 +237,14 @@ class AgentApplication:
                 response = get_stream_response_text(chunk)
                 if not response:
                     response = "No valid response received."
-                    logger.warning("No valid response was obtained from the agent stream.")
+                    logger.warning(
+                        "No valid response was obtained from the agent stream."
+                    )
                 return response
 
             try:
                 result = {}
+
                 def runner(coro):
                     try:
                         loop = asyncio.new_event_loop()
@@ -247,7 +256,9 @@ class AgentApplication:
                         pending = asyncio.all_tasks(loop)
                         for task in pending:
                             task.cancel()
-                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        loop.run_until_complete(
+                            asyncio.gather(*pending, return_exceptions=True)
+                        )
                         loop.close()
 
                 t = Thread(
@@ -262,7 +273,9 @@ class AgentApplication:
                 response = result["value"]
             except Exception as e:
                 logger.error(f"Error while getting response from Agent: {e}")
-                response = f"An error occurred while processing your request: {e}"
+                response = (
+                    f"An error occurred while processing your request: {e}"
+                )
             return response
 
         return mcp
@@ -292,7 +305,9 @@ class AgentApplication:
             a2a_server = uvicorn.Server(config=a2a_server_config)
 
             t_a2a = Thread(target=lambda: a2a_server.run())
-            t_mcp = Thread(target=lambda: asyncio.run(mcp_app.run_streamable_http_async()))
+            t_mcp = Thread(
+                target=lambda: asyncio.run(mcp_app.run_streamable_http_async())
+            )
 
             t_a2a.start()
             t_mcp.start()

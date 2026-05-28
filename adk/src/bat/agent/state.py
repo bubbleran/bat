@@ -8,33 +8,36 @@ from pydantic import BaseModel
 
 from ..logging import create_logger
 
-logger = create_logger(__name__, 'debug')
+logger = create_logger(__name__, "debug")
+
 
 class AgentTaskStatus(IntEnum):
     """**AgentTaskStatus** is an enum type matching the A2A-SDK **TaskState**.
-        The need for this redefinition is due to:
-            - Incompatibility between PydanticV2 and Protobuf.
-            - Not all the A2A-SDK TaskState are currently supported by BAT-ADK.
+    The need for this redefinition is due to:
+        - Incompatibility between PydanticV2 and Protobuf.
+        - Not all the A2A-SDK TaskState are currently supported by BAT-ADK.
 
-        Among those defined in the A2A-SDK, BAT-ADK currently supports:
-        - **AGENT_TASK_STATUS_WORKING** -> TASK_STATE_WORKING
-        - **AGENT_TASK_STATUS_INPUT_REQUIRED** -> TASK_STATE_INPUT_REQUIRED
-        - **AGENT_TASK_STATUS_COMPLETED** -> TASK_STATE_COMPLETED
-        - **AGENT_TASK_STATUS_FAILED** -> TASK_STATE_FAILED
+    Among those defined in the A2A-SDK, BAT-ADK currently supports:
+    - **AGENT_TASK_STATUS_WORKING** -> TASK_STATE_WORKING
+    - **AGENT_TASK_STATUS_INPUT_REQUIRED** -> TASK_STATE_INPUT_REQUIRED
+    - **AGENT_TASK_STATUS_COMPLETED** -> TASK_STATE_COMPLETED
+    - **AGENT_TASK_STATUS_FAILED** -> TASK_STATE_FAILED
 
-        Internally, the following A2A-SDK task states are handles:
-        - **TASK_STATE_SUBMITTED**
+    Internally, the following A2A-SDK task states are handles:
+    - **TASK_STATE_SUBMITTED**
 
-        The A2A-SDK defines the following additional task states:
-        - TASK_STATE_UNSPECIFIED
-        - TASK_STATE_CANCELED
-        - TASK_STATE_REJECTED
-        - TASK_STATE_AUTH_REQUIRED
+    The A2A-SDK defines the following additional task states:
+    - TASK_STATE_UNSPECIFIED
+    - TASK_STATE_CANCELED
+    - TASK_STATE_REJECTED
+    - TASK_STATE_AUTH_REQUIRED
     """
+
     AGENT_TASK_STATUS_WORKING = 2
     AGENT_TASK_STATUS_COMPLETED = 3
     AGENT_TASK_STATUS_FAILED = 4
     AGENT_TASK_STATUS_INPUT_REQUIRED = 6
+
 
 class AgentTaskResult(BaseModel):
     """Result of an agent invocation.
@@ -53,13 +56,14 @@ class AgentTaskResult(BaseModel):
     | TASK_STATE_COMPLETED       | Final response or result of the agent's processing.                  |
     | TASK_STATE_FAILED          | Error message indicating what went wrong during the task execution.  |
     """
+
     task_status: AgentTaskStatus
     content: str
 
     def __init__(
         self,
         task_status: AgentTaskStatus | str,
-        content: str
+        content: str,
     ):
         """Initialize AgentTaskResult with task status and content.
 
@@ -85,7 +89,11 @@ class AgentTaskResult(BaseModel):
                 task_status = AgentTaskStatus.AGENT_TASK_STATUS_INPUT_REQUIRED
             elif task_status == "completed" or task_status == "3":
                 task_status = AgentTaskStatus.AGENT_TASK_STATUS_COMPLETED
-            elif task_status == "error" or task_status == "failed" or task_status == "4":
+            elif (
+                task_status == "error"
+                or task_status == "failed"
+                or task_status == "4"
+            ):
                 task_status = AgentTaskStatus.AGENT_TASK_STATUS_FAILED
             else:
                 raise ValueError(f"unknown task_status '{task_status}'")
@@ -114,11 +122,11 @@ class AgentTaskResult(BaseModel):
         content = get_stream_response_text(chunk)
         status = TaskState.TASK_STATE_WORKING
 
-        if chunk.HasField('message') or chunk.HasField('artifact_update'):
+        if chunk.HasField("message") or chunk.HasField("artifact_update"):
             status = TaskState.TASK_STATE_COMPLETED
-        elif chunk.HasField('status_update'):
+        elif chunk.HasField("status_update"):
             status = chunk.status_update.status.state
-        elif chunk.HasField('task'):
+        elif chunk.HasField("task"):
             match chunk.task.status.state:
                 case TaskState.TASK_STATE_SUBMITTED:
                     status = TaskState.TASK_STATE_WORKING
@@ -139,9 +147,9 @@ class AgentTaskResult(BaseModel):
         )
 
     def requires_input(self) -> bool:
-        """Returns true when task_status indicates that user input is required.
-        """
+        """Returns true when task_status indicates that user input is required."""
         return self.task_status == TaskState.TASK_STATE_INPUT_REQUIRED
+
 
 class AgentState(BaseModel, ABC):
     """Abstract Pydantic model from which agent's state classes should inherit.
@@ -202,15 +210,13 @@ class AgentState(BaseModel, ABC):
             )
     ```
     """
+
     bat_extra: Dict[str, Any] = {}
     bat_buffer: List = []
 
     @classmethod
     @abstractmethod
-    def from_query(
-        cls,
-        query: str
-    ) -> Self:
+    def from_query(cls, query: str) -> Self:
         """Instantiate agent state from initial query.
 
         Factory method called by the execution framework to create a new state instance.

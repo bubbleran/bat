@@ -16,6 +16,7 @@ from .prebuilt_workflow import PrebuiltWorkflow
 
 logger = create_logger(__name__, level="debug")
 
+
 class ReActLoop(PrebuiltWorkflow):
     """ReActLoop implements a ReAct-style loop using a ChatModelClient with associated tools.
 
@@ -78,6 +79,7 @@ class ReActLoop(PrebuiltWorkflow):
             self.graph_builder.add_node("rng_loop", self.rng_loop.as_runnable())
     ```
     """
+
     def __init__(
         self,
         config: AgentConfig,
@@ -116,8 +118,12 @@ class ReActLoop(PrebuiltWorkflow):
         ]
         for key in keys:
             if key not in StateType.model_fields:
-                logger.error(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
-                raise KeyError(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
+                logger.error(
+                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'"
+                )
+                raise KeyError(
+                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'"
+                )
 
         super().__init__(
             config=config,
@@ -158,10 +164,13 @@ class ReActLoop(PrebuiltWorkflow):
 
         self.graph_builder.add_node("prepare", self._prepare_for_loop)
         self.graph_builder.add_node("llm", self._llm)
-        self.graph_builder.add_node("tools", ToolNode(
-            tools=chat_model_client.tools,
-            messages_key="bat_buffer",
-        ))
+        self.graph_builder.add_node(
+            "tools",
+            ToolNode(
+                tools=chat_model_client.tools,
+                messages_key="bat_buffer",
+            ),
+        )
         self.graph_builder.add_node("cleanup", self._cleanup_after_loop)
 
         self.graph_builder.add_edge(START, "prepare")
@@ -192,24 +201,36 @@ class ReActLoop(PrebuiltWorkflow):
         """
         state_dict = state.model_dump()
         if self.input_key not in state_dict:
-            raise ValueError(f"Input key '{self.input_key}' not found in state.")
+            raise ValueError(
+                f"Input key '{self.input_key}' not found in state."
+            )
         if self.output_key not in state_dict:
-            raise ValueError(f"Output key '{self.output_key}' not found in state.")
+            raise ValueError(
+                f"Output key '{self.output_key}' not found in state."
+            )
         if self.messages_key and self.messages_key not in state_dict:
-            raise ValueError(f"Messages key '{self.messages_key}' not found in state.")
+            raise ValueError(
+                f"Messages key '{self.messages_key}' not found in state."
+            )
 
         input = state_dict[self.input_key]
         if not isinstance(input, str) and not isinstance(input, HumanMessage):
-            raise ValueError(f"Key '{self.input_key}' must point to a string or HumanMessage. Found {type(input)} instead.")
+            raise ValueError(
+                f"Key '{self.input_key}' must point to a string or HumanMessage. Found {type(input)} instead."
+            )
 
         messages = state_dict[self.messages_key] if self.messages_key else []
         if not isinstance(messages, List):
-            raise ValueError(f"Key '{self.messages_key}' must point to a List[BaseMessage]. Found {type(messages)} instead.")
+            raise ValueError(
+                f"Key '{self.messages_key}' must point to a List[BaseMessage]. Found {type(messages)} instead."
+            )
         for msg in messages:
             try:
                 BaseMessage.model_validate(msg)
             except ValidationError as e:
-                raise ValueError(f"Key '{self.messages_key}' must point to a List[BaseMessage]. Found item of type {type(msg)} instead.") from e
+                raise ValueError(
+                    f"Key '{self.messages_key}' must point to a List[BaseMessage]. Found item of type {type(msg)} instead."
+                ) from e
 
         stream = self.graph.astream(state, config)
         async for item in stream:
@@ -226,15 +247,15 @@ class ReActLoop(PrebuiltWorkflow):
         """
         logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: invoked")
         if self.messages_key:
-            state.bat_extra[self._internal_messages_key] = getattr(state, self.messages_key)
+            state.bat_extra[self._internal_messages_key] = getattr(
+                state, self.messages_key
+            )
         else:
             state.bat_extra[self._internal_messages_key] = []
         state.bat_extra[self._internal_trace_key] = []
         state.bat_buffer = []
         if self.status_key:
-            state = state.model_copy(update={
-                self.status_key: "Calling LLM..."
-            })
+            state = state.model_copy(update={self.status_key: "Calling LLM..."})
         logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: prepared")
         return state
 
@@ -252,15 +273,20 @@ class ReActLoop(PrebuiltWorkflow):
         tool_messages = state.bat_buffer
         state.bat_buffer = []
         if self.status_key:
-            state = state.model_copy(update={
-                self.status_key: "Calling LLM...",
-            })
+            state = state.model_copy(
+                update={
+                    self.status_key: "Calling LLM...",
+                }
+            )
             yield state
         try:
             # If there are tool messages, use them as input; otherwise, use the input key from state
-            input = (
-                tool_messages
-                or (HumanMessage(state_input) if isinstance((state_input := getattr(state, self.input_key)), str) else state_input)
+            input = tool_messages or (
+                HumanMessage(state_input)
+                if isinstance(
+                    (state_input := getattr(state, self.input_key)), str
+                )
+                else state_input
             )
             response = self.chat_model_client.invoke(
                 input=input,
@@ -272,15 +298,21 @@ class ReActLoop(PrebuiltWorkflow):
             tool_calls = list(response.tool_calls)
             state.bat_extra[self._internal_trace_key].extend(tool_calls)
             self._metadata_collector.add_tool_calls(tool_calls)
-            tool_names = [tool_call.get('name', '') for tool_call in response.tool_calls]
+            tool_names = [
+                tool_call.get("name", "") for tool_call in response.tool_calls
+            ]
             state.bat_buffer = [response]
             if self.status_key:
-                state = state.model_copy(update={
-                    self.status_key: f"Running tools: {', '.join(tool_names)}",
-                })
+                state = state.model_copy(
+                    update={
+                        self.status_key: f"Running tools: {', '.join(tool_names)}",
+                    }
+                )
         else:
             # state = state.model_copy(update={self.output_key: response.content})
-            state.bat_extra[self._internal_final_response_key] = response.content
+            state.bat_extra[self._internal_final_response_key] = (
+                response.content
+            )
         logger.debug(f"Node `{self.loop_name}.llm`: completed")
         yield state
 
@@ -293,10 +325,14 @@ class ReActLoop(PrebuiltWorkflow):
         and removes the internal key from the `bat_extra` dictionary in the state.
         """
         logger.debug(f"Node `{self.loop_name}.cleanup`: invoked")
-        state = state.model_copy(update={
-            self.messages_key: state.bat_extra[self._internal_messages_key],
-            self.output_key: state.bat_extra[self._internal_final_response_key],
-        })
+        state = state.model_copy(
+            update={
+                self.messages_key: state.bat_extra[self._internal_messages_key],
+                self.output_key: state.bat_extra[
+                    self._internal_final_response_key
+                ],
+            }
+        )
         if self._internal_messages_key in state.bat_extra:
             del state.bat_extra[self._internal_messages_key]
         if self._internal_trace_key in state.bat_extra:
@@ -319,4 +355,6 @@ class ReActLoop(PrebuiltWorkflow):
             TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
                 empty when no tool calls have been recorded.
         """
-        return self._metadata_collector.get_trace_metadata(from_timestamp=from_timestamp)
+        return self._metadata_collector.get_trace_metadata(
+            from_timestamp=from_timestamp
+        )

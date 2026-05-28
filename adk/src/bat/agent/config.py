@@ -19,6 +19,7 @@ logger = create_logger(__name__, "debug")
 
 DEFAULT_TIMEOUT = 60
 
+
 class MCPServerConfig(BaseModel):
     """Configuration for an MCP server connection.
 
@@ -32,16 +33,18 @@ class MCPServerConfig(BaseModel):
 
     Note: the `required` attribute is not well supported yet.
     """
+
     name: str
     url: str
     required: bool = True
     timeout: int = DEFAULT_TIMEOUT
 
+
 """Type for inter-agent communication protocol ('A2A' or 'MCP')."""
 InteragentCommunicationProtocol = Annotated[
-    Literal['A2A', 'MCP'],
-    BeforeValidator(lambda v: v.upper())
+    Literal["A2A", "MCP"], BeforeValidator(lambda v: v.upper())
 ]
+
 
 class RemoteAgentConfig(BaseModel):
     """Configuration for remote A2A or MCP agent connections.
@@ -57,15 +60,18 @@ class RemoteAgentConfig(BaseModel):
 
     Note: the `required` attribute is not well supported yet.
     """
+
     name: str
     url: str
     protocol: InteragentCommunicationProtocol
     required: bool = True
     timeout: int = DEFAULT_TIMEOUT
 
+
 class A2AConnection(BaseModel):
     url: str
     timeout: int
+
 
 class AgentConfig(BaseModel):
     """
@@ -89,9 +95,12 @@ class AgentConfig(BaseModel):
         get_agent_cards(agent_names: List[str]) -> List[AgentCard]:
             Retrieve agent cards from the specified remote agents.
     """
+
     checkpoints: bool = Field(default=False)
-    mcp_servers: List[MCPServerConfig] = Field(default=[], alias='mcp-servers')
-    remote_agents: List[RemoteAgentConfig] = Field(default=[], alias='remote-agents')
+    mcp_servers: List[MCPServerConfig] = Field(default=[], alias="mcp-servers")
+    remote_agents: List[RemoteAgentConfig] = Field(
+        default=[], alias="remote-agents"
+    )
 
     _mcp_server_connections: dict[str, MCPConnection] = {}
     _mcp_agent_connections: dict[str, MCPConnection] = {}
@@ -159,7 +168,7 @@ class AgentConfig(BaseModel):
     @classmethod
     def load(
         cls,
-        path: str = 'config.yaml',
+        path: str = "config.yaml",
     ) -> Self:
         """Load the agent configuration from a YAML file. If the YAML file is not found,
         an empty configuration is used.
@@ -174,14 +183,16 @@ class AgentConfig(BaseModel):
             ValueError: If the configuration file cannot be loaded or validated.
         """
         try:
-            with open(path, 'r') as f:
+            with open(path, "r") as f:
                 data = yaml.safe_load(f)
             cfg = cls.model_validate(data)
             cfg._mcp_server_connections = _build_mcp_server_connections(
                 mcp_servers=cfg.mcp_servers,
             )
-            cfg._a2a_agent_connections, cfg._mcp_agent_connections = _build_remote_agent_connections(
-                remote_agents=cfg.remote_agents,
+            cfg._a2a_agent_connections, cfg._mcp_agent_connections = (
+                _build_remote_agent_connections(
+                    remote_agents=cfg.remote_agents,
+                )
             )
             for server in cfg.mcp_servers:
                 cfg._required_mcp_servers[server.name] = server.required
@@ -191,12 +202,18 @@ class AgentConfig(BaseModel):
             asyncio.run(cfg._build_mcp_servers_aliases_map())
             asyncio.run(cfg._build_remote_agents_aliases_map())
 
-            logger.info(f"Agent configuration loaded [checkpoints={cfg.checkpoints}] [#agents={len(cfg.remote_agents)}] [#mcp={len(cfg.mcp_servers)}]")
+            logger.info(
+                f"Agent configuration loaded [checkpoints={cfg.checkpoints}] [#agents={len(cfg.remote_agents)}] [#mcp={len(cfg.mcp_servers)}]"
+            )
         except FileNotFoundError:
-            logger.warning("Configuration file not found. The Agent won't have access to remote agents or MCP servers.")
+            logger.warning(
+                "Configuration file not found. The Agent won't have access to remote agents or MCP servers."
+            )
             cfg = cls()
         except Exception as e:
-            raise ValueError(f"Failed to load and validate agent configuration: {e}") from e
+            raise ValueError(
+                f"Failed to load and validate agent configuration: {e}"
+            ) from e
         return cfg
 
     def get_mcp_server_connection(
@@ -286,7 +303,9 @@ class AgentConfig(BaseModel):
                     tools.extend(server_tools)
                 except Exception as e:
                     if self.is_mcp_server_required(name):
-                        raise ConnectionError(f"Failed to retrieve tools from MCP server '{name}': {e}") from e
+                        raise ConnectionError(
+                            f"Failed to retrieve tools from MCP server '{name}': {e}"
+                        ) from e
             else:
                 logger.warning(f"MCP Server {name} not found in configuration.")
         return tools
@@ -328,16 +347,26 @@ class AgentConfig(BaseModel):
                     agent_cards[name] = agent_card
                 elif name in mcp_connections:
                     async with mcp_client.session(name) as session:
-                        call_tool_result = await session.call_tool('get_agent_card')
+                        call_tool_result = await session.call_tool(
+                            "get_agent_card"
+                        )
                     if call_tool_result.isError:
-                        raise RuntimeError("The MCP remote agent 'get_agent_card' tool returned an error.")
-                    agent_card = AgentCard.model_validate(call_tool_result.result)
+                        raise RuntimeError(
+                            "The MCP remote agent 'get_agent_card' tool returned an error."
+                        )
+                    agent_card = AgentCard.model_validate(
+                        call_tool_result.result
+                    )
                     agent_cards[name] = agent_card
                 else:
-                    logger.warning(f"Remote Agent {name} not found in configuration.")
+                    logger.warning(
+                        f"Remote Agent {name} not found in configuration."
+                    )
             except Exception as e:
                 if self.is_remote_agent_required(name):
-                    raise ConnectionError(f"Failed to retrieve agent card from remote agent '{name}': {e}") from e
+                    raise ConnectionError(
+                        f"Failed to retrieve agent card from remote agent '{name}': {e}"
+                    ) from e
         return agent_cards
 
     async def _build_mcp_servers_aliases_map(
@@ -349,7 +378,9 @@ class AgentConfig(BaseModel):
         Raises:
             Exception: if the connection to one of the `required` MCP servers fails.
         """
-        mcp_client = MultiServerMCPClient(connections=self._mcp_server_connections)
+        mcp_client = MultiServerMCPClient(
+            connections=self._mcp_server_connections
+        )
         aliases: Dict[str, str] = {}
 
         for mcp in self.mcp_servers:
@@ -358,12 +389,18 @@ class AgentConfig(BaseModel):
                 aliases[alias] = mcp.name
             except Exception as e:
                 if mcp.required:
-                    logger.error(f"Failed to get name from required MCP server '{mcp.name}': {e}")
+                    logger.error(
+                        f"Failed to get name from required MCP server '{mcp.name}': {e}"
+                    )
                     raise e
                 else:
-                    logger.warning(f"Failed to get name from MCP server '{mcp.name}': {e}")
+                    logger.warning(
+                        f"Failed to get name from MCP server '{mcp.name}': {e}"
+                    )
 
-        logger.debug(f"Retrieved alias for {len(aliases)}/{len(self.mcp_servers)} MCP Servers.")
+        logger.debug(
+            f"Retrieved alias for {len(aliases)}/{len(self.mcp_servers)} MCP Servers."
+        )
         self._mcp_servers_aliases = aliases
 
     async def _build_remote_agents_aliases_map(
@@ -375,26 +412,35 @@ class AgentConfig(BaseModel):
         Raises:
             Exception: if the connection to one of the `required` agents fails.
         """
-        mcp_client = MultiServerMCPClient(connections=self._mcp_server_connections)
+        mcp_client = MultiServerMCPClient(
+            connections=self._mcp_server_connections
+        )
         async_client = AsyncClient(timeout=DEFAULT_TIMEOUT)
         aliases: Dict[str, str] = {}
 
         for agent in self.remote_agents:
             try:
-                if agent.protocol == 'A2A':
+                if agent.protocol == "A2A":
                     alias = await _request_a2a_name(async_client, agent.url)
                 else:
                     alias = await _request_mcp_name(mcp_client, agent.name)
                 aliases[alias] = agent.name
             except Exception as e:
                 if agent.required:
-                    logger.error(f"Failed to get name from required Agent '{agent.name}': {e}")
+                    logger.error(
+                        f"Failed to get name from required Agent '{agent.name}': {e}"
+                    )
                     raise e
                 else:
-                    logger.warning(f"Failed to get name from Agent '{agent.name}': {e}")
+                    logger.warning(
+                        f"Failed to get name from Agent '{agent.name}': {e}"
+                    )
 
-        logger.debug(f"Retrieved alias for {len(aliases)}/{len(self.remote_agents)} Agents.")
+        logger.debug(
+            f"Retrieved alias for {len(aliases)}/{len(self.remote_agents)} Agents."
+        )
         self._remote_agents_aliases = aliases
+
 
 async def _request_mcp_name(
     client: MultiServerMCPClient,
@@ -418,10 +464,13 @@ async def _request_mcp_name(
 
     if result is None:
         if error:
-            raise ValueError(f"Cannot retrieve name for {server_name} (MCP): {error}")
+            raise ValueError(
+                f"Cannot retrieve name for {server_name} (MCP): {error}"
+            )
         raise ValueError(f"Cannot retrieve name for {server_name} (MCP).")
 
     return result
+
 
 async def _request_a2a_name(
     client: AsyncClient,
@@ -433,6 +482,7 @@ async def _request_a2a_name(
     )
     agent_card = await card_resolver.get_agent_card()
     return agent_card.name
+
 
 def _build_mcp_server_connections(
     mcp_servers: List[MCPServerConfig],
@@ -449,11 +499,12 @@ def _build_mcp_server_connections(
         server.name: MCPConnection(
             url=server.url,
             timeout=server.timeout,
-            transport='streamable_http',
+            transport="streamable_http",
         )
         for server in mcp_servers
     }
     return mcp_connections
+
 
 def _build_remote_agent_connections(
     remote_agents: List[RemoteAgentConfig],
@@ -471,10 +522,10 @@ def _build_remote_agent_connections(
         agent.name: MCPConnection(
             url=agent.url,
             timeout=agent.timeout,
-            transport='streamable_http',
+            transport="streamable_http",
         )
         for agent in remote_agents
-        if agent.protocol == 'MCP'
+        if agent.protocol == "MCP"
     }
     a2a_connections = {
         agent.name: A2AConnection(
@@ -482,6 +533,6 @@ def _build_remote_agent_connections(
             timeout=agent.timeout,
         )
         for agent in remote_agents
-        if agent.protocol == 'A2A'
+        if agent.protocol == "A2A"
     }
     return a2a_connections, mcp_connections

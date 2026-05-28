@@ -16,16 +16,19 @@ class NATConnector:
 
     class _WState(MessagesState):
         """WState wraps MessagesState adding a query field"""
+
         query: str
         bat_state: Optional[AgentState] = None
 
     def _extract_query(
-        state: MessagesState
+        state: MessagesState,
     ) -> str:
         """Extract query string from the last message in state."""
         messages = state["messages"]
         if len(messages) == 0:
-            raise RuntimeError("Received messages list with 0 messages, expected >= 1.")
+            raise RuntimeError(
+                "Received messages list with 0 messages, expected >= 1."
+            )
         last = messages[-1]
         query = last.content.strip()
         return query
@@ -46,7 +49,7 @@ class NATConnector:
 
     def _input_adaptor(
         self,
-        state: _WState
+        state: _WState,
     ) -> _WState:
         """Extract query from messages."""
         state["query"] = NATConnector._extract_query(state)
@@ -62,7 +65,9 @@ class NATConnector:
             state["bat_state"] = self.StateType.from_query(state["query"])
         else:
             state["bat_state"].update_after_checkpoint_restore(state["query"])
-        out = await self.bat_agent_graph.ainvoke(state["bat_state"].model_dump())
+        out = await self.bat_agent_graph.ainvoke(
+            state["bat_state"].model_dump()
+        )
 
         if hasattr(out, "response"):
             text = out.response or ""

@@ -73,10 +73,12 @@ class MockCallAgentNode(MockPrebuiltWorkflow):
         state: Type[AgentState],
     ) -> Type[AgentState]:
         """Modify state like CallAgentNode would, but with mock output instead of real calls."""
-        return state.model_copy(update={
-            self.output: self.mock_output,
-            self.agent_response_content: self.mock_output,
-            self.agent_response_status: "completed",
-            self.global_status: "completed",
-            self.agent_input_required: False,
-        })
+        return state.model_copy(
+            update={
+                self.output: self.mock_output,
+                self.agent_response_content: self.mock_output,
+                self.agent_response_status: "completed",
+                self.global_status: "completed",
+                self.agent_input_required: False,
+            }
+        )

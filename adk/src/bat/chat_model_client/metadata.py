@@ -10,6 +10,7 @@ USAGE_METADATA_KEY = "usage"
 TRACE_METADATA_KEY = "trace"
 TOOL_CALLS_METADATA_KEY = "tool_calls"
 
+
 class UsageMetadata(BaseModel):
     """Metadata about the usage of the chat model.
 
@@ -24,22 +25,22 @@ class UsageMetadata(BaseModel):
         total_tokens (int): Total number of tokens used (input + output).
         inference_time (float): Time taken for the inference in seconds.
     """
+
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
     inference_time: float = 0.0
 
-    def __add__(
-        self,
-        other: Self | Dict[str, int]
-    ) -> Self:
+    def __add__(self, other: Self | Dict[str, int]) -> Self:
         """Add two UsageMetadata instances."""
         if isinstance(other, Dict):
             return UsageMetadata(
                 input_tokens=self.input_tokens + other.get("input_tokens", 0),
-                output_tokens=self.output_tokens + other.get("output_tokens", 0),
+                output_tokens=self.output_tokens
+                + other.get("output_tokens", 0),
                 total_tokens=self.total_tokens + other.get("total_tokens", 0),
-                inference_time=self.inference_time + other.get("inference_time", 0.0),
+                inference_time=self.inference_time
+                + other.get("inference_time", 0.0),
             )
         return UsageMetadata(
             input_tokens=self.input_tokens + other.input_tokens,
@@ -48,17 +49,16 @@ class UsageMetadata(BaseModel):
             inference_time=self.inference_time + other.inference_time,
         )
 
-    def __sub__(
-        self,
-        other: Self | Dict
-    ) -> Self:
+    def __sub__(self, other: Self | Dict) -> Self:
         """Subtract two UsageMetadata instances."""
         if isinstance(other, Dict):
             return UsageMetadata(
                 input_tokens=self.input_tokens - other.get("input_tokens", 0),
-                output_tokens=self.output_tokens - other.get("output_tokens", 0),
+                output_tokens=self.output_tokens
+                - other.get("output_tokens", 0),
                 total_tokens=self.total_tokens - other.get("total_tokens", 0),
-                inference_time=self.inference_time - other.get("inference_time", 0.0),
+                inference_time=self.inference_time
+                - other.get("inference_time", 0.0),
             )
         return UsageMetadata(
             input_tokens=self.input_tokens - other.input_tokens,
@@ -68,9 +68,7 @@ class UsageMetadata(BaseModel):
         )
 
     @model_validator(mode="after")
-    def check_non_negative(
-        self
-    ) -> Self:
+    def check_non_negative(self) -> Self:
         if self.input_tokens < 0:
             raise ValueError("input_tokens count should be non-negative.")
         if self.output_tokens < 0:
@@ -81,6 +79,7 @@ class UsageMetadata(BaseModel):
             raise ValueError("inference_time should be non-negative.")
         return self
 
+
 class TraceMetadata(BaseModel):
     """Aggregated trace metadata emitted alongside agent responses.
 
@@ -88,6 +87,7 @@ class TraceMetadata(BaseModel):
     -------
         tool_calls (List[ToolCall]): Tool calls observed during execution, in order.
     """
+
     tool_calls: List[ToolCall] = []
 
 
@@ -110,7 +110,11 @@ class MetadataCollector:
         timestamp: Optional[float] = None,
     ) -> None:
         t = time.time() if timestamp is None else timestamp
-        usage_metadata = usage if isinstance(usage, UsageMetadata) else UsageMetadata.model_validate(usage)
+        usage_metadata = (
+            usage
+            if isinstance(usage, UsageMetadata)
+            else UsageMetadata.model_validate(usage)
+        )
         self._usage_metadatas.append((t, usage_metadata))
 
     def add_tool_calls(
