@@ -78,7 +78,7 @@ class MinimalAgentExecutor(AgentExecutor):
                         )
                     else:
                         logger.warning(
-                            "Artifact has been updated: ignoring additional streamed item."
+                            "Artifact has been updated: ignoring item."
                         )
                 prev_item = item
         except Exception as e:

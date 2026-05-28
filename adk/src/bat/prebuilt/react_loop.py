@@ -18,26 +18,38 @@ logger = create_logger(__name__, level="debug")
 
 
 class ReActLoop(PrebuiltWorkflow):
-    """ReActLoop implements a ReAct-style loop using a ChatModelClient with associated tools.
+    """ReActLoop implements a ReAct-style loop using a ChatModelClient with
+    associated tools.
 
-    The available tools must be registered in the ChatModelClient used to create the ReActLoop.
-    The loop continues until the chat model produces a final answer without any tool calls.
+    The available tools must be registered in the ChatModelClient used to
+    create the ReActLoop. The loop continues until the chat model produces a
+    final answer without any tool calls.
 
     Args
     -------
-        config (AgentConfig): Configuration for the agent, including checkpointing options.
+        config (AgentConfig): Configuration for the agent, including
+            checkpointing options.
         StateType (Type[AgentState]): The AgentState schema used in the loop.
         loop_name (str): The name of the loop.
         chat_model_client (ChatModelClient): The chat model client to use.
-        input_key (str, optional): A key pointing to a string or HumanMessage in the state. Defaults to "input".
-            The value at this key is used as input to the ChatModelClient on the first call of the loop.
-        output_key (str, optional): A key pointing to a string in the state. Defaults to "output".
-            The value at this key is set to the final answer from the ChatModelClient when the loop completes.
-        messages_key (str, optional): A key pointing to a List[BaseMessage] in the state. Defaults to None.
-            If provided, the value at this key is used as the conversation history for the ChatModelClient.
-            The conversation history is updated **in-place** with each response from the ChatModelClient.
-        status_key (str, optional): A key pointing to a string in the state. Defaults to None.
-            If provided, the value at this key is updated with the current status of the loop.
+        input_key (str, optional): A key pointing to a string or HumanMessage
+            in the state. Defaults to "input".
+            The value at this key is used as input to the ChatModelClient on
+            the first call of the loop.
+        output_key (str, optional): A key pointing to a string in the state.
+            Defaults to "output".
+            The value at this key is set to the final answer from the
+            ChatModelClient when the loop completes.
+        messages_key (str, optional): A key pointing to a List[BaseMessage]
+            in the state. Defaults to None.
+            If provided, the value at this key is used as the conversation
+            history for the ChatModelClient.
+            The conversation history is updated **in-place** with each response
+            from the ChatModelClient.
+        status_key (str, optional): A key pointing to a string in the state.
+            Defaults to None.
+            If provided, the value at this key is updated with the current
+            status of the loop.
             Useful to beautify the streamed output of the loop.
 
     Example
@@ -91,23 +103,33 @@ class ReActLoop(PrebuiltWorkflow):
         messages_key: Optional[str] = None,
         status_key: Optional[str] = None,
     ) -> None:
-        """Initialize the ReActLoop with the given configuration and parameters.
+        """Initialize the ReActLoop with the given configuration and
+        parameters.
 
         Args:
-            config (AgentConfig): Configuration for the agent, including checkpointing options.
-            StateType (Type[AgentState]): The AgentState schema used in the loop.
+            config (AgentConfig): Configuration for the agent, including
+                checkpointing options.
+            StateType (Type[AgentState]): The AgentState schema used in the
+                loop.
             loop_name (str): The name of the loop.
             chat_model_client (ChatModelClient): The chat model client to use.
-            input_key (str, optional): A key pointing to a string or HumanMessage in the state. Defaults to "input".
-                The value at this key is used as input to the ChatModelClient on the first call of the loop.
-            output_key (str, optional): A key pointing to a string in the state. Defaults to "output".
-                The value at this key is set to the final answer from the ChatModelClient when the loop completes.
-            messages_key (str, optional): A key pointing to a List[BaseMessage] in the state. Defaults to None.
-                If provided, the value at this key is used as the conversation history for the ChatModelClient.
-                The conversation history is updated **in-place** with each response from the ChatModelClient.
-            status_key (str, optional): A key pointing to a string in the state. Defaults to None.
-                If provided, the value at this key is updated with the current status of the loop.
-                Useful to beautify the streamed output of the loop.
+            input_key (str, optional): A key pointing to a string or
+                HumanMessage in the state. Defaults to "input". The value at
+                this key is used as input to the ChatModelClient on the first
+                call of the loop.
+            output_key (str, optional): A key pointing to a string in the
+                state. Defaults to "output". The value at this key is set to
+                the final answer from the ChatModelClient when the loop
+                completes.
+            messages_key (str, optional): A key pointing to a List[BaseMessage]
+                in the state. Defaults to None. If provided, the value at this
+                key is used as the conversation history for the
+                ChatModelClient. The conversation history is updated
+                **in-place** with each response from the ChatModelClient.
+            status_key (str, optional): A key pointing to a string in the
+                state. Defaults to None. If provided, the value at this key is
+                updated with the current status of the loop. Useful to beautify
+                the streamed output of the loop.
         """
 
         keys = [
@@ -119,10 +141,12 @@ class ReActLoop(PrebuiltWorkflow):
         for key in keys:
             if key not in StateType.model_fields:
                 logger.error(
-                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'"
+                    f"key '{key}' not available in the provided AgentState type"
+                    f"'{StateType.__name__}'"
                 )
                 raise KeyError(
-                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'"
+                    f"key '{key}' not available in the provided AgentState type"
+                    f"'{StateType.__name__}'"
                 )
 
         super().__init__(
@@ -195,9 +219,10 @@ class ReActLoop(PrebuiltWorkflow):
             Type[AgentState]: The updated state after each step in the loop.
 
         Raises:
-            ValueError: If the input_key or output_key is not found in the state,
-                or if the input_key does not point to a string or HumanMessage,
-                or if the messages_key (if provided) does not point to a List[BaseMessage].
+            ValueError: If the input_key or output_key is not found in the
+                state, or if the input_key does not point to a string or
+                HumanMessage, or if the messages_key (if provided) does not
+                point to a List[BaseMessage].
         """
         state_dict = state.model_dump()
         if self.input_key not in state_dict:
@@ -216,20 +241,23 @@ class ReActLoop(PrebuiltWorkflow):
         input = state_dict[self.input_key]
         if not isinstance(input, str) and not isinstance(input, HumanMessage):
             raise ValueError(
-                f"Key '{self.input_key}' must point to a string or HumanMessage. Found {type(input)} instead."
+                f"Key '{self.input_key}' should be a string or HumanMessage."
+                f"Got {type(input)} instead."
             )
 
         messages = state_dict[self.messages_key] if self.messages_key else []
         if not isinstance(messages, List):
             raise ValueError(
-                f"Key '{self.messages_key}' must point to a List[BaseMessage]. Found {type(messages)} instead."
+                f"Key '{self.messages_key}' should be a List[BaseMessage]."
+                f"Got {type(messages)} instead."
             )
         for msg in messages:
             try:
                 BaseMessage.model_validate(msg)
             except ValidationError as e:
                 raise ValueError(
-                    f"Key '{self.messages_key}' must point to a List[BaseMessage]. Found item of type {type(msg)} instead."
+                    f"Key '{self.messages_key}' should be a List[BaseMessage]."
+                    f"Got {type(msg)} instead."
                 ) from e
 
         stream = self.graph.astream(state, config)
@@ -242,8 +270,9 @@ class ReActLoop(PrebuiltWorkflow):
         state: Type[AgentState],
     ) -> Type[AgentState]:
         """Prepares the state for entering the ReAct loop.
-        Initializes the conversation history and buffer, and updates the status if a status_key is provided.
-        The buffer is used to hold AI/Tool Messages between iterations of the loop.
+        Initializes the conversation history and buffer, and updates the status
+        if a status_key is provided. The buffer is used to hold AI/Tool Messages
+        between iterations of the loop.
         """
         logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: invoked")
         if self.messages_key:
@@ -263,11 +292,14 @@ class ReActLoop(PrebuiltWorkflow):
         self,
         state: Type[AgentState],
     ) -> AsyncIterable[Type[AgentState]]:
-        """Invokes the chat model client with the current input and conversation history.
-        If the buffer is non-empty, it is used as input instead of the input_key from the state and
-        then cleared.
-        If the chat model produces tool calls, they are added to the buffer for processing in the ToolNode.
-        If a status_key is provided, the status is updated to reflect the current operation.
+        """Invokes the chat model client with the current input and conversation
+        history.
+        - If the buffer is non-empty, it is used as input instead of the
+        input_key from the state and then cleared.
+        - If the chat model produces tool calls, they are added to the buffer
+        for processing in the ToolNode.
+        - If a status_key is provided, the status is updated to reflect the
+        current operation.
         """
         logger.debug(f"Node `{self.loop_name}.llm`: invoked")
         tool_messages = state.bat_buffer
@@ -280,7 +312,8 @@ class ReActLoop(PrebuiltWorkflow):
             )
             yield state
         try:
-            # If there are tool messages, use them as input; otherwise, use the input key from state
+            # If there are tool messages, use them as input
+            # otherwise, use the input key from state
             input = tool_messages or (
                 HumanMessage(state_input)
                 if isinstance(
@@ -303,13 +336,9 @@ class ReActLoop(PrebuiltWorkflow):
             ]
             state.bat_buffer = [response]
             if self.status_key:
-                state = state.model_copy(
-                    update={
-                        self.status_key: f"Running tools: {', '.join(tool_names)}",
-                    }
-                )
+                status_msg = f"Calling tools: {', '.join(tool_names)}"
+                state = state.model_copy(update={self.status_key: status_msg})
         else:
-            # state = state.model_copy(update={self.output_key: response.content})
             state.bat_extra[self._internal_final_response_key] = (
                 response.content
             )
@@ -321,8 +350,9 @@ class ReActLoop(PrebuiltWorkflow):
         state: Type[AgentState],
     ) -> Type[AgentState]:
         """Cleans up the state after exiting the ReAct loop.
-        Restores the conversation history from the internal key to the messages_key in the state
-        and removes the internal key from the `bat_extra` dictionary in the state.
+        Restores the conversation history from the internal key to the
+        messages_key in the state and removes the internal key from the
+        `bat_extra` dictionary in the state.
         """
         logger.debug(f"Node `{self.loop_name}.cleanup`: invoked")
         state = state.model_copy(
@@ -345,11 +375,12 @@ class ReActLoop(PrebuiltWorkflow):
         self,
         from_timestamp: Optional[float] = None,
     ) -> TraceMetadata:
-        """Get aggregated trace metadata (tool calls) collected during this loop.
+        """Get aggregated trace metadata (tool calls) collected during this
+        loop.
 
         Args:
-            from_timestamp (Optional[float]): If provided, only tool calls after this
-                timestamp are returned.
+            from_timestamp (Optional[float]): If provided, only tool calls after
+                this timestamp are returned.
 
         Returns:
             TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is

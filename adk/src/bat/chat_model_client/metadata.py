@@ -14,9 +14,10 @@ TOOL_CALLS_METADATA_KEY = "tool_calls"
 class UsageMetadata(BaseModel):
     """Metadata about the usage of the chat model.
 
-    Note: Defining a ChatModelClient as a property of an object deriving the `AgentGraph` class
-    allows to automatically collect and aggregate usage metadata from the chat model
-    and return it as part of the streaming response metadata.
+    Note: Defining a ChatModelClient as a property of an object deriving the
+    `AgentGraph` class allows to automatically collect and aggregate usage
+    metadata from the chat model and return it as part of the streaming
+    response metadata.
 
     Attributes
     -------
@@ -85,7 +86,8 @@ class TraceMetadata(BaseModel):
 
     Attributes
     -------
-        tool_calls (List[ToolCall]): Tool calls observed during execution, in order.
+        tool_calls (List[ToolCall]): Tool calls observed during execution,
+            in order.
     """
 
     tool_calls: List[ToolCall] = []
@@ -94,9 +96,9 @@ class TraceMetadata(BaseModel):
 class MetadataCollector:
     """Collect and aggregate timestamped usage and trace metadata.
 
-    This helper centralizes metadata buffering logic used by prebuilt components,
-    so all nodes expose consistent `get_usage_metadata` / `get_trace_metadata`
-    behavior.
+    This helper centralizes metadata buffering logic used by prebuilt
+    components, so all nodes expose consistent `get_usage_metadata` /
+    `get_trace_metadata` behavior.
     """
 
     def __init__(self) -> None:

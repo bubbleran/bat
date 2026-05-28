@@ -32,16 +32,20 @@ logger = create_logger(__name__, level="debug")
 
 
 class CallAgentNode(PrebuiltWorkflow):
-    """CallAgentNode implements agent-to-agent communication using the A2A protocol.
+    """CallAgentNode implements agent-to-agent communication using the A2A
+    protocol.
 
-    This workflow abstracts streaming communication between agents as an internal mini-graph.
-    It handles the complete lifecycle of calling another agent, consuming its streamed responses,
-    and managing state updates.
+    This workflow abstracts streaming communication between agents as an
+    internal mini-graph.
+    It handles the complete lifecycle of calling another agent, consuming its
+    streamed responses, and managing state updates.
 
     The internal mini-graph flow is:
-        START → call_agent → consume_stream → router → (consume_stream | cleanup) → END
+        START → call_agent → consume_stream → router
+        → (consume_stream | cleanup) → END
 
-    The loop continues consuming streamed responses from the target agent until either:
+    The loop continues consuming streamed responses from the target agent until
+    either:
     - The target agent completes its task
     - The target agent requests user input
     - An error occurs
@@ -87,7 +91,10 @@ class CallAgentNode(PrebuiltWorkflow):
                 build_message=build_agent_message,
             )
             ...
-            self.graph_builder.add_node("call_agent_node", self.call_agent_node.as_runnable())
+            self.graph_builder.add_node(
+                "call_agent_node",
+                self.call_agent_node.as_runnable()
+            )
     ```
     """
 
@@ -107,31 +114,57 @@ class CallAgentNode(PrebuiltWorkflow):
         agent_response_content_key: str = "agent_response_content",
         recursion_limit: int = 50,
     ) -> None:
-        """Initialize the CallAgentNode workflow with the given configuration and parameters.
+        """Initialize the CallAgentNode workflow with the given configuration
+        and parameters.
 
         Args:
-            config (AgentConfig): Configuration for the agent, including checkpointing options.
-            StateType (Type[AgentState]): The AgentState schema used in the loop.
-            loop_name (str): The name of this workflow loop (e.g., "domain_agent_loop").
-            agent_name (str): The name of the target agent to call (e.g., "SMO Agent").
-                The agent card will be retrieved from the configuration using this name.
-            build_message (Callable[[RunnableConfig, str], Message]): Callback function to build
-                the request message from the input text. Should accept a RunnableConfig and a
-                string, and return an A2A Message object.
-            input_key (str, optional): A key pointing to a string in the state. Defaults to "input".
-                The value at this key is used as input to send to the target agent.
-            output_key (str, optional): A key pointing to a string in the state. Defaults to "output".
-                The value at this key is updated with responses from the target agent.
-            status_key (str, optional): A key pointing to a string in the state. Defaults to "status".
-                The value at this key is updated with the overall status of the communication.
+            config (AgentConfig): Configuration for the agent, including
+                checkpointing options.
+            StateType (Type[AgentState]): The AgentState schema used in the
+                loop.
+            loop_name (str): The name of this workflow loop
+                (e.g., "domain_agent_loop").
+            agent_name (str): The name of the target agent to call
+                (e.g., "SMO Agent").
+                The agent card will be retrieved from the configuration using
+                this name.
+            build_message (Callable[[RunnableConfig, str], Message]): Callback
+                function to build the request message from the input text.
+                Should accept a RunnableConfig and a string, and return an A2A
+                Message object.
+            input_key (str, optional): A key pointing to a string in the state.
+                Defaults to "input".
+                The value at this key is used as input to send to the target
+                agent.
+            output_key (str, optional): A key pointing to a string in the
+                state.
+                Defaults to "output".
+                The value at this key is updated with responses from the target
+                agent.
+            status_key (str, optional): A key pointing to a string in the
+                state.
+                Defaults to "status".
+                The value at this key is updated with the overall status of
+                the communication.
                 Useful to display the current operation to the user.
-            agent_input_required_key (str, optional): A key pointing to a bool in the state. Defaults to "agent_input".
-                The value at this key is set to True when the target agent requests user input.
-            agent_response_status_key (str, optional): A key pointing to a string in the state. Defaults to "agent_response_status".
-                The value at this key is updated with the status from the target agent.
-            agent_response_content_key (str, optional): A key pointing to a string in the state. Defaults to "agent_response_content".
-                The value at this key is updated with the content from the target agent.
-            recursion_limit (int, optional): Maximum recursion depth for nested calls. Defaults to 50.
+            agent_input_required_key (str, optional): A key pointing to a bool
+                in the state.
+                Defaults to "agent_input".
+                The value at this key is set to True when the target agent
+                requests user input.
+            agent_response_status_key (str, optional): A key pointing to a
+                string in the state.
+                Defaults to "agent_response_status".
+                The value at this key is updated with the status from the
+                target agent.
+            agent_response_content_key (str, optional): A key pointing to a
+                string in the state.
+                Defaults to "agent_response_content".
+                The value at this key is updated with the content from the
+                target agent.
+            recursion_limit (int, optional): Maximum recursion depth for nested
+                calls.
+                Defaults to 50.
                 This prevents infinite loops in agent-to-agent communication.
         """
         keys = [
@@ -145,10 +178,12 @@ class CallAgentNode(PrebuiltWorkflow):
         for key in keys:
             if key not in StateType.model_fields:
                 logger.error(
-                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'"
+                    f"key '{key}' not available in the provided AgentState "
+                    f"type '{StateType.__name__}'"
                 )
                 raise KeyError(
-                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'"
+                    f"key '{key}' not available in the provided AgentState "
+                    f"type '{StateType.__name__}'"
                 )
 
         # Initialize PrebuiltWorkflow
@@ -172,17 +207,19 @@ class CallAgentNode(PrebuiltWorkflow):
     ) -> Literal["consume_stream", "cleanup"]:
         """Route between consuming more stream data or cleaning up.
 
-        This method determines the next step in the workflow based on the current state.
-        It evaluates two conditions:
+        This method determines the next step in the workflow based on the
+        current state. It evaluates two conditions:
         - Whether the stream has completed (stream_done flag)
-        - Whether the target agent has requested user input (agent_input_required field)
+        - Whether the target agent has requested user input
+            (agent_input_required field)
 
         Args:
             state (Type[AgentState]): The current state of the workflow.
 
         Returns:
-            Literal["consume_stream", "cleanup"]: Returns "cleanup" if the stream is done
-                or input is required, otherwise returns "consume_stream" to continue processing.
+            Literal["consume_stream", "cleanup"]: Returns "cleanup" if the
+                stream is done or input is required, otherwise returns
+                "consume_stream" to continue processing.
         """
         stream_done_val = self.stream_done
         needs_input_val = bool(getattr(state, self.agent_input_required))
@@ -210,25 +247,30 @@ class CallAgentNode(PrebuiltWorkflow):
     ) -> None:
         """Set up the internal mini-graph with nodes and edges.
 
-        This method initializes the internal state and constructs the workflow graph
-        with the following nodes:
+        This method initializes the internal state and constructs the workflow
+        graph with the following nodes:
         - call_agent: Prepares and initiates the call to the target agent
         - consume_stream: Consumes one item from the streaming response queue
         - cleanup: Final cleanup after the workflow completes
 
         The graph flow is:
-            START → call_agent → consume_stream → router → (consume_stream | cleanup) → END
+            START → call_agent → consume_stream → router
+            → (consume_stream | cleanup) → END
 
         Args:
             loop_name (str): The name of this workflow loop.
             agent_name (str): The name of the target agent to call.
-            build_message (Callable[[RunnableConfig, str], Message]): Callback to build the request message.
+            build_message (Callable[[RunnableConfig, str], Message]): Callback
+                to build the request message.
             input (str): State field name for input text.
             output (str): State field name for output text.
             global_status (str): State field name for global status.
-            agent_input_required (str): State field name indicating if agent needs input.
-            agent_response_status (str): State field name for agent-specific status.
-            agent_response_content (str): State field name for agent-specific content.
+            agent_input_required (str): State field name indicating if agent
+                needs input.
+            agent_response_status (str): State field name for agent-specific
+                status.
+            agent_response_content (str): State field name for agent-specific
+                content.
             recursion_limit (int): Maximum recursion depth for nested calls.
         """
         self._agent_name = agent_name
@@ -264,14 +306,16 @@ class CallAgentNode(PrebuiltWorkflow):
     ) -> AsyncIterable[Type[AgentState]]:
         """Stream execution of the internal graph.
 
-        This method orchestrates the streaming execution of the CallAgentNode workflow.
-        It ensures the recursion limit is set appropriately (minimum 200 or the configured
-        limit) to handle potentially deep agent-to-agent communication chains.
+        This method orchestrates the streaming execution of the CallAgentNode
+        workflow.
+        It ensures the recursion limit is set appropriately (minimum 200 or
+        the configured limit) to handle potentially deep agent-to-agent
+        communication chains.
 
         Args:
             state (Type[AgentState]): The initial state for the workflow.
-            config (RunnableConfig): The runnable configuration, which may include
-                checkpointing settings and recursion limits.
+            config (RunnableConfig): The runnable configuration, which may
+                include checkpointing settings and recursion limits.
 
         Yields:
             Type[AgentState]: The updated state after each step in the workflow,
@@ -300,11 +344,13 @@ class CallAgentNode(PrebuiltWorkflow):
 
         This method performs the following operations:
         1. Retrieves the agent card for the target agent (if not already cached)
-        2. Resets dynamic state fields (agent_status, agent_content, agent_input_required)
+        2. Resets dynamic state fields (agent_status, agent_content,
+            agent_input_required)
         3. Extracts the input text from the state (using input or output key)
         4. Builds the request message using the provided build_message callback
         5. Updates the global status to indicate work is in progress
-        6. Starts the background streaming worker to consume responses from the target agent
+        6. Starts the background streaming worker to consume responses from the
+            target agent
 
         Args:
             state (Type[AgentState]): The current state of the workflow.
@@ -332,7 +378,8 @@ class CallAgentNode(PrebuiltWorkflow):
                     )
                 )
             logger.debug(
-                f"Node `{self.loop_name}.call_agent`: Set agent card URL to {url} for agent {self._agent_card.name}"
+                f"Node `{self.loop_name}.call_agent`: "
+                f"Set agent card URL to {url} for agent {self._agent_card.name}"
             )
 
         # Reset dynamic fields
@@ -371,8 +418,8 @@ class CallAgentNode(PrebuiltWorkflow):
     ) -> AsyncIterable[Type[AgentState]]:
         """Consume one item from the stream queue and update state.
 
-        This method retrieves one item from the background worker's queue and updates
-        the state accordingly. It handles three types of queue items:
+        This method retrieves one item from the background worker's queue and
+        updates the state accordingly. It handles three types of queue items:
         1. None (sentinel): Indicates the end of the stream
         2. (status, content) tuple: Regular update from the target agent
         3. Special case: status="input-required" triggers early termination
@@ -447,7 +494,8 @@ class CallAgentNode(PrebuiltWorkflow):
         self._queue = None
 
     async def _start_stream(self, request: Message) -> None:
-        """Start a background worker to consume the agent stream and populate the queue.
+        """Start a background worker to consume the agent stream and populate
+        the queue.
 
         1. Stops any existing stream to ensure clean state
         2. Creates a new asyncio Queue for inter-task communication
@@ -469,7 +517,9 @@ class CallAgentNode(PrebuiltWorkflow):
         self._queue = q
 
         async def _worker():
-            """Background worker that consumes agent stream and pushes items to queue."""
+            """Background worker that consumes agent stream and pushes items
+            to queue.
+            """
             try:
                 async for chunk in self.consume_agent_stream(
                     agent_card=self._agent_card,
@@ -515,8 +565,8 @@ class CallAgentNode(PrebuiltWorkflow):
         stream item, which can later be retrieved using get_usage_metadata().
 
         Args:
-            agent_card (AgentCard): The agent card of the target agent, containing
-                connection details and capabilities.
+            agent_card (AgentCard): The agent card of the target agent,
+                containing connection details and capabilities.
             message (Message): The A2A message to send to the agent.
 
         Yields:
@@ -524,7 +574,8 @@ class CallAgentNode(PrebuiltWorkflow):
                 updates, artifacts, and final messages.
 
         Raises:
-            Exception: If the streaming connection fails or encounters an error.
+            Exception: If the streaming connection fails or encounters an
+                error.
         """
         TIMEOUT = 120.0  # seconds
         client = await create_client(
@@ -565,10 +616,12 @@ class CallAgentNode(PrebuiltWorkflow):
         from_timestamp: Optional[float] = None,
     ) -> UsageMetadata:
         """
-        Get the aggregated usage metadata collected from the agent communication stream.
+        Get the aggregated usage metadata collected from the agent
+        communication stream.
 
         Args:
-            from_timestamp (Optional[float]): If provided, only usage metadata after this timestamp will be considered.
+            from_timestamp (Optional[float]): If provided, only usage metadata
+                after this timestamp will be considered.
                 If None, all usage metadata will be considered.
 
         Returns:
@@ -582,11 +635,12 @@ class CallAgentNode(PrebuiltWorkflow):
         self,
         from_timestamp: Optional[float] = None,
     ) -> TraceMetadata:
-        """Get aggregated trace metadata (tool calls) forwarded from the called agent.
+        """Get aggregated trace metadata (tool calls) forwarded from the
+        called agent.
 
         Args:
-            from_timestamp (Optional[float]): If provided, only entries after this
-                timestamp are returned.
+            from_timestamp (Optional[float]): If provided, only entries after
+                this timestamp are returned.
 
         Returns:
             TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is

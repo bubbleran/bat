@@ -11,8 +11,9 @@ def create_logger(
     level: Literal["debug", "info", "warning", "error", "critical"] = "info",
 ) -> logging.Logger:
     """Create a logging.Logger with nice formatting for terminal output.
-    The specified logging level is set for the logger, but the actual level can be overridden
-    by the LOG_LEVEL environment variable assigned to the log handler.
+    The specified logging level is set for the logger, but the actual level can
+    be overridden by the LOG_LEVEL environment variable assigned to the log
+    handler.
 
     Example:
     ```
@@ -25,12 +26,14 @@ def create_logger(
     ```
     ```
         logger3 = create_logger("my_logger3", level="debug")
-        logger3.debug("This is a debug message.") # Visible if LOG_LEVEL is set to "debug"
+        logger3.debug("This is a debug message.") # Visible if LOG_LEVEL is set
+            to "debug"
     ```
 
     Args:
         name (str): The name of the logger.
-        level (Literal["debug", "info", "warning", "error", "critical"]): The logging level to set for the logger.
+        level (Literal["debug", "info", "warning", "error", "critical"]):
+            The logging level to set for the logger.
 
     Returns:
         logging.Logger: The configured logger instance.

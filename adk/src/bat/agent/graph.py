@@ -65,13 +65,17 @@ class AgentGraph(ABC):
         config: AgentConfig,
         StateType: Type[AgentState],
     ):
-        """Initialize the AgentGraph with a state graph and optional checkpointing and logger.
-        Compile the state graph and set up the logger if the logger_name is provided.
+        """Initialize the AgentGraph with a state graph and optional
+        checkpointing and logger.
+        Compile the state graph and set up the logger if the logger_name
+        is provided.
 
         Args:
             graph_builder (StateGraph): The state graph builder.
-            use_checkpoint (bool): Whether to use checkpointing. Defaults to False.
-            logger_name (Optional[str]): The name of the logger to use. Defaults to None.
+            use_checkpoint (bool): Whether to use checkpointing.
+                Defaults to False.
+            logger_name (Optional[str]): The name of the logger to use.
+                Defaults to None.
         """
         self.StateType = StateType
         self._graph_builder = StateGraph(StateType)
@@ -128,21 +132,26 @@ class AgentGraph(ABC):
         query: str,
         config: RunnableConfig,
     ) -> AsyncIterable[AgentTaskResult]:
-        """Asynchronously stream results from the agent graph based on the query and configuration.
+        """Asynchronously stream results from the agent graph based on the
+        query and configuration.
         This method performes the following steps:
         1. Looks for a checkpoint associated with the provided configuration.
         2. If no checkpoint is found, creates a new agent state from the query,
             using the `from_query` method of the `StateType`.
-        3. If a checkpoint is found, restores the state from the checkpoint and updates it with the query
-            using the `update_after_checkpoint_restore` method.
-        4. Prepares the input for the graph execution, wrapping the state in a `Command` if the
-            `is_waiting_for_human_input` method of the state returns `True`.
-        5. Executes the graph with the `astream` method, passing the input and configuration.
+        3. If a checkpoint is found, restores the state from the checkpoint and
+            updates it with the query using the
+            `update_after_checkpoint_restore` method.
+        4. Prepares the input for the graph execution, wrapping the state in a
+            `Command` if the `is_waiting_for_human_input` method of the state
+            returns `True`.
+        5. Executes the graph with the `astream` method, passing the input and
+            configuration.
         6. For each item in the stream:
             - If it is an interrupt, yields an `AgentTaskResult` with the status
             `input-required`. This enables human-in-the-loop interactions.
-            - Otherwise, validates the item as an `StateType` and converts it to an
-            `AgentTaskResult` using the `to_task_result` method of the state. Then it yields the result.
+            - Otherwise, validates the item as an `StateType` and converts it to
+                an `AgentTaskResult` using the `to_task_result` method of the
+                state. Then it yields the result.
 
         This method prints debug logs in the format `[<thread_id>]: <message>`.
 
@@ -150,7 +159,8 @@ class AgentGraph(ABC):
             query (str): The query to process.
             config (RunnableConfig): Configuration for the runnable.
         Returns:
-            AsyncIterable[AgentTaskResult]: An asynchronous iterable of agent task results.
+            AsyncIterable[AgentTaskResult]: An asynchronous iterable of agent
+                task results.
         """
         thread_id = config.get("configurable", {}).get("thread_id")
 
@@ -180,7 +190,8 @@ class AgentGraph(ABC):
             subgraphs=True,
         )
         logger.debug(
-            f"[{thread_id}]: Graph execution started {'with Command' if state.is_waiting_for_human_input() else ''}"
+            f"[{thread_id}]: Graph execution started "
+            f"{'with Command' if state.is_waiting_for_human_input() else ''}"
         )
 
         try:
@@ -189,7 +200,9 @@ class AgentGraph(ABC):
                     state_item = self.StateType.model_validate(item[1])
                     task_result_item = state_item.to_task_result()
                     logger.debug(
-                        f"[{thread_id}]: Yielding AgentTaskResult: [{task_result_item.task_status}] {task_result_item.content}"
+                        f"[{thread_id}]: Yielding AgentTaskResult: "
+                        f"[{task_result_item.task_status}] "
+                        f"{task_result_item.content}"
                     )
                     yield task_result_item
                 except Exception as ve:
@@ -225,11 +238,12 @@ class AgentGraph(ABC):
         self,
         file_path: Optional[str] = None,
     ) -> None:
-        """Draw the agent graph in Mermaid format. If a file path is provided, save the diagram to
-        the file, otherwise print it to the console.
+        """Draw the agent graph in Mermaid format. If a file path is provided,
+        save the diagram to the file, otherwise print it to the console.
 
         Args:
-            file_path (Optional[str]): The path to the file where the Mermaid diagram should be saved.
+            file_path (Optional[str]): The path to the file where the Mermaid
+                diagram should be saved.
         """
         mermaid_str = self._graph.get_graph().draw_mermaid()
         if file_path:
@@ -250,11 +264,13 @@ class AgentGraph(ABC):
         self,
         from_timestamp: Optional[float] = None,
     ) -> UsageMetadata:
-        """Get the total usage metadata for the graph including all ChatModelClient instances
-        and other agents called using the `consume_agent_stream` method.
+        """Get the total usage metadata for the graph including all
+        ChatModelClient instances and other agents called using the
+        `consume_agent_stream` method.
 
         Args:
-            from_timestamp (Optional[float]): If provided, only usage after this timestamp is considered.
+            from_timestamp (Optional[float]): If provided, only usage after this
+                timestamp is considered.
                 If None, all usage metadata is returned.
         Returns:
             UsageMetadata: The total usage metadata for the graph.
@@ -271,14 +287,15 @@ class AgentGraph(ABC):
         self,
         from_timestamp: Optional[float] = None,
     ) -> TraceMetadata:
-        """Get aggregated trace metadata for the graph from components that expose it.
+        """Get aggregated trace metadata for the graph from components that
+        expose it.
 
         Components opt in by implementing a callable method:
             get_trace_metadata(from_timestamp: Optional[float]) -> TraceMetadata
 
         Args:
-            from_timestamp (Optional[float]): If provided, only entries after this
-                timestamp are returned.
+            from_timestamp (Optional[float]): If provided, only entries after
+                this timestamp are returned.
 
         Returns:
             TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is

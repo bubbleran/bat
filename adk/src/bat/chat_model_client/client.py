@@ -33,18 +33,21 @@ logger = create_logger(__name__, "debug")
 class ChatModelClient:
     """Client that facilitates interaction with a chat model.
 
-    This client can be used to send user instructions to the chat model and receive responses.
-    It supports both single and batch invocations, and can handle tool calls if tools are provided.
+    This client can be used to send user instructions to the chat model and
+    receive responses.
+    It supports both single and batch invocations, and can handle tool calls
+    if tools are provided.
 
-    If stored as a property of an object deriving the `AgentGraph` class, `UsageMetadata` will be
-    automatically collected and returned as metadata of the streaming response.
+    If stored as a property of an object deriving the `AgentGraph` class,
+    `UsageMetadata` will be automatically collected and returned as metadata of
+    the streaming response.
 
     Args:
         chat_model_config (ChatModelClientConfig, optional):
             Configuration for the chat model client.
         system_instructions (str):
             System instructions to be used in the chat model.
-        tools (Sequence[Dict[str, Any] | type | Callable | BaseTool | None], optional):
+        tools (Sequence[Dict[str, Any] | type | ... | None], optional):
             LangChain-defined tools to be used by the chat model.
 
     Examples:
@@ -69,24 +72,30 @@ class ChatModelClient:
         ] = None,
         output_schema: Optional[type[BaseModel]] = None,
     ):
-        """Initialize the ChatModelClient with the given configuration, system instructions, and tools.
+        """Initialize the ChatModelClient with the given configuration, system
+        instructions, and tools.
 
         Args:
             chat_model_config (ChatModelClientConfig, optional):
-                Configuration for the chat model client. If None, it will be loaded from environment variables.
+                Configuration for the chat model client. If None, it will be
+                loaded from environment variables.
             system_instructions (str):
                 System instructions to be used by the chat model.
-            tools (Sequence[Dict[str, Any] | type | Callable | BaseTool | None], optional):
+            tools (Sequence[Dict[str, Any] | ... | BaseTool | None], optional):
                 LangChain-defined tools to be used by the chat model.
             output_schema (type[BaseModel], optional):
-                If provided, the chat model response will be parsed according to this Pydantic schema. The raw response
-                from the chat model will be included in the output as well.
+                If provided, the chat model response will be parsed according
+                to this Pydantic schema.
+                The raw response from the chat model will be included in the
+                output as well.
         Raises:
-            EnvironmentError: If the chat model configuration is not provided and cannot be loaded from environment variables.
+            EnvironmentError: If the chat model configuration is not provided
+                and cannot be loaded from environment variables.
         """
         if not isinstance(system_instructions, str):
             raise TypeError(
-                f"Expected system_instructions to be of type 'str', got {type(system_instructions)}"
+                "Expected system_instructions to be of type 'str', "
+                f"got {type(system_instructions)}"
             )
 
         self.config = (
@@ -104,8 +113,10 @@ class ChatModelClient:
             default_headers=self.config.build_default_headers(),
         )
         _full_model_name = self.config.model_provider + ":" + self.config.model
+        client_name = self.config.client_name or ""
         logger.info(
-            f"ChatModelClient {self.config.client_name or ''} initialized with: model={_full_model_name}, #tools={len(self.tools or [])}"
+            f"ChatModelClient {client_name} initialized with: "
+            f"model={_full_model_name}, #tools={len(self.tools or [])}"
         )
         if self.tools:
             self._chat_model = self._chat_model.bind_tools(self.tools)
@@ -115,7 +126,8 @@ class ChatModelClient:
                 output_schema, BaseModel
             ):
                 raise TypeError(
-                    f"Expected output_schema {output_schema} to be a subclass of pydantic BaseModel"
+                    f"Expected output_schema {output_schema} "
+                    "to extend pydantic BaseModel"
                 )
             self.output_schema = output_schema
             self._chat_model = self._chat_model.with_structured_output(
@@ -129,7 +141,9 @@ class ChatModelClient:
 
     @property
     def chat_model(self) -> BaseChatModel:
-        """The chat model instance configured with the provided model and tools."""
+        """
+        The chat model instance configured with the provided model and tools.
+        """
         return self._chat_model
 
     @classmethod
@@ -155,13 +169,16 @@ class ChatModelClient:
         """Build the messages list for the chat model.
 
         The system instructions are always included as the first message.
-        If `history` is provided, it is prepended to the messages list.
-        If the `input` is a `str`, it is converted to a `HumanMessage` and appended to the messages list.
-        If the `input` is a `HumanMessage`, it is appended to the messages list.
-        If the `input` is a list of `ToolMessage`, they are appended to the messages list.
+        - If `history` is provided, it is prepended to the messages list.
+        - If the `input` is a `str`, it is converted to a `HumanMessage`
+            andappended to the messages list.
+        - If the `input` is a `HumanMessage`, it is appended to the messages
+            list.
+        - If the `input` is a list of `ToolMessage`, they are appended to the
+            messages list.
 
         Returns:
-            List[BaseMessage]: The list of messages to be sent to the chat model.
+            List[BaseMessage]: List of messages to be sent to the chat model.
         """
         messages = [self.system_instructions]
         if history:
@@ -182,8 +199,8 @@ class ChatModelClient:
     ) -> None:
         """Update the history **in-place** with the input and response.
 
-        If the input is a HumanMessage, it is appended directly.
-        If the input is a list of ToolMessages, they are appended to the history.
+        If input is a HumanMessage, it is appended directly.
+        If input is a list of ToolMessages, they are appended to the history.
         The response is always appended to the history.
         """
         if isinstance(input, str):
@@ -199,20 +216,24 @@ class ChatModelClient:
         response: AIMessage | Dict[str, Any],
     ) -> Tuple[AIMessage, Any]:
         """
-        Process the response from the chat model, checking for its type and parsing it according to the
-        output schema if provided.
+        Process the response from the chat model, checking for its type and
+            parsing it according to the output schema if provided.
 
         Args:
-            response (AIMessage | Dict[str, Any]): The response from the chat model.
+            response (AIMessage | Dict[str, Any]): The response from the
+                chat model.
 
         Returns:
-            Tuple[AIMessage, Any]: A tuple containing the processed AIMessage and the parsed output.
+            Tuple[AIMessage, Any]: A tuple containing the processed AIMessage
+                and the parsed output.
 
         Raises:
-            ValueError: If the response is not of the expected type or if there is an
-                error parsing the response according to the output schema.
-            KeyError: If the expected keys are not found in the response when the output schema is used.
-            ValidationError: If the parsed response does not conform to the output schema.
+            ValueError: If the response is not of the expected type or if there
+                is an error parsing the response according to the output schema.
+            KeyError: If the expected keys are not found in the response when
+                the output schema is used.
+            ValidationError: If the parsed response does not conform to the
+                output schema.
         """
         if not isinstance(response, AIMessage) and not isinstance(
             response, Dict
@@ -223,24 +244,18 @@ class ChatModelClient:
             )
         if isinstance(response, AIMessage):
             return response, response.model_copy()
-        if "raw" not in response:
-            raise KeyError(
-                "Key 'raw' not found in response after chat model invocation"
-            )
-        if "parsed" not in response:
-            raise KeyError(
-                "Key 'parsed' not found in response after chat model invocation"
-            )
-        if "parsing_error" not in response:
-            raise KeyError(
-                "Key 'parsing_error' not found in response after chat model invocation"
-            )
+        for key in ["raw", "parsed", "parsing_error"]:
+            if key not in response:
+                raise KeyError(
+                    f"Key '{key}' not in response of chat model invoke"
+                )
         raw: AIMessage = response["raw"]
         parsed = response["parsed"]
         parsing_error = response["parsing_error"]
         if parsing_error is not None:
             raise ValueError(
-                f"Error parsing chat model response into the output schema {self.output_schema}: "
+                "Error parsing chat model response into the "
+                f"output schema {self.output_schema}: "
                 f"{parsing_error}. Raw response: {raw}"
             )
         try:
@@ -257,22 +272,27 @@ class ChatModelClient:
         """Invoke the chat model with user instructions or tool call results.
 
         If the `history` is provided, it will be prepended to the input message.
-        This method modifies the `history` in-place to include the input and output messages.
+        This method modifies the `history` in-place to include the input and
+        output messages.
 
         Parameters:
-            input (str | HumanMessage | List[ToolMessage]): The user input or tool call results to process.
+            input (str | HumanMessage | List[ToolMessage]): The user input or
+                tool call results to process.
             history (Optional[List[BaseMessage]]): Optional history of messages.
 
         Returns:
             AIMessage | Any: The response from the chat model.
         Raises:
-            ValueError: If the input/output type is invalid or if there is an error parsing the
-                response according to the output schema.
-            KeyError: If the expected keys are not found in the response when the output schema is used.
-            ValidationError: If the parsed response does not conform to the output schema.
+            ValueError: If the input/output type is invalid or if there is an
+                error parsing the response according to the output schema.
+            KeyError: If the expected keys are not found in the response when
+                the output schema is used.
+            ValidationError: If the parsed response does not conform to the
+                output schema.
         """
         assert self._validate_input_type(input), (
-            f"Invalid input type: {type(input)}. Expected str or HumanMessage or List[ToolMessage]."
+            f"Invalid input type: {type(input)}. "
+            "Expected str or HumanMessageor List[ToolMessage]."
         )
 
         # Build the messages for the chat model
@@ -309,7 +329,8 @@ class ChatModelClient:
     ) -> List[AIMessage]:
         """Batch process multiple human messages in batch.
 
-        If the `history` is provided, it will be prepended to each input message.
+        If the `history` is provided, it will be prepended to each input
+        message.
         This method does NOT modify the `history` in-place.
 
         Parameters:
@@ -317,13 +338,16 @@ class ChatModelClient:
             history (Optional[List[BaseMessage]]): Optional history of messages.
 
         Returns:
-            List[AIMessage]: List of responses from the chat model for each input.
+            List[AIMessage]: List of responses from the chat model for each
+                input.
         Raises:
-            ValueError: If the input type is invalid or if the response from the chat model is not an AIMessage.
+            ValueError: If the input type is invalid or if the response from
+                the chat model is not an AIMessage.
         """
         if not all([self._validate_input_type(input) for input in inputs]):
+            types = [type(input) for input in inputs]
             raise ValueError(
-                f"Invalid input type in batch: {[type(input) for input in inputs]}. Expected HumanMessage."
+                f"Invalid input type in batch: {types}. Expected HumanMessage."
             )
         full_history = (
             [self.system_instructions] + history
@@ -336,7 +360,8 @@ class ChatModelClient:
         t_end = time.time()
         if not all(isinstance(response, AIMessage) for response in responses):
             raise ValueError(
-                "Expected all responses to be AIMessage instances after batch invocation of chat model."
+                "Expected all responses to be AIMessage instances after batch "
+                "invocation of chat model."
             )
 
         usage_metadatas = [
@@ -364,7 +389,8 @@ class ChatModelClient:
         Get the aggregated usage metadata from the chat model client.
 
         Args:
-            from_timestamp (Optional[float]): If provided, only usage metadata after this timestamp will be considered.
+            from_timestamp (Optional[float]): If provided, only usage metadata
+                after this timestamp will be considered.
                 If None, all usage metadata will be considered.
 
         Returns:

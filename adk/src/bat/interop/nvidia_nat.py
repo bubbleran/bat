@@ -9,7 +9,8 @@ from bat.agent import AgentApplication, AgentState
 
 class NATConnector:
     """LangGraph connector between NAT A2A server and BAT agent.
-    Provides a LangGraph wrapper that converts NAT message format to BAT agent state.
+    Provides a LangGraph wrapper that converts NAT message format to BAT
+    agent state.
 
     !!! NOT supporting multi-turn conversations at the moment.
     """
@@ -80,7 +81,8 @@ class NATConnector:
 
     def compile(self) -> CompiledStateGraph:
         """
-        Builds and compiles a LangGraph compatible with the format required by NAT.
+        Builds and compiles a LangGraph compatible with the format required
+        by NAT.
 
         Returns:
             Compiled LangGraph wrapping the AgentApplication Graph.

@@ -38,19 +38,24 @@ DEFAULT_HTTPX_CLIENT_TIMEOUT = 180
 
 class AgentApplication:
     """Agent Application based on `Starlette`.
-    This class sets up an agent application that can handle A2A and MCP protocols.
+    This class sets up an agent application that can handle A2A and MCP
+    protocols.
 
     Supported Environment Variables:
         - `URL` (required): The base URL where the agent will be hosted.
         - `PORT`: The port for the A2A application. Defaults to 9900.
         - `MCP_PORT`: The port for the MCP application. Defaults to 9800.
-        - `CONFIG`: Path to a configuration file for the agent. Defaults to "config.yaml".
-        - `AGENT_CARD_DISPLAY`: Whether to display the AgentCard when the agent starts. Defaults to True.
+        - `CONFIG`: Path to a configuration file for the agent.
+        Defaults to "config.yaml".
+        - `AGENT_CARD_DISPLAY`: Whether to display the AgentCard when the
+        agent starts. Defaults to True.
 
     Attributes
     -------
-        agent_card (AgentCard): The agent card containing metadata about the agent.
-        agent_graph (AgentGraph): The agent graph that defines the agent's behavior and capabilities.
+        agent_card (AgentCard): The agent card containing metadata about the
+            agent.
+        agent_graph (AgentGraph): The agent graph that defines the agent's
+            behavior and capabilities.
 
     Example
     -------
@@ -71,12 +76,14 @@ class AgentApplication:
         AgentStateType: Type[AgentState],
         agent_card_path: str = "./agent.json",
     ):
-        """
-        Initialize the AgentApplication with the given agent card path and agent graph.
+        """Initialize the AgentApplication with the given agent card path and
+        agent graph.
 
         Args:
-            agent_graph (AgentGraph): The agent graph implementing the agent's logic.
-            agent_card_path (str): The path to the agent card JSON file. Defaults to _"./agent.json"_.
+            agent_graph (AgentGraph): The agent graph implementing the agent's
+                logic.
+            agent_card_path (str): The path to the agent card JSON file.
+                Defaults to `"./agent.json"`.
         """
         self.a2a_port = int(os.getenv("PORT", A2A_APPLICATION_DEFAULT_PORT))
         self.mcp_port = int(os.getenv("MCP_PORT", MCP_APPLICATION_DEFAULT_PORT))
@@ -147,7 +154,8 @@ class AgentApplication:
                 if agent_card.supported_interfaces:
                     logger.error("interfaces already defined: will be ignored")
                     raise Exception(
-                        "AgentCard's supportedInterfaces field is set, please remove supportedInterfaces from your agent card."
+                        "AgentCard's supportedInterfaces field is set, please "
+                        "remove supportedInterfaces from your agent card."
                     )
                 agent_card.supported_interfaces.append(
                     AgentInterface(
@@ -187,7 +195,8 @@ class AgentApplication:
         )
         def get_agent_card() -> str:
             """
-            Get the Agent Card as a JSON string, i.e. a description of the Agent and its capabilities.
+            Get the Agent Card as a JSON string, i.e. a description of the Agent
+            and its capabilities.
 
             Returns:
                 str: The Agent Card in JSON format.
@@ -207,9 +216,12 @@ class AgentApplication:
 
             Args:
                 query (str): The input query for the Agent.
-                context_id (Optional[str]): The context ID for the conversation. Defaults to None.
-                    If None, a random context ID will be generated calling `uuid.uuid4()`.
-                message_id (str): The message ID in the conversation. Defaults to "1".
+                context_id (Optional[str]): The context ID for the conversation.
+                    Defaults to None.
+                    If None, a random context ID will be generated calling
+                    `uuid.uuid4()`.
+                message_id (str): The message ID in the conversation.
+                    Defaults to "1".
 
             Returns:
                 str: The Agent's response.
@@ -287,9 +299,10 @@ class AgentApplication:
         """Run the agent application.
 
         Args:
-            expose_mcp (bool, optional): Whether to expose the MCP protocol. Defaults to False.
-                **This parameter isn't fully supported yet and may lead to unexpected behavior
-                when set to True.**
+            expose_mcp (bool, optional): Whether to expose the MCP protocol.
+                Defaults to False.
+                **This parameter isn't fully supported yet and may lead to
+                unexpected behavior when set to True.**
         """
 
         if expose_mcp:
