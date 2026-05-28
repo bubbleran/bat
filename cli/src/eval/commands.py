@@ -367,17 +367,7 @@ def eval_show() -> None:
     _print_eval_show(cfg)
 
 
-def eval_run(
-    no_start_agent: bool = typer.Option(
-        False,
-        "--no-start-agent",
-        help=(
-            "Do not start (or stop) the agent process. Assume it is already running at the "
-            "agent_url declared in eval.yaml. Useful when the CLI cannot exec 'uv run .' itself "
-            "(e.g. when running from a strictly-confined snap)."
-        ),
-    ),
-) -> None:
+def eval_run() -> None:
     agent_root = Path.cwd()
     _validate_agent_root(agent_root)
 
@@ -395,12 +385,11 @@ def eval_run(
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not no_start_agent:
-        agent_python = _find_agent_python(agent_root)
-        if agent_python is None:
-            raise typer.BadParameter(
-                "No agent python found at .venv/bin/python. Create the agent virtual environment first."
-            )
+    agent_python = _find_agent_python(agent_root)
+    if agent_python is None:
+        raise typer.BadParameter(
+            "No agent python found at .venv/bin/python. Create the agent virtual environment first."
+        )
 
     task_id = time.strftime("%Y%m%d_%H%M%S")
     typer.secho(
@@ -430,14 +419,7 @@ def eval_run(
             section_name=f"models[{idx}]",
         )
 
-        if no_start_agent:
-            process = None
-            typer.secho(
-                f"  (--no-start-agent) connecting to externally-managed agent at {cfg.agent_url}",
-                fg=typer.colors.YELLOW,
-            )
-        else:
-            process = _start_agent_process(agent_root, server_env)
+        process = _start_agent_process(agent_root, server_env)
 
         try:
             _wait_for_agent_port(
@@ -495,8 +477,7 @@ def eval_run(
                 env=runner_env,
             )
         finally:
-            if process is not None:
-                _stop_agent_process(process, timeout_s=cfg.agent_shutdown_timeout_s)
+            _stop_agent_process(process, timeout_s=cfg.agent_shutdown_timeout_s)
 
     typer.secho(
         f"Evaluation completed. Output: {cfg.output_dir / task_id}",
