@@ -1,6 +1,8 @@
 import pytest
-from bat.chat_model_client import ChatModelClientConfig
 from pydantic import ValidationError
+
+from bat.chat_model_client import ChatModelClientConfig
+
 
 def test_init_direct_instantiation():
     config = ChatModelClientConfig(

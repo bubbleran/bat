@@ -1,16 +1,18 @@
+from typing import List, Literal, Optional, Type
+
+from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph import END, START
+from langgraph.prebuilt import ToolNode
+from pydantic import ValidationError
+from typing_extensions import AsyncIterable, override
+
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState
 from ..chat_model_client import ChatModelClient
 from ..chat_model_client.metadata import MetadataCollector, TraceMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
-from langgraph.graph import START, END
-from langgraph.prebuilt import ToolNode
-from langchain_core.messages import BaseMessage, HumanMessage
-from langchain_core.runnables import RunnableConfig
-from typing import List, Literal, Optional, Type
-from typing_extensions import override, AsyncIterable
-from pydantic import ValidationError
 
 logger = create_logger(__name__, level="debug")
 
@@ -127,7 +129,7 @@ class ReActLoop(PrebuiltWorkflow):
             messages_key=messages_key,
             status_key=status_key,
         )
-    
+
     @override
     def _setup(
         self,
@@ -213,7 +215,7 @@ class ReActLoop(PrebuiltWorkflow):
         async for item in stream:
             state_item = self.StateType.model_validate(item)
             yield state_item
-    
+
     def _prepare_for_loop(
         self,
         state: Type[AgentState],
@@ -235,7 +237,7 @@ class ReActLoop(PrebuiltWorkflow):
             })
         logger.debug(f"Node `{self.loop_name}.prepare_for_loop`: prepared")
         return state
-    
+
     async def _llm(
         self,
         state: Type[AgentState],
@@ -281,7 +283,7 @@ class ReActLoop(PrebuiltWorkflow):
             state.bat_extra[self._internal_final_response_key] = response.content
         logger.debug(f"Node `{self.loop_name}.llm`: completed")
         yield state
-    
+
     def _cleanup_after_loop(
         self,
         state: Type[AgentState],

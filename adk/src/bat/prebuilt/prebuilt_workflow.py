@@ -1,12 +1,14 @@
+from abc import ABC, abstractmethod
+from typing import AsyncGenerator, AsyncIterable, Optional, Type
+
+from langchain_core.runnables import RunnableConfig, RunnableGenerator
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import StateGraph
+from langgraph.graph.state import CompiledStateGraph
+
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState
 from ..logging import create_logger
-from abc import ABC, abstractmethod
-from langchain_core.runnables import RunnableConfig, RunnableGenerator
-from langgraph.graph import StateGraph
-from langgraph.graph.state import CompiledStateGraph
-from langgraph.checkpoint.memory import MemorySaver
-from typing import AsyncGenerator, AsyncIterable, Optional, Type
 
 logger = create_logger(__name__, level="debug")
 
@@ -20,7 +22,7 @@ class PrebuiltWorkflow(ABC):
     _memory: Optional[MemorySaver]
     _graph: CompiledStateGraph
     _agent_config: AgentConfig
-    
+
     def __init__(
         self,
         config: AgentConfig,
@@ -39,14 +41,14 @@ class PrebuiltWorkflow(ABC):
         self._StateType = StateType
         self._graph_builder = StateGraph(StateType)
         self._agent_config = config
-        
+
         self._setup(*args, **kwargs)
 
         self._memory = MemorySaver() if config.checkpoints else None
         self._graph = self._graph_builder.compile(
             checkpointer=self._memory
         )
-    
+
     @property
     def StateType(self) -> Type[AgentState]:
         """Get the AgentState type used in the workflow.
@@ -82,7 +84,7 @@ class PrebuiltWorkflow(ABC):
             AgentConfig: The AgentConfig.
         """
         return self._agent_config
-    
+
     @abstractmethod
     def _setup(
         self,

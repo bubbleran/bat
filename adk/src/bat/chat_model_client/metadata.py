@@ -1,10 +1,10 @@
 import bisect
 import time
+from functools import reduce
+from typing import Any, Dict, List, Optional, Self
 
 from langchain_core.messages import ToolCall
 from pydantic import BaseModel, model_validator
-from functools import reduce
-from typing import Any, Dict, List, Optional, Self
 
 USAGE_METADATA_KEY = "usage"
 TRACE_METADATA_KEY = "trace"

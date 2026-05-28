@@ -1,15 +1,25 @@
 import time
-from ..logging import create_logger
-from .graph import AgentGraph
-from .state import AgentTaskResult
-from a2a.helpers import new_text_part, new_text_message, new_task_from_user_message
+from typing import Dict
+
+from a2a.helpers import (
+    new_task_from_user_message,
+    new_text_message,
+    new_text_part,
+)
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Task, TaskState
-from a2a.utils.errors import InternalError, InvalidRequestError, UnsupportedOperationError
-from typing import Dict
-from typing_extensions import override, Any
+from a2a.utils.errors import (
+    InternalError,
+    InvalidRequestError,
+    UnsupportedOperationError,
+)
+from typing_extensions import Any, override
+
+from ..logging import create_logger
+from .graph import AgentGraph
+from .state import AgentTaskResult
 
 logger = create_logger(__name__, "debug")
 

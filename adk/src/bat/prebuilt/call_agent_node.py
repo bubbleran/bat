@@ -1,10 +1,7 @@
 import asyncio
 import time
-from ..agent.config import AgentConfig
-from ..agent.state import AgentState, AgentTaskResult, AgentTaskStatus
-from ..chat_model_client.metadata import MetadataCollector, TraceMetadata, UsageMetadata
-from ..logging import create_logger
-from .prebuilt_workflow import PrebuiltWorkflow
+from typing import Any, AsyncIterable, Callable, Dict, Literal, Optional, Type
+
 from a2a.client import ClientConfig, create_client
 from a2a.types import (
     AgentCard,
@@ -16,11 +13,19 @@ from a2a.types import (
 )
 from google.protobuf.json_format import MessageToDict
 from httpx import AsyncClient
-from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
-from typing import Any, AsyncIterable, Callable, Dict, Literal, Optional, Type
+from langgraph.graph import END, START
 from typing_extensions import override
 
+from ..agent.config import AgentConfig
+from ..agent.state import AgentState, AgentTaskResult, AgentTaskStatus
+from ..chat_model_client.metadata import (
+    MetadataCollector,
+    TraceMetadata,
+    UsageMetadata,
+)
+from ..logging import create_logger
+from .prebuilt_workflow import PrebuiltWorkflow
 
 logger = create_logger(__name__, level="debug")
 
@@ -139,8 +144,8 @@ class CallAgentNode(PrebuiltWorkflow):
             if key not in StateType.model_fields:
                 logger.error(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
                 raise KeyError(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
-        
-        # Initialize PrebuiltWorkflow 
+
+        # Initialize PrebuiltWorkflow
         super().__init__(
             config=config,
             StateType=StateType,
@@ -172,7 +177,7 @@ class CallAgentNode(PrebuiltWorkflow):
             Literal["consume_stream", "cleanup"]: Returns "cleanup" if the stream is done
                 or input is required, otherwise returns "consume_stream" to continue processing.
         """
-        stream_done_val = self.stream_done 
+        stream_done_val = self.stream_done
         needs_input_val = bool(getattr(state, self.agent_input_required))
 
         return "cleanup" if stream_done_val or needs_input_val else "consume_stream"
@@ -225,7 +230,7 @@ class CallAgentNode(PrebuiltWorkflow):
         self._build_message = build_message
         self.recursion_limit = recursion_limit
         self.loop_name = loop_name
-        self._agent_card = None  
+        self._agent_card = None
         self.stream_done: bool = False
         self._queue: Optional[asyncio.Queue[Optional[AgentTaskResult]]] = None
         self._stream_task: Optional[asyncio.Task[None]] = None
@@ -265,14 +270,14 @@ class CallAgentNode(PrebuiltWorkflow):
 
         if "recursion_limit" not in cfg or (isinstance(cfg["recursion_limit"], int) and cfg["recursion_limit"] < 200):
             cfg["recursion_limit"] = self.recursion_limit
-            
+
         stream = self.graph.astream(state, cfg)
 
         async for item in stream:
             state_item = self.StateType.model_validate(item)
             yield state_item
 
-    
+
     async def _call_agent(
         self,
         state: Type[AgentState],
@@ -296,7 +301,7 @@ class CallAgentNode(PrebuiltWorkflow):
             Type[AgentState]: The updated state after initiating the agent call.
         """
         url = self.agent_config.get_a2a_agent_connection(self._agent_name).url
-        
+
         if self._agent_card is None or self._agent_card.name != self._agent_name:
             cards = await self.agent_config.list_agent_cards([self._agent_name])
             self._agent_card = cards[self._agent_name]
@@ -317,7 +322,7 @@ class CallAgentNode(PrebuiltWorkflow):
         setattr(state, self.agent_input_required, False)
 
         # Get input text
-        text = getattr(state, self.input, "") or getattr(state, self.output, None) 
+        text = getattr(state, self.input, "") or getattr(state, self.output, None)
         if not isinstance(text, str):
             text = str(text)
 

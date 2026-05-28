@@ -1,15 +1,19 @@
 import asyncio
+from typing import Dict, List, Literal, Tuple
+
 import yaml
-from ..logging import create_logger
 from a2a.client import A2ACardResolver
 from a2a.types import AgentCard
 from httpx import AsyncClient
 from langchain.tools import BaseTool
-from langchain_mcp_adapters.sessions import StreamableHttpConnection as MCPConnection
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.sessions import (
+    StreamableHttpConnection as MCPConnection,
+)
 from pydantic import BaseModel, BeforeValidator, Field
-from typing import Dict, List, Literal, Tuple
 from typing_extensions import Annotated, Self
+
+from ..logging import create_logger
 
 logger = create_logger(__name__, "debug")
 
@@ -183,7 +187,7 @@ class AgentConfig(BaseModel):
                 cfg._required_mcp_servers[server.name] = server.required
             for agent in cfg.remote_agents:
                 cfg._required_remote_agents[agent.name] = agent.required
-            
+
             asyncio.run(cfg._build_mcp_servers_aliases_map())
             asyncio.run(cfg._build_remote_agents_aliases_map())
 
@@ -194,7 +198,7 @@ class AgentConfig(BaseModel):
         except Exception as e:
             raise ValueError(f"Failed to load and validate agent configuration: {e}") from e
         return cfg
-    
+
     def get_mcp_server_connection(
         self,
         server_name: str,
@@ -232,7 +236,7 @@ class AgentConfig(BaseModel):
         if agent_alias in self._mcp_agent_connections:
             return self._mcp_agent_connections[agent_name]
         return None
-    
+
     def get_a2a_agent_connection(
         self,
         agent_name: str,
@@ -286,7 +290,7 @@ class AgentConfig(BaseModel):
             else:
                 logger.warning(f"MCP Server {name} not found in configuration.")
         return tools
-    
+
     async def list_agent_cards(
         self,
         agent_names: List[str],

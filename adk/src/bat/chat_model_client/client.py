@@ -1,19 +1,5 @@
 import time
-from ..logging import create_logger
-from .config import ChatModelClientConfig
-from .metadata import MetadataCollector, UsageMetadata
 from functools import reduce
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
-from langchain.chat_models.base import BaseChatModel
-from langchain_core.tools import BaseTool
-from langchain.chat_models import init_chat_model
-from pydantic import BaseModel, ValidationError
 from typing import (
     Any,
     Callable,
@@ -24,6 +10,22 @@ from typing import (
     Tuple,
     Union,
 )
+
+from langchain.chat_models import init_chat_model
+from langchain.chat_models.base import BaseChatModel
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, ValidationError
+
+from ..logging import create_logger
+from .config import ChatModelClientConfig
+from .metadata import MetadataCollector, UsageMetadata
 
 logger = create_logger(__name__, "debug")
 
@@ -114,7 +116,7 @@ class ChatModelClient:
     def chat_model(self) -> BaseChatModel:
         """The chat model instance configured with the provided model and tools."""
         return self._chat_model
-    
+
     @classmethod
     def _validate_input_type(
         cls,
@@ -128,7 +130,7 @@ class ChatModelClient:
         if isinstance(input, list) and all(isinstance(msg, ToolMessage) for msg in input):
             return True
         return False
-    
+
     def _build_messages_list(
         self,
         input: str | HumanMessage | List[ToolMessage],
@@ -155,7 +157,7 @@ class ChatModelClient:
         else:
             messages += input
         return messages
-    
+
     def _update_history(
         self,
         history: List[BaseMessage],
@@ -175,7 +177,7 @@ class ChatModelClient:
         else:
             history += input
         history.append(response)
-    
+
     def _process_response(
         self,
         response: AIMessage | Dict[str, Any],
@@ -267,7 +269,7 @@ class ChatModelClient:
         # Update the history
         if history is not None:
             self._update_history(history, input, r_for_history)
-        
+
         # Return the response
         return r_to_return
 

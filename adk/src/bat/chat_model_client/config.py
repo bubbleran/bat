@@ -1,8 +1,10 @@
 import os
-from ..logging import create_logger
-from pydantic import BaseModel, Field
 from typing import Dict, Optional
+
+from pydantic import BaseModel, Field
 from typing_extensions import Literal
+
+from ..logging import create_logger
 
 logger = create_logger(__name__, "debug")
 
@@ -118,7 +120,7 @@ class ChatModelClientConfig(BaseModel):
         model = os.getenv("MODEL")
         if not model:
             raise EnvironmentError("MODEL environment variable not set.")
-        
+
         model_provider = os.getenv("MODEL_PROVIDER")
         if not model_provider:
             model_parts = model.split(":", 1)
@@ -132,14 +134,14 @@ class ChatModelClientConfig(BaseModel):
             model_name = model
 
         base_url = os.getenv("BASE_URL")
-        
+
         return cls(
             model=model_name,
             model_provider=model_provider,
             base_url=base_url,
             client_name=client_name,
         )
-    
+
     def build_default_headers(
         self,
     ) -> Dict[str, str]:

@@ -1,18 +1,20 @@
-from ..chat_model_client import ChatModelClient, TraceMetadata, UsageMetadata
+from abc import ABC, abstractmethod
+from typing import AsyncIterable, Dict, List, Optional, Type
+
+from a2a.helpers import new_text_message
+from a2a.types import Message, Role
 from langchain_core.messages import ToolCall
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import StateGraph
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
+
+from ..chat_model_client import ChatModelClient, TraceMetadata, UsageMetadata
 from ..logging import create_logger
 from ..prebuilt import CallAgentNode
 from .config import AgentConfig
 from .state import AgentState, AgentTaskResult, AgentTaskStatus
-from a2a.types import Message, Role
-from a2a.helpers import new_text_message
-from abc import ABC, abstractmethod
-from langchain_core.runnables import RunnableConfig
-from langgraph.graph import StateGraph
-from langgraph.graph.state import CompiledStateGraph
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command
-from typing import AsyncIterable, Dict, List, Optional, Type
 
 logger = create_logger(__name__, level="debug")
 
@@ -119,7 +121,7 @@ class AgentGraph(ABC):
         self._graph = self._graph_builder.compile(
             checkpointer=self._memory
         )
-        
+
         self._usage_buffer = UsageMetadata()
 
     async def astream(
@@ -248,11 +250,7 @@ class AgentGraph(ABC):
         """
         total = self._pop_usage_metadata_from_buf()
         for _, value in self.__dict__.items():
-            if isinstance(value, ChatModelClient):
-                total += value.get_usage_metadata(
-                    from_timestamp=from_timestamp,
-                )
-            elif isinstance(value, CallAgentNode):
+            if isinstance(value, ChatModelClient) or isinstance(value, CallAgentNode):
                 total += value.get_usage_metadata(
                     from_timestamp=from_timestamp,
                 )

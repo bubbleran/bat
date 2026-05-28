@@ -1,8 +1,14 @@
-import pytest
 import time
-from bat.chat_model_client import ChatModelClient, ChatModelClientConfig, UsageMetadata
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from unittest.mock import MagicMock
+
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from bat.chat_model_client import (
+    ChatModelClient,
+    ChatModelClientConfig,
+    UsageMetadata,
+)
 
 # ------------------ UsageMetadata Tests ------------------
 

@@ -1,10 +1,12 @@
-from .mock_prebuilt_workflow import MockPrebuiltWorkflow
-from ...agent.config import AgentConfig
-from ...agent.state import AgentState
+from typing import Callable, Type
+
 from a2a.types import Message
 from langchain_core.runnables import RunnableConfig
-from typing import Callable, Type
 from typing_extensions import override
+
+from ...agent.config import AgentConfig
+from ...agent.state import AgentState
+from .mock_prebuilt_workflow import MockPrebuiltWorkflow
 
 
 class MockCallAgentNode(MockPrebuiltWorkflow):
@@ -33,7 +35,7 @@ class MockCallAgentNode(MockPrebuiltWorkflow):
             mock_output="Operation completed successfully.",
         )
     """
-    
+
     def __init__(
         self,
         config: AgentConfig,

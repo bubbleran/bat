@@ -1,8 +1,11 @@
-from bat.agent import AgentApplication, AgentState
-from langchain_core.messages import AIMessage
-from langgraph.graph import StateGraph, START, END, MessagesState
-from langgraph.graph.state import CompiledStateGraph
 from typing import Optional
+
+from langchain_core.messages import AIMessage
+from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+
+from bat.agent import AgentApplication, AgentState
+
 
 class NATConnector:
     """LangGraph connector between NAT A2A server and BAT agent.
@@ -10,7 +13,7 @@ class NATConnector:
 
     !!! NOT supporting multi-turn conversations at the moment.
     """
-    
+
     class _WState(MessagesState):
         """WState wraps MessagesState adding a query field"""
         query: str
@@ -82,7 +85,7 @@ class NATConnector:
 
         self.wgraph.add_node("input_adaptor", self._input_adaptor)
         self.wgraph.add_node("output_adaptor", self._output_adaptor)
-        
+
         self.wgraph.add_edge(START, "input_adaptor")
         self.wgraph.add_edge("input_adaptor", "output_adaptor")
         self.wgraph.add_edge("output_adaptor", END)

@@ -1,17 +1,19 @@
 import asyncio
-import httpx
 import os
 import uuid
+from threading import Thread
+from typing import Optional, Type
+
+import httpx
 import uvicorn
-from ..logging import create_logger
-from ._executor import MinimalAgentExecutor
-from .config import AgentConfig
-from .graph import AgentGraph
-from .state import AgentState
 from a2a.client import ClientConfig, ClientFactory
-from a2a.helpers import new_text_message, get_stream_response_text, display_agent_card
-from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
+from a2a.helpers import (
+    display_agent_card,
+    get_stream_response_text,
+    new_text_message,
+)
 from a2a.server.request_handlers import DefaultRequestHandlerV2
+from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCard, AgentInterface, Role
 from dotenv import load_dotenv
@@ -19,8 +21,12 @@ from google.protobuf.json_format import Parse
 from jsonschema import ValidationError
 from mcp.server import FastMCP
 from starlette.applications import Starlette
-from threading import Thread
-from typing import Optional, Type
+
+from ..logging import create_logger
+from ._executor import MinimalAgentExecutor
+from .config import AgentConfig
+from .graph import AgentGraph
+from .state import AgentState
 
 load_dotenv()
 logger = create_logger(__name__, "debug")
@@ -78,7 +84,7 @@ class AgentApplication:
         self._agent_card = self.load_agent_card(agent_card_path)
         if self._agent_card_display:
             display_agent_card(self._agent_card)
-        
+
         self._config_path = os.getenv("CONFIG", "config.yaml")
         self._config = AgentConfig.load(self._config_path)
 
@@ -105,7 +111,7 @@ class AgentApplication:
         self._a2a_server = Starlette(
             routes=agent_card_routes+json_rpc_routes
         )
-    
+
     def load_agent_card(
         self,
         agent_card_path: str,
@@ -138,7 +144,7 @@ class AgentApplication:
             with open(agent_card_path, 'r') as file:
                 json_str = file.read()
                 agent_card = Parse(json_str, AgentCard())
-                
+
                 if agent_card.supported_interfaces:
                     logger.error("interfaces already defined: will be ignored")
                     raise Exception("AgentCard's supportedInterfaces field is set, please remove supportedInterfaces from your agent card.")
@@ -160,7 +166,7 @@ class AgentApplication:
     def agent_graph(self) -> AgentGraph:
         """Get the agent graph."""
         return self._agent_executor.agent_graph
-    
+
     @property
     def agent_card(self) -> AgentCard:
         """Get the agent card."""
@@ -290,7 +296,7 @@ class AgentApplication:
 
             t_a2a.start()
             t_mcp.start()
-            t_mcp.join()        
+            t_mcp.join()
             t_a2a.join()
         else:
             a2a_app = self._a2a_server

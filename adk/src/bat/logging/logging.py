@@ -1,8 +1,10 @@
 import logging
 import os
-from dotenv import load_dotenv
 from shutil import get_terminal_size
 from typing import Literal
+
+from dotenv import load_dotenv
+
 
 def create_logger(
     name: str,
@@ -33,7 +35,7 @@ def create_logger(
     Returns:
         logging.Logger: The configured logger instance.
     """
-    
+
     levels = {
         "debug": logging.DEBUG,
         "info": logging.INFO,
@@ -43,7 +45,7 @@ def create_logger(
     }
     logging_level = levels.get(level.lower())
     if logging_level is None:
-        raise ValueError(f"Invalid logging level. Choose from: {list(levels.keys())}")    
+        raise ValueError(f"Invalid logging level. Choose from: {list(levels.keys())}")
 
     logger = logging.getLogger(name)
     logger.setLevel(logging_level)
@@ -63,7 +65,7 @@ def create_logger(
 
     handler = logging.StreamHandler()
     handler.setFormatter(DynamicFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
-    
+
     if "LOG_LEVEL" not in os.environ:
         load_dotenv()
     desired_log_level = os.getenv("LOG_LEVEL", "info").lower()
