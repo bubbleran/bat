@@ -18,7 +18,7 @@ classifiers = [
 
 dependencies = [
   "a2a-sdk>=1.0.0",
-  "a2a-sdk[http-server]>=1.0.0",
+  "a2a-sdk[http-server]",
   "httpx>=0.28.1",
   "langchain>=0.3.24",
   "langchain-mcp-adapters>=0.2.0",
@@ -30,20 +30,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-anthropic = [
-  "langchain-anthropic>=0.3.22",
-]
-deepseek = [
-  "langchain-deepseek>=0.1.4",
-]
-nvidia = [
-  "langchain-nvidia-ai-endpoints>=0.3.9",
-]
-ollama = [
-  "langchain-ollama>=0.3.3",
-]
-openai = [
-  "langchain-openai>=0.3.14",
+anthropic = ["langchain-anthropic"]
+deepseek = ["langchain-deepseek"]
+nvidia = ["langchain-nvidia-ai-endpoints"]
+ollama = ["langchain-ollama"]
+openai = ["langchain-openai"]
+
+all = [
+  "bat-adk[anthropic]",
+  "bat-adk[deepseek]",
+  "bat-adk[nvidia]",
+  "bat-adk[ollama]",
+  "bat-adk[openai]",
 ]
 
 [dependency-groups]
@@ -53,6 +51,7 @@ dev = [
   "pytest>=9.0.2",
   "pytest-cov>=7.0.0",
 ]
+
 [project.urls]
 "Homepage" = "https://bubbleran.com/"
 "Repository" = "https://github.com/bubbleran/bat"
