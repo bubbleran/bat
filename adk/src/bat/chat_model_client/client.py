@@ -137,7 +137,7 @@ class ChatModelClient:
         history: Optional[List[BaseMessage]] = None,
     ) -> List[BaseMessage]:
         """Build the messages list for the chat model.
-        
+
         The system instructions are always included as the first message.
         If `history` is provided, it is prepended to the messages list.
         If the `input` is a `str`, it is converted to a `HumanMessage` and appended to the messages list.
@@ -165,7 +165,7 @@ class ChatModelClient:
         response: AIMessage,
     ) -> None:
         """Update the history **in-place** with the input and response.
-        
+
         If the input is a HumanMessage, it is appended directly.
         If the input is a list of ToolMessages, they are appended to the history.
         The response is always appended to the history.
@@ -191,7 +191,7 @@ class ChatModelClient:
 
         Returns:
             Tuple[AIMessage, Any]: A tuple containing the processed AIMessage and the parsed output.
-        
+
         Raises:
             ValueError: If the response is not of the expected type or if there is an
                 error parsing the response according to the output schema.
@@ -234,11 +234,11 @@ class ChatModelClient:
 
         If the `history` is provided, it will be prepended to the input message.
         This method modifies the `history` in-place to include the input and output messages.
-        
+
         Parameters:
             input (str | HumanMessage | List[ToolMessage]): The user input or tool call results to process.
             history (Optional[List[BaseMessage]]): Optional history of messages.
-        
+
         Returns:
             AIMessage | Any: The response from the chat model.
         Raises:
@@ -282,7 +282,7 @@ class ChatModelClient:
 
         If the `history` is provided, it will be prepended to each input message.
         This method does NOT modify the `history` in-place.
-        
+
         Parameters:
             inputs (List[HumanMessage]): List of user inputs to process.
             history (Optional[List[BaseMessage]]): Optional history of messages.

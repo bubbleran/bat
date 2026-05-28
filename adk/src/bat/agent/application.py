@@ -50,7 +50,7 @@ class AgentApplication:
     -------
         agent_card (AgentCard): The agent card containing metadata about the agent.
         agent_graph (AgentGraph): The agent graph that defines the agent's behavior and capabilities.
-    
+
     Example
     -------
     ```python

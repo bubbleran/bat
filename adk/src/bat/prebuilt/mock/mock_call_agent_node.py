@@ -11,14 +11,14 @@ from .mock_prebuilt_workflow import MockPrebuiltWorkflow
 
 class MockCallAgentNode(MockPrebuiltWorkflow):
     """Mock version of CallAgentNode that modifies state without actual agent calls.
-    
+
     Args:
         mock_output: The simulated output string that will be returned instead of
             making actual agent calls. This value will be used to populate the
             output field and agent_response_content field in the state.
-            
+
         for all other parameters, see CallAgentNode.
-    
+
     Example:
         mock_call_agent = MockCallAgentNode(
             config=config,

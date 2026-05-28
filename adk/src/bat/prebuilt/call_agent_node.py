@@ -164,15 +164,15 @@ class CallAgentNode(PrebuiltWorkflow):
 
     def _router(self, state: Type[AgentState]) -> Literal["consume_stream", "cleanup"]:
         """Route between consuming more stream data or cleaning up.
-        
+
         This method determines the next step in the workflow based on the current state.
         It evaluates two conditions:
         - Whether the stream has completed (stream_done flag)
         - Whether the target agent has requested user input (agent_input_required field)
-        
+
         Args:
             state (Type[AgentState]): The current state of the workflow.
-            
+
         Returns:
             Literal["consume_stream", "cleanup"]: Returns "cleanup" if the stream is done
                 or input is required, otherwise returns "consume_stream" to continue processing.
@@ -198,16 +198,16 @@ class CallAgentNode(PrebuiltWorkflow):
         recursion_limit: int = 50,
     ) -> None:
         """Set up the internal mini-graph with nodes and edges.
-        
+
         This method initializes the internal state and constructs the workflow graph
         with the following nodes:
         - call_agent: Prepares and initiates the call to the target agent
         - consume_stream: Consumes one item from the streaming response queue
         - cleanup: Final cleanup after the workflow completes
-        
+
         The graph flow is:
             START → call_agent → consume_stream → router → (consume_stream | cleanup) → END
-        
+
         Args:
             loop_name (str): The name of this workflow loop.
             agent_name (str): The name of the target agent to call.
@@ -252,16 +252,16 @@ class CallAgentNode(PrebuiltWorkflow):
         config: RunnableConfig,
     ) -> AsyncIterable[Type[AgentState]]:
         """Stream execution of the internal graph.
-        
+
         This method orchestrates the streaming execution of the CallAgentNode workflow.
         It ensures the recursion limit is set appropriately (minimum 200 or the configured
         limit) to handle potentially deep agent-to-agent communication chains.
-        
+
         Args:
             state (Type[AgentState]): The initial state for the workflow.
             config (RunnableConfig): The runnable configuration, which may include
                 checkpointing settings and recursion limits.
-        
+
         Yields:
             Type[AgentState]: The updated state after each step in the workflow,
                 validated against the StateType schema.
@@ -284,7 +284,7 @@ class CallAgentNode(PrebuiltWorkflow):
         config: RunnableConfig,
     ) -> AsyncIterable[Type[AgentState]]:
         """Initial node: prepare and start the agent stream.
-        
+
         This method performs the following operations:
         1. Retrieves the agent card for the target agent (if not already cached)
         2. Resets dynamic state fields (agent_status, agent_content, agent_input_required)
@@ -292,11 +292,11 @@ class CallAgentNode(PrebuiltWorkflow):
         4. Builds the request message using the provided build_message callback
         5. Updates the global status to indicate work is in progress
         6. Starts the background streaming worker to consume responses from the target agent
-        
+
         Args:
             state (Type[AgentState]): The current state of the workflow.
             config (RunnableConfig): The runnable configuration.
-            
+
         Yields:
             Type[AgentState]: The updated state after initiating the agent call.
         """
@@ -344,20 +344,20 @@ class CallAgentNode(PrebuiltWorkflow):
         config: RunnableConfig,
     ) -> AsyncIterable[Type[AgentState]]:
         """Consume one item from the stream queue and update state.
-        
+
         This method retrieves one item from the background worker's queue and updates
         the state accordingly. It handles three types of queue items:
         1. None (sentinel): Indicates the end of the stream
         2. (status, content) tuple: Regular update from the target agent
         3. Special case: status="input-required" triggers early termination
-        
+
         When an item is consumed, the method updates both agent-specific fields
         (agent_status, agent_content) and global fields (global_status, output).
-        
+
         Args:
             state (Type[AgentState]): The current state of the workflow.
             config (RunnableConfig): The runnable configuration.
-            
+
         Yields:
             Type[AgentState]: The updated state after consuming one stream item.
         """
@@ -405,11 +405,11 @@ class CallAgentNode(PrebuiltWorkflow):
     # -------------------------------------------------------------------------
     async def _stop_stream(self) -> None:
         """Stop the streaming worker task and clear the queue.
-        
+
         1. Cancels the background worker task if it's running
         2. Awaits the task cancellation to ensure clean shutdown
         3. Clears references to the task and queue
-        
+
         This method is safe to call multiple times and handles the case where
         no streaming task is currently running.
         """
@@ -424,7 +424,7 @@ class CallAgentNode(PrebuiltWorkflow):
 
     async def _start_stream(self, request: Message) -> None:
         """Start a background worker to consume the agent stream and populate the queue.
-        
+
         1. Stops any existing stream to ensure clean state
         2. Creates a new asyncio Queue for inter-task communication
         3. Spawns a background worker task that:
@@ -432,10 +432,10 @@ class CallAgentNode(PrebuiltWorkflow):
            - Maps each stream item to (status, content) tuples
            - Pushes items to the queue for the main workflow to consume
            - Handles errors and ensures a sentinel (None) is sent at the end
-        
+
         The background worker runs independently, allowing the main workflow
         to consume stream items at its own pace.
-        
+
         Args:
             request (Message): The A2A message to send to the target agent.
         """
@@ -484,19 +484,19 @@ class CallAgentNode(PrebuiltWorkflow):
         3. Yields each stream item (events or messages)
         4. Tracks usage metadata from the stream for metrics collection
         5. Handles errors and ensures proper cleanup
-        
+
         The method automatically extracts and stores usage metadata from each
         stream item, which can later be retrieved using get_usage_metadata().
-        
+
         Args:
             agent_card (AgentCard): The agent card of the target agent, containing
                 connection details and capabilities.
             message (Message): The A2A message to send to the agent.
-        
+
         Yields:
             StreamResponse: Stream items from the agent, including status
                 updates, artifacts, and final messages.
-                
+
         Raises:
             Exception: If the streaming connection fails or encounters an error.
         """

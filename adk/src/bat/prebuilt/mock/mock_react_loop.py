@@ -10,13 +10,13 @@ from .mock_prebuilt_workflow import MockPrebuiltWorkflow
 
 class MockReActLoop(MockPrebuiltWorkflow):
     """Mock version of ReActLoop that modifies state without actual LLM calls.
-    
+
     Args:
         mock_output: The simulated output string that will be returned instead of
             making actual LLM calls. This value will be used to populate the
             output_key field in the state.
         for all other parameters, see ReActLoop.
-    
+
     Example:
         mock_react_loop = MockReActLoop(
             config=config,

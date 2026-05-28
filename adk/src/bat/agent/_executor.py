@@ -25,7 +25,7 @@ logger = create_logger(__name__, "debug")
 
 class MinimalAgentExecutor(AgentExecutor):
     """Minimal Agent Executor.
-    
+
     Minimal implementation of the AgentExecutor interface used by the `AgentApplication` class to execute agent tasks.
     """
 

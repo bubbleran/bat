@@ -26,7 +26,7 @@ The currently supported providers are:
 
 class ChatModelClientConfig(BaseModel):
     """Configuration for the chat model client.
-    
+
     This class is used to configure the chat model client with the necessary parameters.
     Some model providers may require specific environment variables to be set, like OPENAI_API_KEY for OpenAI.
 
@@ -82,7 +82,7 @@ class ChatModelClientConfig(BaseModel):
         client_name: Optional[str] = None,
     ):
         """Initialize the ChatModelClientConfig with the provided parameters.
-        
+
         Args:
             model (str): The name of the model to use.
             model_provider (ModelProvider): The provider of the model (e.g., openai, nvidia, etc.).

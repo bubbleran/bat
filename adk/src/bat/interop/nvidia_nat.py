@@ -36,7 +36,7 @@ class NATConnector:
     ):
         """
         Initialize the connector and build the graph.
-        
+
         Args:
             agent_app(AgentApplication): the agent application to wrap for NAT.
         """
@@ -76,7 +76,7 @@ class NATConnector:
     def compile(self) -> CompiledStateGraph:
         """
         Builds and compiles a LangGraph compatible with the format required by NAT.
-        
+
         Returns:
             Compiled LangGraph wrapping the AgentApplication Graph.
         """

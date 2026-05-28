@@ -22,7 +22,7 @@ USAGE_METADATA_KEY = "usage"
 
 class AgentGraph(ABC):
     """Abstract base class for agent graphs.
-    
+
     Extend this class to implement the specific behavior of an agent.
 
     Example
@@ -48,7 +48,7 @@ class AgentGraph(ABC):
                 logger_name="my_agent"
             )
             self._log("Graph initialized", "info")
-        
+
         # Your nodes logic here
         # ...
     ```
@@ -89,7 +89,7 @@ class AgentGraph(ABC):
     @property
     def compiled_graph(self) -> CompiledStateGraph:
         """Get the compiled state graph.
-        
+
         Returns:
             CompiledStateGraph: The compiled state graph of the agent.
         """
@@ -132,7 +132,7 @@ class AgentGraph(ABC):
         """Asynchronously stream results from the agent graph based on the query and configuration.
         This method performes the following steps:
         1. Looks for a checkpoint associated with the provided configuration.
-        2. If no checkpoint is found, creates a new agent state from the query, 
+        2. If no checkpoint is found, creates a new agent state from the query,
             using the `from_query` method of the `StateType`.
         3. If a checkpoint is found, restores the state from the checkpoint and updates it with the query
             using the `update_after_checkpoint_restore` method.
@@ -146,7 +146,7 @@ class AgentGraph(ABC):
             `AgentTaskResult` using the `to_task_result` method of the state. Then it yields the result.
 
         This method prints debug logs in the format `[<thread_id>]: <message>`.
-        
+
         Args:
             query (str): The query to process.
             config (RunnableConfig): Configuration for the runnable.

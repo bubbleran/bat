@@ -169,7 +169,7 @@ class AgentConfig(BaseModel):
 
         Returns:
             AgentConfig: The loaded agent configuration or an empty configuration if the file is not found.
-        
+
         Raises:
             ValueError: If the configuration file cannot be loaded or validated.
         """
@@ -267,7 +267,7 @@ class AgentConfig(BaseModel):
 
         Returns:
             List[BaseTool]: List of tools available from the specified MCP servers.
-        
+
         Raises:
             ConnectionError: If a `required` MCP server cannot be connected to.
         """
@@ -345,7 +345,7 @@ class AgentConfig(BaseModel):
     ):
         """Tries a first connection attempt to all the MCP servers, filling the MCP server aliases map.
         Makes the program crash if at least one of the `required` MCP servers is not reachable.
-        
+
         Raises:
             Exception: if the connection to one of the `required` MCP servers fails.
         """
@@ -371,7 +371,7 @@ class AgentConfig(BaseModel):
     ):
         """Tries a first connection attempt to all the agents, filling the agents aliases map.
         Makes the program crash if at least one of the `required` agents is not reachable.
-        
+
         Raises:
             Exception: if the connection to one of the `required` agents fails.
         """

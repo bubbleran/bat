@@ -105,7 +105,7 @@ class ReActLoop(PrebuiltWorkflow):
                 The conversation history is updated **in-place** with each response from the ChatModelClient.
             status_key (str, optional): A key pointing to a string in the state. Defaults to None.
                 If provided, the value at this key is updated with the current status of the loop.
-                Useful to beautify the streamed output of the loop.        
+                Useful to beautify the streamed output of the loop.
         """
 
         keys = [
