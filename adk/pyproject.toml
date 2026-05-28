@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-adk"
-version = "2026.6rc1"
+version = "2026.6rc2"
 authors = [
   { name="Andrea LEONE", email="andrea.leone@bubbleran.com" },
+  { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },
 ]
 description = "Software Development Kit for building AI Agents in BubbleRAN MX-PDK and MX-AI"
 readme = "README.md"
