@@ -136,11 +136,11 @@ class PrebuiltWorkflow(ABC):
                 logger.warning("Warning: Multiple instances found in input generator. Only the first will be processed.")
             else:
                 instance_found = True
-                async for sub_item in self._astream(item, config):
+                async for _sub_item in self._astream(item, config):
                     # sub-items are automatically available to the outer generator thanks
                     # to `subgraphs=True` in the astream method of AgentGraph
                     continue
-                yield sub_item
+                yield _sub_item
 
     def as_runnable(
         self

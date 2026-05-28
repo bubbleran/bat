@@ -20,7 +20,7 @@ logger = create_logger(__name__, "debug")
 DEFAULT_TIMEOUT = 60
 
 class MCPServerConfig(BaseModel):
-    f"""Configuration for an MCP server connection.
+    """Configuration for an MCP server connection.
 
     Attributes:
         name (str): The name of the MCP server.
@@ -28,7 +28,7 @@ class MCPServerConfig(BaseModel):
         required (bool): Whether the MCP server is required to be reachable. Defaults to True.
             When set to False, connection failures will be treated as if the server is available
             but always returns empty responses (e.g., no tools).
-        timeout (int): The timeout in seconds for connecting to the MCP server. Defaults to {DEFAULT_TIMEOUT}.
+        timeout (int): The timeout in seconds for connecting to the MCP server. Defaults to 60.
 
     Note: the `required` attribute is not well supported yet.
     """
@@ -44,7 +44,7 @@ InteragentCommunicationProtocol = Annotated[
 ]
 
 class RemoteAgentConfig(BaseModel):
-    f"""Configuration for remote A2A or MCP agent connections.
+    """Configuration for remote A2A or MCP agent connections.
 
     Attributes:
         name (str): The name of the remote agent.
@@ -53,7 +53,7 @@ class RemoteAgentConfig(BaseModel):
         required (bool): Whether the remote agent is required to be reachable. Defaults to True.
             When set to False, connection failures will be treated by ignoring the agent, i.e. no
             `AgentCard` will be returned.
-        timeout (int): The timeout in seconds for connecting to the remote agent. Defaults to {DEFAULT_TIMEOUT}.
+        timeout (int): The timeout in seconds for connecting to the remote agent. Defaults to 60.
 
     Note: the `required` attribute is not well supported yet.
     """
