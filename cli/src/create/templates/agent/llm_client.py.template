@@ -5,7 +5,7 @@ from langchain_core.messages import HumanMessage
 class __CLASS_NAME__(ChatModelClient):
 
     SYSTEM_INSTRUCTIONS = (
-        TODO: "insert instructions here"
+        "TODO: insert instructions here"
     )
     
 

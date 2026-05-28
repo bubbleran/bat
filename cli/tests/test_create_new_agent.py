@@ -10,18 +10,11 @@ import create.agent as create_agent_module
 runner = CliRunner()
 
 
-def test_create_new_agent_default_name() -> None:
+def test_create_new_agent_requires_name() -> None:
     with runner.isolated_filesystem():
         result = runner.invoke(app, ["init", "agent"])
 
-        assert result.exit_code == 0
-
-        root = Path("default")
-        assert root.exists()
-
-        assert (root / "src" / "llm_clients" / "example_client.py").exists()
-        assert not (root / "src" / "llm_clients" / "courtesy_client.py").exists()
-        assert not (root / "src" / "llm_clients" / "planner_client.py").exists()
+        assert result.exit_code != 0
 
 
 def test_static_template_loader_ignores_bytecode_cache(monkeypatch, tmp_path) -> None:

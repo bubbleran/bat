@@ -68,7 +68,7 @@ All examples below show `bat ...`; replace with `uv run bat ...` when using this
 bat
 ├── init
 │   └── agent
-│       ├── [name=default]
+│       ├── <name>
 │       ├── --clients, -c
 │       ├── --output-dir, -o
 │       ├── --force, -f
@@ -119,10 +119,6 @@ bat build --help
 ### 1. Create a new agent
 
 ```bash
-# default name
-bat init agent
-
-# custom name
 bat init agent my_agent
 
 # specific output directory

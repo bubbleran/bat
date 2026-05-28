@@ -17,7 +17,7 @@ from .metrics.qualitative_helpers import build_context_from_events, build_expect
 logger = logging.getLogger(__name__)
 
 
-def load_tasks(path: str | Path) -> List[TaskSpec]:
+def load_tasks(path: str | Path) -> list[TaskSpec]:
     dataset_path = Path(path)
     try:
         content = dataset_path.read_text(encoding="utf-8").strip()

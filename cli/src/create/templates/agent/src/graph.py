@@ -42,9 +42,9 @@ class __AGENT_CLASS_NAME__AgentGraph(AgentGraph):
         #Client setup
 __CLIENT_SETUP__
 
-    # Graph wiring
-    self.graph_builder.add_edge(
-        START,
-        END,
-    )
+        # Graph wiring
+        self.graph_builder.add_edge(
+            START,
+            END,
+        )
 
