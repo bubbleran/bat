@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-cli"
-version = "0.1.1"
+version = "0.1.2"
 authors = [
   { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },
 ]
@@ -35,8 +35,6 @@ bat = "cli:main"
 
 [dependency-groups]
 dev = [
-  "build",
-  "twine",
   "pytest>=8.0",
 ]
 packaging = [
