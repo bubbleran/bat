@@ -6,3 +6,5 @@ uv.lock
 
 __pycache__/
 .coverage
+
+.ruff_cache/
