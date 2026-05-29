@@ -1,6 +1,7 @@
 import bisect
 import time
 
+from langchain_core.messages import ToolCall
 from pydantic import BaseModel, model_validator
 from functools import reduce
 from typing import Any, Dict, List, Optional, Self
@@ -78,6 +79,16 @@ class UsageMetadata(BaseModel):
             raise ValueError("inference_time should be non-negative.")
         return self
 
+class TraceMetadata(BaseModel):
+    """Aggregated trace metadata emitted alongside agent responses.
+
+    Attributes
+    -------
+        tool_calls (List[ToolCall]): Tool calls observed during execution, in order.
+    """
+    tool_calls: List[ToolCall] = []
+
+
 class MetadataCollector:
     """Collect and aggregate timestamped usage and trace metadata.
 
@@ -88,7 +99,7 @@ class MetadataCollector:
 
     def __init__(self) -> None:
         self._usage_metadatas: List[tuple[float, UsageMetadata]] = []
-        self._trace_metadatas: List[tuple[float, List[Dict[str, Any]]]] = []
+        self._trace_metadatas: List[tuple[float, List[ToolCall]]] = []
 
     def add_usage(
         self,
@@ -102,7 +113,7 @@ class MetadataCollector:
 
     def add_tool_calls(
         self,
-        tool_calls: List[Dict[str, Any]],
+        tool_calls: List[ToolCall],
         *,
         timestamp: Optional[float] = None,
     ) -> None:
@@ -148,17 +159,15 @@ class MetadataCollector:
     def get_trace_metadata(
         self,
         from_timestamp: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> TraceMetadata:
         i = bisect.bisect_left(
             self._trace_metadatas,
             0 if from_timestamp is None else from_timestamp,
             key=lambda x: x[0],
         )
 
-        tool_calls: List[Dict[str, Any]] = []
+        tool_calls: List[ToolCall] = []
         for _, calls in self._trace_metadatas[i:]:
             tool_calls.extend(calls)
 
-        if not tool_calls:
-            return {}
-        return {TOOL_CALLS_METADATA_KEY: tool_calls}
+        return TraceMetadata(tool_calls=tool_calls)

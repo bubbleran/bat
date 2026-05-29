@@ -1,5 +1,5 @@
-from ..chat_model_client import ChatModelClient
-from ..chat_model_client.metadata import UsageMetadata
+from ..chat_model_client import ChatModelClient, TraceMetadata, UsageMetadata
+from langchain_core.messages import ToolCall
 from ..logging import create_logger
 from ..prebuilt import CallAgentNode
 from .config import AgentConfig
@@ -261,23 +261,21 @@ class AgentGraph(ABC):
     def _get_trace_metadata(
         self,
         from_timestamp: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> TraceMetadata:
         """Get aggregated trace metadata for the graph from components that expose it.
 
         Components opt in by implementing a callable method:
-            get_trace_metadata(from_timestamp: Optional[float]) -> Dict[str, Any]
-
-        Currently, trace metadata is merged under the ``tool_calls`` key.
+            get_trace_metadata(from_timestamp: Optional[float]) -> TraceMetadata
 
         Args:
             from_timestamp (Optional[float]): If provided, only entries after this
                 timestamp are returned.
 
         Returns:
-            Dict[str, Any]: Trace metadata in the shape {"tool_calls": [...]}.
-                Returns an empty dict when no component has trace data to report.
+            TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
+                empty when no component has trace data to report.
         """
-        tool_calls: List[Dict[str, Any]] = []
+        tool_calls: List[ToolCall] = []
 
         for _, value in self.__dict__.items():
             get_trace_metadata = getattr(value, "get_trace_metadata", None)
@@ -285,16 +283,12 @@ class AgentGraph(ABC):
                 continue
 
             trace_item = get_trace_metadata(from_timestamp=from_timestamp)
-            if not isinstance(trace_item, dict):
+            if not isinstance(trace_item, TraceMetadata):
                 continue
 
-            item_tool_calls = trace_item.get("tool_calls", [])
-            if isinstance(item_tool_calls, list):
-                tool_calls.extend(item_tool_calls)
+            tool_calls.extend(trace_item.tool_calls)
 
-        if not tool_calls:
-            return {}
-        return {"tool_calls": tool_calls}
+        return TraceMetadata(tool_calls=tool_calls)
 
     @staticmethod
     def build_message(

@@ -56,10 +56,8 @@ class MinimalAgentExecutor(AgentExecutor):
                     if keep_streaming:
                         metadata: Dict[str, Any] = {
                             'usage': self.agent_graph._get_usage_metadata(ts).model_dump(),
+                            'trace': self.agent_graph._get_trace_metadata(ts).model_dump(),
                         }
-                        trace_metadata = self.agent_graph._get_trace_metadata(ts)
-                        if trace_metadata:
-                            metadata['trace'] = trace_metadata
                         ts = time.time()
                         keep_streaming = await self._process_task_result(task, item, updater, metadata)
                     else:

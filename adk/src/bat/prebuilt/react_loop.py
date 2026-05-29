@@ -1,16 +1,15 @@
-import warnings
 from ..agent.config import AgentConfig
 from ..chat_model_client.metadata import MetadataCollector
 from ..agent.state import AgentState
 from ..chat_model_client import ChatModelClient
-from ..chat_model_client.metadata import MetadataCollector
+from ..chat_model_client.metadata import MetadataCollector, TraceMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
 from langgraph.graph import START, END
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
-from typing import Any, Dict, List, Literal, Optional, Type
+from typing import List, Literal, Optional, Type
 from typing_extensions import override, AsyncIterable
 from pydantic import ValidationError
 
@@ -116,11 +115,8 @@ class ReActLoop(PrebuiltWorkflow):
         ]
         for key in keys:
             if key not in StateType.model_fields:
-                warnings.warn(
-                    f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'",
-                    Warning,
-                    stacklevel=2,
-                )
+                logger.error(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
+                raise KeyError(f"key '{key}' not available in the provided AgentState type '{StateType.__name__}'")
 
         super().__init__(
             config=config,
@@ -311,7 +307,7 @@ class ReActLoop(PrebuiltWorkflow):
     def get_trace_metadata(
         self,
         from_timestamp: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> TraceMetadata:
         """Get aggregated trace metadata (tool calls) collected during this loop.
 
         Args:
@@ -319,7 +315,7 @@ class ReActLoop(PrebuiltWorkflow):
                 timestamp are returned.
 
         Returns:
-            Dict[str, Any]: Trace metadata in the shape {"tool_calls": [...]}.
-                Returns an empty dict when no tool calls have been recorded.
+            TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
+                empty when no tool calls have been recorded.
         """
         return self._metadata_collector.get_trace_metadata(from_timestamp=from_timestamp)
