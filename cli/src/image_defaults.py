@@ -2,14 +2,16 @@ import os
 import re
 from pathlib import Path
 
-
 REPO_ENV_VAR = "BAT_DOCKER_REPO"
 REGISTRY_ENV_VAR = "BAT_DOCKER_REGISTRY"
 DEFAULT_REGISTRY = "default_registry"
 
 
 def default_repo_name(context_dir: Path) -> str:
-    project = re.sub(r"[^a-z0-9]+", "-", context_dir.name.lower()).strip("-") or "agent"
+    project = (
+        re.sub(r"[^a-z0-9]+", "-", context_dir.name.lower()).strip("-")
+        or "agent"
+    )
     return f"default-repository/{project}"
 
 

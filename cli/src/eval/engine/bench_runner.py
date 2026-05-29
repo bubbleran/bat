@@ -8,7 +8,6 @@ from pathlib import Path
 from .contracts import EpisodeResult, TaskSpec
 from .evaluator import EpisodeEvaluator
 
-
 _QUALITATIVE_FIELDS = (
     "response_relevance",
     "task_completion_quality",
@@ -21,7 +20,9 @@ def _episode_passed(ep: EpisodeResult) -> bool:
     return ep.verdict.passed if ep.verdict is not None else False
 
 
-def _average_qualitative_scores(results: list[EpisodeResult]) -> dict[str, float]:
+def _average_qualitative_scores(
+    results: list[EpisodeResult],
+) -> dict[str, float]:
     out: dict[str, float] = {}
     for field in _QUALITATIVE_FIELDS:
         values = [
@@ -36,11 +37,15 @@ def _average_qualitative_scores(results: list[EpisodeResult]) -> dict[str, float
 
 
 def _safe_task_id(task_id: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in task_id)
+    return "".join(
+        ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in task_id
+    )
 
 
 def _write_json(path: Path, obj: object) -> None:
-    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(
+        json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 @dataclass
@@ -77,7 +82,9 @@ class BenchRunner:
         for episode in results:
             task_file_id = _safe_task_id(episode.task_id)
             attempt_index = int(episode.aux.get("attempt_index", 0))
-            (episodes_dir / f"{task_file_id}__try{attempt_index}.json").write_text(
+            (
+                episodes_dir / f"{task_file_id}__try{attempt_index}.json"
+            ).write_text(
                 episode.model_dump_json(indent=2),
                 encoding="utf-8",
             )
@@ -88,7 +95,9 @@ class BenchRunner:
         safe_model_name = self.config.model.replace(":", "-")
 
         self.task_dir = Path(self.config.out_dir) / task_id
-        self.run_dir = self.task_dir / f"{self.config.run_name}_{safe_model_name}"
+        self.run_dir = (
+            self.task_dir / f"{self.config.run_name}_{safe_model_name}"
+        )
         self._episodes_dir().mkdir(parents=True, exist_ok=True)
         self._run_timestamp = stamp
 
@@ -97,9 +106,14 @@ class BenchRunner:
         for task in tasks:
             for i in range(max(1, int(self.config.k))):
                 thread_id = f"{task.id}__try{i}"
-                episode = await self.adapter.run_task(task=task, thread_id=thread_id)
+                episode = await self.adapter.run_task(
+                    task=task, thread_id=thread_id
+                )
                 episode.verdict = self.evaluator.evaluate(
-                    episode.final_status, episode.final_output, episode.trace.tool_calls, task.expected
+                    episode.final_status,
+                    episode.final_output,
+                    episode.trace.tool_calls,
+                    task.expected,
                 )
                 episode.expected_outcome = task.expected.expected_outcome
                 episode.model_name = self.config.model
@@ -114,7 +128,9 @@ class BenchRunner:
             raise ValueError("run_dir is not initialized; call run() first")
 
         display_model_name = (
-            self.config.model.split(":")[-1] if ":" in self.config.model else self.config.model
+            self.config.model.split(":")[-1]
+            if ":" in self.config.model
+            else self.config.model
         )
 
         attempts_by_task: dict[str, list[EpisodeResult]] = {}
@@ -131,7 +147,9 @@ class BenchRunner:
                     "attempts": total,
                     "passed": passed,
                     "failed": total - passed,
-                    "success_percentage": (passed / total) * 100.0 if total else 0.0,
+                    "success_percentage": (passed / total) * 100.0
+                    if total
+                    else 0.0,
                 }
             )
 

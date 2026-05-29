@@ -5,29 +5,43 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "bat-cli"
 version = "0.1.1"
+authors = [
+  { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },
+]
 description = "CLI tool to interact with BAT agents"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "typer>=0.12.3",
-    "bat-adk>=2026.06rc1",
-    "bat-adk[openai]",
-    "a2a-sdk>=1.0.0",
-    "python-dotenv>=1.0.1",
-    "typing-extensions>=4.12.0",
-    "matplotlib>=3.8",
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
 ]
 
-[dependency-groups]
-dev = [
-    "pytest>=8.0",
-]
-packaging = [
-    "pyinstaller>=6.0",
+dependencies = [
+  "typer>=0.12.3",
+  "bat-adk>=2026.06rc1",
+  "bat-adk[openai]",
+  "a2a-sdk>=1.0.0",
+  "python-dotenv>=1.0.1",
+  "typing-extensions>=4.12.0",
+  "matplotlib>=3.8",
 ]
 
 [project.scripts]
 bat = "cli:main"
+
+[project.urls]
+"Homepage" = "https://bubbleran.com/"
+"Repository" = "https://github.com/bubbleran/bat"
+
+[dependency-groups]
+dev = [
+  "build",
+  "twine",
+  "pytest>=8.0",
+]
+packaging = [
+  "pyinstaller>=6.0",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -38,12 +52,46 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 create = [
-    "templates/agent/*",
-    "templates/agent/.*",
-    "templates/agent/src/*",
-    "templates/agent/src/llm_clients/*",
-    "templates/agent/tests/*",
+  "templates/agent/*",
+  "templates/agent/.*",
+  "templates/agent/src/*",
+  "templates/agent/src/llm_clients/*",
+  "templates/agent/tests/*",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 80
+
+# Files or directories to ignore entirely
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "src/create/templates",   # agent scaffold templates, not valid Python
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors (standard spacing, formatting)
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes (catches unused imports, undefined variables)
+    "I",   # isort (automatically sorts your imports alphabetically)
+    "B",   # flake8-bugbear (catches tricky hidden Python bugs)
+    "SIM", # flake8-simplify (helps you write simpler, shorter code)
+]
+ignore = [
+    "B008", # function call in default argument (this is the Typer/FastAPI pattern)
+]
+
+# Custom settings for specific files
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]     # Allow 'assert' statements in tests without warning
+
+[tool.ruff.format]
+indent-style = "space"

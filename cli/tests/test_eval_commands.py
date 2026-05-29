@@ -4,8 +4,12 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from cli import app
-from eval.engine.eval_config import EvalConfig, JudgeSpec, ModelSpec, load_eval_config
-
+from eval.engine.eval_config import (
+    EvalConfig,
+    JudgeSpec,
+    ModelSpec,
+    load_eval_config,
+)
 
 runner = CliRunner()
 
@@ -13,7 +17,9 @@ runner = CliRunner()
 def _write_minimal_agent_root(root: Path) -> None:
     (root / "config.yaml").write_text("name: test\n", encoding="utf-8")
     (root / "agent.json").write_text("{}\n", encoding="utf-8")
-    (root / "pyproject.toml").write_text("[project]\nname='agent'\nversion='0.1.0'\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='0.1.0'\n", encoding="utf-8"
+    )
 
 
 def test_eval_init_requires_agent_root() -> None:
@@ -70,7 +76,9 @@ def test_eval_show_prints_resolved_config(monkeypatch) -> None:
         eval_output.mkdir(parents=True, exist_ok=True)
 
         eval_yaml = root / "eval" / "eval.yaml"
-        eval_yaml.write_text("evaluation:\n  dataset: eval/input/tasks.json\n", encoding="utf-8")
+        eval_yaml.write_text(
+            "evaluation:\n  dataset: eval/input/tasks.json\n", encoding="utf-8"
+        )
 
         dataset = eval_input / "tasks.json"
         dataset.write_text("[]\n", encoding="utf-8")
@@ -100,12 +108,16 @@ def test_eval_show_prints_resolved_config(monkeypatch) -> None:
             ),
         )
 
-        def fake_load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
+        def fake_load_eval_config(
+            agent_root: Path, config_path: Path
+        ) -> EvalConfig:
             assert agent_root == root
             assert config_path == eval_yaml
             return config
 
-        monkeypatch.setattr("eval.commands.load_eval_config", fake_load_eval_config)
+        monkeypatch.setattr(
+            "eval.commands.load_eval_config", fake_load_eval_config
+        )
 
         result = runner.invoke(app, ["eval", "show"])
 
@@ -120,7 +132,9 @@ def test_eval_show_prints_resolved_config(monkeypatch) -> None:
         assert "Judge model : ollama:judge-model" in result.output
 
 
-def test_load_eval_config_allows_missing_judge_when_qualitative_is_false() -> None:
+def test_load_eval_config_allows_missing_judge_when_qualitative_is_false() -> (
+    None
+):
     with runner.isolated_filesystem():
         root = Path.cwd()
         _write_minimal_agent_root(root)
@@ -187,7 +201,9 @@ def test_eval_run_starts_agent_and_runs_orchestrator(monkeypatch) -> None:
         eval_output.mkdir(parents=True, exist_ok=True)
 
         eval_yaml = root / "eval" / "eval.yaml"
-        eval_yaml.write_text("evaluation:\n  dataset: eval/input/tasks.json\n", encoding="utf-8")
+        eval_yaml.write_text(
+            "evaluation:\n  dataset: eval/input/tasks.json\n", encoding="utf-8"
+        )
 
         dataset = eval_input / "tasks.json"
         dataset.write_text("[]\n", encoding="utf-8")
@@ -222,7 +238,9 @@ def test_eval_run_starts_agent_and_runs_orchestrator(monkeypatch) -> None:
 
         captured: dict[str, object] = {}
 
-        def fake_load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
+        def fake_load_eval_config(
+            agent_root: Path, config_path: Path
+        ) -> EvalConfig:
             assert agent_root == root
             assert config_path == eval_yaml
             return config
@@ -266,12 +284,20 @@ def test_eval_run_starts_agent_and_runs_orchestrator(monkeypatch) -> None:
         def fake_run_eval_orchestrator(**kwargs):  # noqa: ANN003
             captured["runner_kwargs"] = kwargs
 
-        monkeypatch.setattr("eval.commands.load_eval_config", fake_load_eval_config)
-        monkeypatch.setattr("eval.commands._find_agent_python", fake_find_agent_python)
+        monkeypatch.setattr(
+            "eval.commands.load_eval_config", fake_load_eval_config
+        )
+        monkeypatch.setattr(
+            "eval.commands._find_agent_python", fake_find_agent_python
+        )
         monkeypatch.setattr("eval.commands.time.strftime", fake_strftime)
-        monkeypatch.setattr("eval.commands._wait_for_agent_port", fake_wait_for_agent_port)
+        monkeypatch.setattr(
+            "eval.commands._wait_for_agent_port", fake_wait_for_agent_port
+        )
         monkeypatch.setattr("eval.commands.subprocess.Popen", fake_popen)
-        monkeypatch.setattr("eval.commands._run_eval_orchestrator", fake_run_eval_orchestrator)
+        monkeypatch.setattr(
+            "eval.commands._run_eval_orchestrator", fake_run_eval_orchestrator
+        )
 
         result = runner.invoke(app, ["eval", "run"])
 
@@ -325,9 +351,7 @@ def _write_eval_yaml_with_prompts(root: Path, prompts_block: str) -> Path:
         "  qualitative: true\n"
         "judge:\n"
         "  provider: openai\n"
-        "  model: gpt-4.1-mini\n"
-        + prompts_block
-        + "models:\n"
+        "  model: gpt-4.1-mini\n" + prompts_block + "models:\n"
         "  - provider: openai\n"
         "    model: gpt-4.1-mini\n",
         encoding="utf-8",
@@ -365,8 +389,7 @@ def test_judge_prompts_partial_ok() -> None:
         _write_minimal_agent_root(root)
         eval_yaml = _write_eval_yaml_with_prompts(
             root,
-            "  prompts:\n"
-            "    relevance: only relevance set\n",
+            "  prompts:\n    relevance: only relevance set\n",
         )
 
         config = load_eval_config(root, eval_yaml)
@@ -435,7 +458,11 @@ def _write_run_metrics(run_dir: Path, task_ids: list[str]) -> None:
             "status": "completed",
             "success": True,
             "time": {"wall_ms": 500},
-            "tokens": {"prompt_tokens": 50, "completion_tokens": 25, "total_tokens": 75},
+            "tokens": {
+                "prompt_tokens": 50,
+                "completion_tokens": 25,
+                "total_tokens": 75,
+            },
         }
         for tid in task_ids
     ]
@@ -456,9 +483,13 @@ def _write_run_metrics(run_dir: Path, task_ids: list[str]) -> None:
 def test_eval_plot_filter_restricts_per_task_charts() -> None:
     with runner.isolated_filesystem():
         out = Path.cwd() / "out"
-        _write_run_metrics(out / "run_a", ["foo_alpha", "bar_beta", "foo_gamma"])
+        _write_run_metrics(
+            out / "run_a", ["foo_alpha", "bar_beta", "foo_gamma"]
+        )
 
-        result = runner.invoke(app, ["eval", "plot", "--folder", str(out), "--filter", "foo"])
+        result = runner.invoke(
+            app, ["eval", "plot", "--folder", str(out), "--filter", "foo"]
+        )
 
         assert result.exit_code == 0, result.output
         assert "Per-task filter active" in result.output

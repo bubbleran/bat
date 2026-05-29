@@ -16,9 +16,12 @@ import typer
 from dotenv import dotenv_values
 
 from .engine.contracts import JudgeSpec
+from .engine.eval_config import (
+    default_eval_yaml,
+    default_tasks_json,
+    load_eval_config,
+)
 from .engine.orchestrator import run_evaluation
-from .engine.eval_config import default_eval_yaml, default_tasks_json, load_eval_config
-
 
 # Maps provider name → the env var its SDK reads for the API key.
 _PROVIDER_API_KEY_ENV: dict[str, str] = {
@@ -31,7 +34,9 @@ _PROVIDER_API_KEY_ENV: dict[str, str] = {
 }
 
 
-def _inject_judge_api_key(judge: JudgeSpec, agent_root: Path, env: dict[str, str]) -> None:
+def _inject_judge_api_key(
+    judge: JudgeSpec, agent_root: Path, env: dict[str, str]
+) -> None:
     """Resolve the judge's API key and inject it into env.
 
     If judge.api_key_env is set, the agent's .env file is the ONLY source: the CLI
@@ -93,7 +98,9 @@ def _validate_agent_root(agent_root: Path) -> None:
     ]
     missing = [path for path in required if not path.exists()]
     if missing:
-        missing_text = ", ".join(str(path.relative_to(agent_root)) for path in missing)
+        missing_text = ", ".join(
+            str(path.relative_to(agent_root)) for path in missing
+        )
         raise typer.BadParameter(
             f"Current directory does not look like an agent root. Missing: {missing_text}. Please add this files or run this command from the root of an existing agent.",
         )
@@ -229,7 +236,9 @@ def _parse_agent_url(agent_url: str) -> tuple[str, int, str]:
         elif parsed.scheme == "http":
             port = 80
         else:
-            raise typer.BadParameter("evaluation.agent_url must use http or https")
+            raise typer.BadParameter(
+                "evaluation.agent_url must use http or https"
+            )
 
     base_url = f"{parsed.scheme}://{parsed.hostname}"
     return parsed.hostname, port, base_url
@@ -259,7 +268,9 @@ def _wait_for_agent_port(
     )
 
 
-def _start_agent_process(agent_root: Path, env: dict[str, str]) -> subprocess.Popen:
+def _start_agent_process(
+    agent_root: Path, env: dict[str, str]
+) -> subprocess.Popen:
     try:
         return subprocess.Popen(
             ["uv", "run", "."],
@@ -267,7 +278,9 @@ def _start_agent_process(agent_root: Path, env: dict[str, str]) -> subprocess.Po
             env=env,
         )
     except FileNotFoundError as exc:
-        raise typer.BadParameter("Cannot execute 'uv run .'. Ensure uv is installed and available in PATH.") from exc
+        raise typer.BadParameter(
+            "Cannot execute 'uv run .'. Ensure uv is installed and available in PATH."
+        ) from exc
 
 
 def _stop_agent_process(process: subprocess.Popen, timeout_s: int) -> None:
@@ -325,7 +338,11 @@ def eval_init(
 
 
 def _print_eval_show(cfg) -> None:
-    judge_model = f"{cfg.judge.provider}:{cfg.judge.model}" if cfg.judge is not None else "not configured"
+    judge_model = (
+        f"{cfg.judge.provider}:{cfg.judge.model}"
+        if cfg.judge is not None
+        else "not configured"
+    )
 
     typer.secho("============================", fg=typer.colors.BLUE)
     typer.secho("  EVALUATION CONFIGURATION", fg=typer.colors.BLUE, bold=True)
@@ -357,7 +374,9 @@ def eval_show() -> None:
 
     eval_yaml_path = agent_root / "eval" / "eval.yaml"
     if not eval_yaml_path.exists():
-        raise typer.BadParameter("Missing ./eval/eval.yaml. Run 'bat eval init' first.")
+        raise typer.BadParameter(
+            "Missing ./eval/eval.yaml. Run 'bat eval init' first."
+        )
 
     try:
         cfg = load_eval_config(agent_root, eval_yaml_path)
@@ -373,7 +392,9 @@ def eval_run() -> None:
 
     eval_yaml_path = agent_root / "eval" / "eval.yaml"
     if not eval_yaml_path.exists():
-        raise typer.BadParameter("Missing ./eval/eval.yaml. Run 'bat eval init' first.")
+        raise typer.BadParameter(
+            "Missing ./eval/eval.yaml. Run 'bat eval init' first."
+        )
 
     try:
         cfg = load_eval_config(agent_root, eval_yaml_path)
@@ -400,7 +421,9 @@ def eval_run() -> None:
     _, parsed_port, base_url = _parse_agent_url(cfg.agent_url)
 
     for idx, model_cfg in enumerate(cfg.models):
-        typer.secho(f"- {model_cfg.provider}:{model_cfg.model}", fg=typer.colors.CYAN)
+        typer.secho(
+            f"- {model_cfg.provider}:{model_cfg.model}", fg=typer.colors.CYAN
+        )
 
         server_env = os.environ.copy()
         server_env["MODEL_PROVIDER"] = model_cfg.provider
@@ -442,7 +465,12 @@ def eval_run() -> None:
                 else:
                     runner_env.pop("JUDGE_BASE_URL", None)
 
-                for prompt_key in ("relevance", "task_completion", "hallucination", "tool_call"):
+                for prompt_key in (
+                    "relevance",
+                    "task_completion",
+                    "hallucination",
+                    "tool_call",
+                ):
                     env_name = f"JUDGE_PROMPT_{prompt_key.upper()}"
                     text = cfg.judge.prompts.get(prompt_key)
                     if text:
@@ -461,7 +489,12 @@ def eval_run() -> None:
                 runner_env.pop("JUDGE_PROVIDER", None)
                 runner_env.pop("JUDGE_MODEL", None)
                 runner_env.pop("JUDGE_BASE_URL", None)
-                for prompt_key in ("relevance", "task_completion", "hallucination", "tool_call"):
+                for prompt_key in (
+                    "relevance",
+                    "task_completion",
+                    "hallucination",
+                    "tool_call",
+                ):
                     runner_env.pop(f"JUDGE_PROMPT_{prompt_key.upper()}", None)
 
             _run_eval_orchestrator(

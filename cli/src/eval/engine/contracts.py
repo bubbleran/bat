@@ -1,9 +1,9 @@
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 AgentTaskStatus = Literal["working", "input-required", "completed", "error"]
 

@@ -74,7 +74,9 @@ def episode_metrics(ep: EpisodeResult) -> dict[str, Any]:
     return metrics
 
 
-def summarize_episode_metrics(results: list[EpisodeResult], k: int = 1) -> dict[str, Any]:
+def summarize_episode_metrics(
+    results: list[EpisodeResult], k: int = 1
+) -> dict[str, Any]:
     per_episode = [episode_metrics(result) for result in results]
     n = len(per_episode)
 
@@ -82,8 +84,12 @@ def summarize_episode_metrics(results: list[EpisodeResult], k: int = 1) -> dict[
     total_wall_ms = sum(wall_times)
     avg_wall_ms = (total_wall_ms / n) if n else 0.0
 
-    prompt_tokens = [metric["tokens"]["prompt_tokens"] for metric in per_episode]
-    completion_tokens = [metric["tokens"]["completion_tokens"] for metric in per_episode]
+    prompt_tokens = [
+        metric["tokens"]["prompt_tokens"] for metric in per_episode
+    ]
+    completion_tokens = [
+        metric["tokens"]["completion_tokens"] for metric in per_episode
+    ]
     total_tokens = [metric["tokens"]["total_tokens"] for metric in per_episode]
 
     passed = sum(1 for metric in per_episode if metric["success"])
@@ -112,7 +118,11 @@ def summarize_episode_metrics(results: list[EpisodeResult], k: int = 1) -> dict[
         },
     }
 
-    qualitative_metrics = [metric["qualitative"] for metric in per_episode if metric.get("qualitative")]
+    qualitative_metrics = [
+        metric["qualitative"]
+        for metric in per_episode
+        if metric.get("qualitative")
+    ]
     if qualitative_metrics:
         qualitative_summary: dict[str, Any] = {}
         for field in [
@@ -121,7 +131,11 @@ def summarize_episode_metrics(results: list[EpisodeResult], k: int = 1) -> dict[
             "hallucination_score",
             "tool_call_appropriateness",
         ]:
-            values = [metric[field] for metric in qualitative_metrics if metric.get(field) is not None]
+            values = [
+                metric[field]
+                for metric in qualitative_metrics
+                if metric.get(field) is not None
+            ]
             if values:
                 qualitative_summary[field] = {
                     "avg": sum(values) / len(values),

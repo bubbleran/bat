@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-adk"
-version = "2026.6rc1"
+version = "2026.6rc2"
 authors = [
   { name="Andrea LEONE", email="andrea.leone@bubbleran.com" },
+  { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },
 ]
 description = "Software Development Kit for building AI Agents in BubbleRAN MX-PDK and MX-AI"
 readme = "README.md"
@@ -18,7 +19,7 @@ classifiers = [
 
 dependencies = [
   "a2a-sdk>=1.0.0",
-  "a2a-sdk[http-server]>=1.0.0",
+  "a2a-sdk[http-server]",
   "httpx>=0.28.1",
   "langchain>=0.3.24",
   "langchain-mcp-adapters>=0.2.0",
@@ -30,20 +31,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-anthropic = [
-  "langchain-anthropic>=0.3.22",
-]
-deepseek = [
-  "langchain-deepseek>=0.1.4",
-]
-nvidia = [
-  "langchain-nvidia-ai-endpoints>=0.3.9",
-]
-ollama = [
-  "langchain-ollama>=0.3.3",
-]
-openai = [
-  "langchain-openai>=0.3.14",
+anthropic = ["langchain-anthropic"]
+deepseek = ["langchain-deepseek"]
+nvidia = ["langchain-nvidia-ai-endpoints"]
+ollama = ["langchain-ollama"]
+openai = ["langchain-openai"]
+
+all = [
+  "bat-adk[anthropic]",
+  "bat-adk[deepseek]",
+  "bat-adk[nvidia]",
+  "bat-adk[ollama]",
+  "bat-adk[openai]",
 ]
 
 [dependency-groups]
@@ -53,6 +52,37 @@ dev = [
   "pytest>=9.0.2",
   "pytest-cov>=7.0.0",
 ]
+
 [project.urls]
 "Homepage" = "https://bubbleran.com/"
 "Repository" = "https://github.com/bubbleran/bat"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 80
+
+# Files or directories to ignore entirely
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors (standard spacing, formatting)
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes (catches unused imports, undefined variables)
+    "I",   # isort (automatically sorts your imports alphabetically)
+    "B",   # flake8-bugbear (catches tricky hidden Python bugs)
+    "SIM", # flake8-simplify (helps you write simpler, shorter code)
+]
+
+# Custom settings for specific files
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]     # Allow 'assert' statements in tests without warning
+
+[tool.ruff.format]
+indent-style = "space"

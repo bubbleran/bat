@@ -11,8 +11,11 @@ from .bench_runner import BenchRunner, RunConfig
 from .contracts import EpisodeResult, TaskSpec
 from .metrics.llm_evaluators import evaluate_episode_quality
 from .metrics.metrics import summarize_episode_metrics
-from .metrics.qualitative_helpers import build_context_from_events, build_expected_desc, build_user_facts_summary
-
+from .metrics.qualitative_helpers import (
+    build_context_from_events,
+    build_expected_desc,
+    build_user_facts_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,28 +26,38 @@ def load_tasks(path: str | Path) -> list[TaskSpec]:
         content = dataset_path.read_text(encoding="utf-8").strip()
         objects = json.loads(content)
         if not isinstance(objects, list):
-            raise ValueError(f"Expected a JSON array of task objects in {dataset_path}")
+            raise ValueError(
+                f"Expected a JSON array of task objects in {dataset_path}"
+            )
         return [TaskSpec.model_validate(obj) for obj in objects]
     except Exception as exc:
-        raise ValueError(f"Dataset not formatted correctly in {dataset_path}") from exc
+        raise ValueError(
+            f"Dataset not formatted correctly in {dataset_path}"
+        ) from exc
 
 
 _QUALITATIVE_CONCURRENCY = 8
 
 
-async def _evaluate_qualitative(results: list[EpisodeResult], tasks_by_id: dict[str, TaskSpec]) -> None:
+async def _evaluate_qualitative(
+    results: list[EpisodeResult], tasks_by_id: dict[str, TaskSpec]
+) -> None:
     sem = asyncio.Semaphore(_QUALITATIVE_CONCURRENCY)
 
     async def _score(episode: EpisodeResult) -> None:
         task = tasks_by_id.get(episode.task_id)
         if task is None:
             return
-        logger.info(f"Evaluating qualitative scores for episode {episode.task_id}")
+        logger.info(
+            f"Evaluating qualitative scores for episode {episode.task_id}"
+        )
         query = " -> ".join(task.turns)
         raw_events = [event.model_dump() for event in episode.trace.events]
         context = build_context_from_events(raw_events)
         user_facts = build_user_facts_summary(raw_events)
-        tool_calls = json.dumps(episode.trace.tool_calls, ensure_ascii=False, indent=2)
+        tool_calls = json.dumps(
+            episode.trace.tool_calls, ensure_ascii=False, indent=2
+        )
         expected_desc = build_expected_desc(
             status=task.expected.status,
             expected_outcome=task.expected.expected_outcome,
@@ -66,6 +79,7 @@ async def _evaluate_qualitative(results: list[EpisodeResult], tasks_by_id: dict[
             )
 
     await asyncio.gather(*(_score(ep) for ep in results))
+
 
 async def run_evaluation(
     agent_url: str,
@@ -121,7 +135,9 @@ async def run_evaluation(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run A2A evaluation in the agent environment")
+    parser = argparse.ArgumentParser(
+        description="Run A2A evaluation in the agent environment"
+    )
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--agent-url", required=True)

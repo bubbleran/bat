@@ -16,7 +16,6 @@ from httpx import AsyncClient
 
 from .contracts import EpisodeResult, EpisodeTrace, TaskSpec, TraceEvent
 
-
 TERMINAL_STATUSES = {"completed", "error", "input-required"}
 
 
@@ -60,16 +59,16 @@ def _chunk_key(chunk: StreamResponse) -> str:
         artifact_id = chunk.artifact_update.artifact.artifact_id
         if artifact_id:
             return f"artifact:{artifact_id}"
-    if chunk.HasField("message"):
-        if chunk.message.message_id:
-            return f"message:{chunk.message.message_id}"
-    if chunk.HasField("task"):
-        if chunk.task.id:
-            return f"task:{chunk.task.id}"
+    if chunk.HasField("message") and chunk.message.message_id:
+        return f"message:{chunk.message.message_id}"
+    if chunk.HasField("task") and chunk.task.id:
+        return f"task:{chunk.task.id}"
     return f"raw:{chunk.SerializeToString().hex()}"
 
 
-def _extract_status_and_content(chunk: StreamResponse) -> tuple[str | None, str]:
+def _extract_status_and_content(
+    chunk: StreamResponse,
+) -> tuple[str | None, str]:
     if chunk.HasField("message"):
         return "completed", get_message_text(chunk.message)
     if chunk.HasField("artifact_update"):
@@ -103,7 +102,9 @@ def _extract_metadata(chunk: StreamResponse) -> dict[str, Any]:
     metadata = _struct_to_dict(metadata_struct)
 
     if chunk.HasField("artifact_update"):
-        artifact_metadata = _struct_to_dict(chunk.artifact_update.artifact.metadata)
+        artifact_metadata = _struct_to_dict(
+            chunk.artifact_update.artifact.metadata
+        )
         if artifact_metadata:
             merged = dict(artifact_metadata)
             merged.update(metadata)
@@ -119,10 +120,17 @@ def _normalize_usage(metadata: dict[str, Any]) -> dict[str, Any]:
 
     input_tokens = int(usage.get("input_tokens") or 0)
     output_tokens = int(usage.get("output_tokens") or 0)
-    total_tokens = int(usage.get("total_tokens") or (input_tokens + output_tokens))
+    total_tokens = int(
+        usage.get("total_tokens") or (input_tokens + output_tokens)
+    )
     inference_time = float(usage.get("inference_time") or 0.0)
 
-    if input_tokens == 0 and output_tokens == 0 and total_tokens == 0 and inference_time == 0.0:
+    if (
+        input_tokens == 0
+        and output_tokens == 0
+        and total_tokens == 0
+        and inference_time == 0.0
+    ):
         return {}
 
     return {
@@ -133,11 +141,16 @@ def _normalize_usage(metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _add_usage(total: dict[str, Any], incremental: dict[str, Any]) -> dict[str, Any]:
+def _add_usage(
+    total: dict[str, Any], incremental: dict[str, Any]
+) -> dict[str, Any]:
     return {
-        "input_tokens": int(total.get("input_tokens") or 0) + int(incremental.get("input_tokens") or 0),
-        "output_tokens": int(total.get("output_tokens") or 0) + int(incremental.get("output_tokens") or 0),
-        "total_tokens": int(total.get("total_tokens") or 0) + int(incremental.get("total_tokens") or 0),
+        "input_tokens": int(total.get("input_tokens") or 0)
+        + int(incremental.get("input_tokens") or 0),
+        "output_tokens": int(total.get("output_tokens") or 0)
+        + int(incremental.get("output_tokens") or 0),
+        "total_tokens": int(total.get("total_tokens") or 0)
+        + int(incremental.get("total_tokens") or 0),
         "inference_time": float(total.get("inference_time") or 0.0)
         + float(incremental.get("inference_time") or 0.0),
     }
@@ -159,12 +172,19 @@ def _tool_call_key(tool_call: dict[str, Any]) -> str:
 
 
 class BatA2AAdapter:
-    def __init__(self, agent_url: str, request_timeout_s: float = 180.0, max_events: int = 200) -> None:
+    def __init__(
+        self,
+        agent_url: str,
+        request_timeout_s: float = 180.0,
+        max_events: int = 200,
+    ) -> None:
         self.agent_url = agent_url
         self.request_timeout_s = request_timeout_s
         self.max_events = max_events
 
-    async def run_task(self, task: TaskSpec, *, thread_id: str) -> EpisodeResult:
+    async def run_task(
+        self, task: TaskSpec, *, thread_id: str
+    ) -> EpisodeResult:
         t0_perf = time.perf_counter()
         trace = EpisodeTrace()
 
@@ -181,10 +201,14 @@ class BatA2AAdapter:
         last_content = ""
 
         async with AsyncClient(timeout=self.request_timeout_s) as httpx_client:
-            resolver = A2ACardResolver(httpx_client=httpx_client, base_url=self.agent_url)
+            resolver = A2ACardResolver(
+                httpx_client=httpx_client, base_url=self.agent_url
+            )
             agent_card = await resolver.get_agent_card()
 
-            client = ClientFactory(ClientConfig(httpx_client=httpx_client, streaming=True)).create(card=agent_card)
+            client = ClientFactory(
+                ClientConfig(httpx_client=httpx_client, streaming=True)
+            ).create(card=agent_card)
 
             try:
                 for turn in task.turns:
@@ -194,7 +218,9 @@ class BatA2AAdapter:
                         context_id=thread_id,
                         role=Role.ROLE_USER,
                     )
-                    stream = client.send_message(SendMessageRequest(message=message))
+                    stream = client.send_message(
+                        SendMessageRequest(message=message)
+                    )
 
                     async for chunk in stream:
                         metadata = _extract_metadata(chunk)
@@ -220,10 +246,13 @@ class BatA2AAdapter:
                         if len(trace.events) < self.max_events:
                             trace.events.append(
                                 TraceEvent(
-                                    t_ms=(time.perf_counter() - t0_perf) * 1000.0,
+                                    t_ms=(time.perf_counter() - t0_perf)
+                                    * 1000.0,
                                     task_status=status,
                                     content_preview=content,
-                                    user_input=turn if not turn_started else None,
+                                    user_input=turn
+                                    if not turn_started
+                                    else None,
                                 )
                             )
                             turn_started = True

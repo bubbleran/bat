@@ -2,7 +2,6 @@ import re
 from pathlib import Path
 from typing import Literal
 
-
 BAT_ADK_VERSION = "2026.4.23"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "agent"
@@ -51,7 +50,9 @@ def _render_template(template_file: str, replacements: dict[str, str]) -> str:
     return rendered
 
 
-def _normalize_name(raw: str, style: Literal["project", "snake", "pascal"]) -> str:
+def _normalize_name(
+    raw: str, style: Literal["project", "snake", "pascal"]
+) -> str:
     if style == "pascal":
         name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", raw)
         name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
@@ -152,7 +153,6 @@ def _build_graph_content(agent_dir_name: str, clients: list[str] | None) -> str:
     setup_blocks: list[str] = []
 
     for file_stem, class_name in resolved_clients:
-        
         setup_blocks.append(
             "\n".join(
                 [
@@ -219,14 +219,22 @@ def _resolve_client_specs(clients: list[str] | None) -> list[tuple[str, str]]:
         if not snake_name:
             continue
 
-        file_stem = snake_name if snake_name.endswith("_client") else f"{snake_name}_client"
+        file_stem = (
+            snake_name
+            if snake_name.endswith("_client")
+            else f"{snake_name}_client"
+        )
         if file_stem in seen:
             continue
 
         pascal_name = _normalize_name(raw_name, "pascal")
         if not pascal_name:
             continue
-        class_name = pascal_name if pascal_name.endswith("Client") else f"{pascal_name}Client"
+        class_name = (
+            pascal_name
+            if pascal_name.endswith("Client")
+            else f"{pascal_name}Client"
+        )
 
         seen.add(file_stem)
         resolved.append((file_stem, class_name))
@@ -276,14 +284,20 @@ def _write_llm_clients(
             continue
 
         client_path.parent.mkdir(parents=True, exist_ok=True)
-        client_path.write_text(_build_llm_client_content(class_name), encoding="utf-8")
+        client_path.write_text(
+            _build_llm_client_content(class_name), encoding="utf-8"
+        )
         created.append(client_path)
 
     # Regenerate the package __init__ so it re-exports every client present in
     # the directory (covers both `bat create` and `bat add client`).
     init_path = llm_clients_dir / "__init__.py"
-    new_content = _build_llm_clients_init_content(_client_specs_from_dir(llm_clients_dir))
-    existing_content = init_path.read_text(encoding="utf-8") if init_path.exists() else None
+    new_content = _build_llm_clients_init_content(
+        _client_specs_from_dir(llm_clients_dir)
+    )
+    existing_content = (
+        init_path.read_text(encoding="utf-8") if init_path.exists() else None
+    )
     if new_content != existing_content:
         init_path.parent.mkdir(parents=True, exist_ok=True)
         init_path.write_text(new_content, encoding="utf-8")
@@ -322,14 +336,18 @@ def create_agent_scaffold(
         created.append(file_path)
 
     pyproject_path = target_dir / "pyproject.toml"
-    
+
     if force or not pyproject_path.exists():
-        pyproject_path.write_text(_build_pyproject_content(target_dir.name), encoding="utf-8")
+        pyproject_path.write_text(
+            _build_pyproject_content(target_dir.name), encoding="utf-8"
+        )
         created.append(pyproject_path)
 
     agent_json_path = target_dir / "agent.json"
     if force or not agent_json_path.exists():
-        agent_json_path.write_text(_build_agent_json_content(target_dir.name), encoding="utf-8")
+        agent_json_path.write_text(
+            _build_agent_json_content(target_dir.name), encoding="utf-8"
+        )
         created.append(agent_json_path)
 
     env_path = target_dir / ".env"
@@ -346,33 +364,49 @@ def create_agent_scaffold(
 
     agent_spec_path = target_dir / "agent.spec"
     if force or not agent_spec_path.exists():
-        agent_spec_path.write_text(_build_agent_spec_content(target_dir.name), encoding="utf-8")
+        agent_spec_path.write_text(
+            _build_agent_spec_content(target_dir.name), encoding="utf-8"
+        )
         created.append(agent_spec_path)
 
     dockerfile_path = target_dir / "Dockerfile"
     if force or not dockerfile_path.exists():
-        dockerfile_path.write_text(_build_dockerfile_content(target_dir.name), encoding="utf-8")
+        dockerfile_path.write_text(
+            _build_dockerfile_content(target_dir.name), encoding="utf-8"
+        )
         created.append(dockerfile_path)
 
     makefile_path = target_dir / "Makefile"
     if force or not makefile_path.exists():
-        makefile_path.write_text(_build_makefile_content(target_dir.name), encoding="utf-8")
+        makefile_path.write_text(
+            _build_makefile_content(target_dir.name), encoding="utf-8"
+        )
         created.append(makefile_path)
 
     graph_path = target_dir / "src" / "graph.py"
     if force or not graph_path.exists():
-        graph_path.write_text(_build_graph_content(target_dir.name, clients), encoding="utf-8")
+        graph_path.write_text(
+            _build_graph_content(target_dir.name, clients), encoding="utf-8"
+        )
         created.append(graph_path)
 
     src_init_path = target_dir / "src" / "__init__.py"
-    if force or not src_init_path.exists() or not src_init_path.read_text(encoding="utf-8").strip():
+    if (
+        force
+        or not src_init_path.exists()
+        or not src_init_path.read_text(encoding="utf-8").strip()
+    ):
         src_init_path.parent.mkdir(parents=True, exist_ok=True)
-        src_init_path.write_text(_build_src_init_content(target_dir.name), encoding="utf-8")
+        src_init_path.write_text(
+            _build_src_init_content(target_dir.name), encoding="utf-8"
+        )
         created.append(src_init_path)
 
     main_path = target_dir / "__main__.py"
     if force or not main_path.exists():
-        main_path.write_text(_build_main_content(target_dir.name), encoding="utf-8")
+        main_path.write_text(
+            _build_main_content(target_dir.name), encoding="utf-8"
+        )
         created.append(main_path)
 
     created.extend(
@@ -384,4 +418,3 @@ def create_agent_scaffold(
     )
 
     return created
-

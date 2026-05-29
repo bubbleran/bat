@@ -37,7 +37,11 @@ def push_image(
 ) -> None:
     context_dir = context.resolve()
     if not context_dir.is_dir():
-        typer.secho(f"Context directory not found: {context_dir}", fg=typer.colors.RED, err=True)
+        typer.secho(
+            f"Context directory not found: {context_dir}",
+            fg=typer.colors.RED,
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     resolved_registry = resolve_registry(context_dir, docker_registry)
@@ -49,10 +53,16 @@ def push_image(
     try:
         subprocess.run(command, check=True, cwd=context_dir)
     except FileNotFoundError as exc:
-        typer.secho("Docker executable not found in PATH.", fg=typer.colors.RED, err=True)
+        typer.secho(
+            "Docker executable not found in PATH.",
+            fg=typer.colors.RED,
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
     except subprocess.CalledProcessError as exc:
         typer.secho("Docker push failed.", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=exc.returncode or 1) from exc
 
-    typer.secho(f"Docker image pushed successfully: {image}", fg=typer.colors.GREEN)
+    typer.secho(
+        f"Docker image pushed successfully: {image}", fg=typer.colors.GREEN
+    )

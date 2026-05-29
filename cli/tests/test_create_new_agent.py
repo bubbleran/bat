@@ -1,11 +1,10 @@
-from pathlib import Path
 import os
+from pathlib import Path
 
 from typer.testing import CliRunner
 
-from cli import app
 import create.agent as create_agent_module
-
+from cli import app
 
 runner = CliRunner()
 
@@ -17,7 +16,9 @@ def test_create_new_agent_requires_name() -> None:
         assert result.exit_code != 0
 
 
-def test_static_template_loader_ignores_bytecode_cache(monkeypatch, tmp_path) -> None:
+def test_static_template_loader_ignores_bytecode_cache(
+    monkeypatch, tmp_path
+) -> None:
     templates_dir = tmp_path / "templates" / "agent"
     cache_dir = templates_dir / "__pycache__"
     cache_dir.mkdir(parents=True)
@@ -27,7 +28,9 @@ def test_static_template_loader_ignores_bytecode_cache(monkeypatch, tmp_path) ->
     monkeypatch.setattr(create_agent_module, "TEMPLATES_DIR", templates_dir)
     monkeypatch.setattr(create_agent_module, "_DYNAMIC_TEMPLATE_FILES", set())
 
-    assert create_agent_module._load_static_templates() == {"README.md": "hello\n"}
+    assert create_agent_module._load_static_templates() == {
+        "README.md": "hello\n"
+    }
 
 
 def test_create_new_agent_custom_name() -> None:
@@ -61,7 +64,9 @@ def test_create_new_agent_custom_name() -> None:
         for file_path in expected_files:
             assert file_path.exists(), f"Missing scaffold file: {file_path}"
 
-        pyproject_content = (root / "pyproject.toml").read_text(encoding="utf-8")
+        pyproject_content = (root / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
         assert "[project]" in pyproject_content
         assert 'name = "demo"' in pyproject_content
         assert 'version = "1.0.0"' in pyproject_content
@@ -81,7 +86,7 @@ def test_create_new_agent_custom_name() -> None:
 
         dockerfile_content = (root / "Dockerfile").read_text(encoding="utf-8")
         assert "strip dist/demo" in dockerfile_content
-        assert "ENTRYPOINT [\"./demo\"]" in dockerfile_content
+        assert 'ENTRYPOINT ["./demo"]' in dockerfile_content
 
         makefile_content = (root / "Makefile").read_text(encoding="utf-8")
         assert "REPO ?= YOUR_REPOSITORY/demo" in makefile_content
@@ -98,7 +103,10 @@ def test_create_new_agent_custom_name() -> None:
         assert "MODEL_PROVIDER=openai" in env_content
 
         graph_content = (root / "src" / "graph.py").read_text(encoding="utf-8")
-        assert "from .llm_clients.example_client import ExampleClient" in graph_content
+        assert (
+            "from .llm_clients.example_client import ExampleClient"
+            in graph_content
+        )
         assert "class DemoAgentGraph(AgentGraph):" in graph_content
         assert "self.example_client = ExampleClient(" in graph_content
         assert "DemoAgentGraph.NODE_1" not in graph_content
@@ -109,13 +117,17 @@ def test_create_new_agent_pyproject_name_from_camel_case() -> None:
         result = runner.invoke(app, ["init", "agent", "RNGAgent"])
 
         assert result.exit_code == 0
-        pyproject_content = Path("RNGAgent", "pyproject.toml").read_text(encoding="utf-8")
+        pyproject_content = Path("RNGAgent", "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
         assert 'name = "rng"' in pyproject_content
 
 
 def test_create_new_agent_rejects_empty_clients_option() -> None:
     with runner.isolated_filesystem():
-        result = runner.invoke(app, ["init", "agent", "rng", "--clients", " , "])
+        result = runner.invoke(
+            app, ["init", "agent", "rng", "--clients", " , "]
+        )
 
         assert result.exit_code != 0
         assert "Provide at least one client name" in result.output
@@ -123,7 +135,9 @@ def test_create_new_agent_rejects_empty_clients_option() -> None:
 
 def test_create_new_agent_with_custom_clients() -> None:
     with runner.isolated_filesystem():
-        result = runner.invoke(app, ["init", "agent", "rng", "--clients", "talk, discuss"])
+        result = runner.invoke(
+            app, ["init", "agent", "rng", "--clients", "talk, discuss"]
+        )
 
         assert result.exit_code == 0
         root = Path("rng")
@@ -140,13 +154,18 @@ def test_create_new_agent_with_custom_clients() -> None:
         discuss_content = discuss_client.read_text(encoding="utf-8")
 
         assert "class TalkClient(ChatModelClient):" in talk_content
-        assert "client_name=\"TalkClient\"" in talk_content
+        assert 'client_name="TalkClient"' in talk_content
         assert "class DiscussClient(ChatModelClient):" in discuss_content
-        assert "client_name=\"DiscussClient\"" in discuss_content
+        assert 'client_name="DiscussClient"' in discuss_content
 
         graph_content = (root / "src" / "graph.py").read_text(encoding="utf-8")
-        assert "from .llm_clients.talk_client import TalkClient" in graph_content
-        assert "from .llm_clients.discuss_client import DiscussClient" in graph_content
+        assert (
+            "from .llm_clients.talk_client import TalkClient" in graph_content
+        )
+        assert (
+            "from .llm_clients.discuss_client import DiscussClient"
+            in graph_content
+        )
         assert "self.talk_client = TalkClient(" in graph_content
         assert "self.discuss_client = DiscussClient(" in graph_content
         assert "RngGraph.NODE_1" not in graph_content
@@ -154,7 +173,7 @@ def test_create_new_agent_with_custom_clients() -> None:
 
 def test_add_new_client_from_existing_agent_root() -> None:
     with runner.isolated_filesystem():
-        init_result = runner.invoke(app, ["init", "agent", "api"]) 
+        init_result = runner.invoke(app, ["init", "agent", "api"])
         assert init_result.exit_code == 0
 
         start_dir = Path.cwd()
@@ -185,27 +204,39 @@ def test_create_new_agent_errors_for_non_empty_target_without_force() -> None:
 
 def test_create_new_agent_with_force_overwrites_existing_graph() -> None:
     with runner.isolated_filesystem():
-        first = runner.invoke(app, ["init", "agent", "api", "--clients", "talk"])
+        first = runner.invoke(
+            app, ["init", "agent", "api", "--clients", "talk"]
+        )
         assert first.exit_code == 0
 
         graph_path = Path("api", "src", "graph.py")
         original_graph = graph_path.read_text(encoding="utf-8")
         graph_path.write_text("# stale", encoding="utf-8")
 
-        second = runner.invoke(app, ["init", "agent", "api", "--clients", "plan", "--force"])
+        second = runner.invoke(
+            app, ["init", "agent", "api", "--clients", "plan", "--force"]
+        )
         assert second.exit_code == 0
 
         updated_graph = graph_path.read_text(encoding="utf-8")
         assert updated_graph != "# stale"
         assert updated_graph != original_graph
-        assert "from .llm_clients.plan_client import PlanClient" in updated_graph
+        assert (
+            "from .llm_clients.plan_client import PlanClient" in updated_graph
+        )
 
 
 def test_create_new_agent_clients_are_normalized_and_deduplicated() -> None:
     with runner.isolated_filesystem():
         result = runner.invoke(
             app,
-            ["init", "agent", "norm", "--clients", "Talk, talk , TALK_CLIENT, __, planner-agent"],
+            [
+                "init",
+                "agent",
+                "norm",
+                "--clients",
+                "Talk, talk , TALK_CLIENT, __, planner-agent",
+            ],
         )
 
         assert result.exit_code == 0
@@ -243,7 +274,9 @@ def test_create_new_agent_writes_custom_env_template_values() -> None:
 
 def test_add_new_client_force_overwrites_existing_client_file() -> None:
     with runner.isolated_filesystem():
-        init_result = runner.invoke(app, ["init", "agent", "api", "--clients", "talk"])
+        init_result = runner.invoke(
+            app, ["init", "agent", "api", "--clients", "talk"]
+        )
         assert init_result.exit_code == 0
 
         talk_client_path = Path("api", "src", "llm_clients", "talk_client.py")
@@ -297,7 +330,9 @@ def test_build_command_runs_docker_build(monkeypatch) -> None:
 
     with runner.isolated_filesystem():
         Path("agent").mkdir()
-        Path("agent", "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+        Path("agent", "Dockerfile").write_text(
+            "FROM scratch\n", encoding="utf-8"
+        )
         result = runner.invoke(
             app,
             [
@@ -329,7 +364,10 @@ def test_build_command_runs_docker_build(monkeypatch) -> None:
         ]
         assert captured["check"] is True
         assert captured["cwd"] == Path("agent").resolve()
-        assert "Docker image built successfully: hub.bubbleran.com/orama/labs/rng-agent:latest" in result.output
+        assert (
+            "Docker image built successfully: hub.bubbleran.com/orama/labs/rng-agent:latest"
+            in result.output
+        )
 
 
 def test_push_command_runs_docker_push(monkeypatch) -> None:
@@ -368,7 +406,10 @@ def test_push_command_runs_docker_push(monkeypatch) -> None:
         ]
         assert captured["check"] is True
         assert captured["cwd"] == Path("agent").resolve()
-        assert "Docker image pushed successfully: hub.bubbleran.com/orama/labs/rng-agent:latest" in result.output
+        assert (
+            "Docker image pushed successfully: hub.bubbleran.com/orama/labs/rng-agent:latest"
+            in result.output
+        )
 
 
 def test_build_command_errors_when_context_missing() -> None:
@@ -393,7 +434,10 @@ def test_set_env_updates_values_in_existing_agent_env_file() -> None:
         assert init_result.exit_code == 0
 
         env_path = Path("api", ".env")
-        env_path.write_text("PORT=9900\nMODEL=gpt-4o-mini\nMODEL_PROVIDER=openai\n", encoding="utf-8")
+        env_path.write_text(
+            "PORT=9900\nMODEL=gpt-4o-mini\nMODEL_PROVIDER=openai\n",
+            encoding="utf-8",
+        )
 
         start_dir = Path.cwd()
         os.chdir(Path("api"))

@@ -64,7 +64,12 @@ def _split_provider_model(value: str, *, field_name: str) -> tuple[str, str]:
     return provider, model
 
 
-_JUDGE_PROMPT_KEYS = ("relevance", "task_completion", "hallucination", "tool_call")
+_JUDGE_PROMPT_KEYS = (
+    "relevance",
+    "task_completion",
+    "hallucination",
+    "tool_call",
+)
 _JUDGE_PROMPT_MAX_LEN = 1000
 
 
@@ -104,7 +109,9 @@ def _parse_env_map(raw: Any, *, section_name: str) -> dict[str, str]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
-        raise ValueError(f"{section_name}.env must be a mapping of environment variables")
+        raise ValueError(
+            f"{section_name}.env must be a mapping of environment variables"
+        )
 
     parsed: dict[str, str] = {}
     for key, value in raw.items():
@@ -121,7 +128,9 @@ def _parse_model_spec(item: Any, *, section_name: str) -> ModelSpec:
         return ModelSpec(provider=provider, model=model)
 
     if not isinstance(item, dict):
-        raise ValueError(f"{section_name} must be either a mapping or '<provider>:<model>' string")
+        raise ValueError(
+            f"{section_name} must be either a mapping or '<provider>:<model>' string"
+        )
 
     provider = _to_optional_str(item.get("provider"))
     model = _to_optional_str(item.get("model"))
@@ -129,7 +138,9 @@ def _parse_model_spec(item: Any, *, section_name: str) -> ModelSpec:
     env = _parse_env_map(item.get("env"), section_name=section_name)
 
     if model and not provider and ":" in model:
-        provider, model = _split_provider_model(model, field_name=f"{section_name}.model")
+        provider, model = _split_provider_model(
+            model, field_name=f"{section_name}.model"
+        )
 
     if not provider or not model:
         raise ValueError(
@@ -153,7 +164,9 @@ def _parse_judge_spec(item: Any) -> JudgeSpec | None:
         return JudgeSpec(provider=provider, model=model)
 
     if not isinstance(item, dict):
-        raise ValueError("judge must be either a mapping or '<provider>:<model>' string")
+        raise ValueError(
+            "judge must be either a mapping or '<provider>:<model>' string"
+        )
 
     provider = _to_optional_str(item.get("provider"))
     model = _to_optional_str(item.get("model"))
@@ -166,7 +179,9 @@ def _parse_judge_spec(item: Any) -> JudgeSpec | None:
         return None
 
     if api_key_env and not _ENV_VAR_NAME.fullmatch(api_key_env):
-        raise ValueError(f"judge.api_key_env is not a valid environment variable name: {api_key_env}")
+        raise ValueError(
+            f"judge.api_key_env is not a valid environment variable name: {api_key_env}"
+        )
 
     if model and not provider and ":" in model:
         provider, model = _split_provider_model(model, field_name="judge.model")
@@ -206,9 +221,16 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
     if not models:
         raise ValueError("No valid models configured in eval/eval.yaml")
 
-    dataset = _resolve_path(agent_root, evaluation_section.get("dataset"), "eval/input/tasks.json")
-    output_dir = _resolve_path(agent_root, evaluation_section.get("output_dir"), "eval/output")
-    agent_url = _to_optional_str(evaluation_section.get("agent_url")) or "http://127.0.0.1:9900"
+    dataset = _resolve_path(
+        agent_root, evaluation_section.get("dataset"), "eval/input/tasks.json"
+    )
+    output_dir = _resolve_path(
+        agent_root, evaluation_section.get("output_dir"), "eval/output"
+    )
+    agent_url = (
+        _to_optional_str(evaluation_section.get("agent_url"))
+        or "http://127.0.0.1:9900"
+    )
 
     agent_startup_timeout_s = _to_positive_int(
         evaluation_section.get("agent_startup_timeout_s"),
@@ -226,7 +248,9 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
         raise ValueError("evaluation.k must be >= 1")
 
     qualitative = _to_bool(evaluation_section.get("qualitative"), default=False)
-    run_name = _to_optional_str(evaluation_section.get("run_name")) or "benchmark"
+    run_name = (
+        _to_optional_str(evaluation_section.get("run_name")) or "benchmark"
+    )
 
     judge = _parse_judge_spec(raw.get("judge"))
     if qualitative and judge is None:
@@ -278,16 +302,16 @@ def default_tasks_json() -> str:
     return (
         "[\n"
         "  {\n"
-        "    \"id\": \"smoke_test\",\n"
-        "    \"turns\": [\n"
-        "      \"Describe what you can do in one short paragraph.\"\n"
+        '    "id": "smoke_test",\n'
+        '    "turns": [\n'
+        '      "Describe what you can do in one short paragraph."\n'
         "    ],\n"
-        "    \"expected\": {\n"
-        "      \"status\": \"completed\",\n"
-        "      \"expected_outcome\": \"The agent describes its capabilities clearly in one short paragraph.\"\n"
+        '    "expected": {\n'
+        '      "status": "completed",\n'
+        '      "expected_outcome": "The agent describes its capabilities clearly in one short paragraph."\n'
         "    },\n"
-        "    \"meta\": {\n"
-        "      \"category\": \"smoke\"\n"
+        '    "meta": {\n'
+        '      "category": "smoke"\n'
         "    }\n"
         "  }\n"
         "]\n"

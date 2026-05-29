@@ -3,7 +3,9 @@ from pathlib import Path
 
 
 def _upsert_env_var(content: str, key: str, value: str) -> str:
-    pattern = re.compile(rf"^\s*(?:export\s+)?{re.escape(key)}\s*=.*$", flags=re.MULTILINE)
+    pattern = re.compile(
+        rf"^\s*(?:export\s+)?{re.escape(key)}\s*=.*$", flags=re.MULTILINE
+    )
     replacement = f"{key}={value}"
     if pattern.search(content):
         return pattern.sub(replacement, content, count=1)
@@ -23,10 +25,7 @@ def set_env_values(
     repo: str | None = None,
 ) -> tuple[Path, list[str]]:
     env_path = agent_dir / ".env"
-    if env_path.is_file():
-        content = env_path.read_text(encoding="utf-8")
-    else:
-        content = ""
+    content = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
 
     updated_keys: list[str] = []
 
@@ -40,7 +39,9 @@ def set_env_values(
         content = _upsert_env_var(content, "MODEL_PROVIDER", model_provider)
         updated_keys.append("MODEL_PROVIDER")
     if docker_registry is not None:
-        content = _upsert_env_var(content, "BAT_DOCKER_REGISTRY", docker_registry)
+        content = _upsert_env_var(
+            content, "BAT_DOCKER_REGISTRY", docker_registry
+        )
         updated_keys.append("BAT_DOCKER_REGISTRY")
     if repo is not None:
         content = _upsert_env_var(content, "BAT_DOCKER_REPO", repo)

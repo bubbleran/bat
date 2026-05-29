@@ -34,7 +34,9 @@ def _is_subset(expected: Any, actual: Any) -> bool:
     return expected == actual
 
 
-def _count_matches(expected: ExpectedToolCall, observed: list[dict[str, Any]]) -> int:
+def _count_matches(
+    expected: ExpectedToolCall, observed: list[dict[str, Any]]
+) -> int:
     total = 0
     for call in observed:
         if call.get("name") != expected.name:
@@ -57,7 +59,11 @@ class EpisodeEvaluator:
 
         if expected.status is not None:
             ok = status == expected.status
-            reason = f"status: '{status}'" if ok else f"status: got '{status}', expected '{expected.status}'"
+            reason = (
+                f"status: '{status}'"
+                if ok
+                else f"status: got '{status}', expected '{expected.status}'"
+            )
             checks.append((ok, reason))
 
         phrases = expected.output_must_contain or []
@@ -65,7 +71,11 @@ class EpisodeEvaluator:
         for i, phrase in enumerate(phrases):
             label = f"output[{i}]" if n > 1 else "output"
             ok = phrase in output_text
-            reason = f"{label}: contains '{phrase}'" if ok else f"{label}: missing '{phrase}'"
+            reason = (
+                f"{label}: contains '{phrase}'"
+                if ok
+                else f"{label}: missing '{phrase}'"
+            )
             checks.append((ok, reason))
 
         for exp_call in expected.tool_calls:

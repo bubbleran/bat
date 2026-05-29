@@ -38,7 +38,9 @@ def build_user_facts_summary(events: Iterable[dict[str, Any]]) -> str:
         for event in events
         if event.get("user_input")
     ]
-    return "\n".join(facts) if facts else "No explicit user statements recorded."
+    return (
+        "\n".join(facts) if facts else "No explicit user statements recorded."
+    )
 
 
 def build_expected_desc(
@@ -57,7 +59,9 @@ def build_expected_desc(
         parts.append(f"Output must contain: {quoted}.")
     if expected_tool_calls:
         calls = [
-            f"'{c.name}' (at least {c.times}×)" if c.times > 1 else f"'{c.name}'"
+            f"'{c.name}' (at least {c.times}×)"
+            if c.times > 1
+            else f"'{c.name}'"
             for c in expected_tool_calls
         ]
         parts.append(f"Expected tool calls: {', '.join(calls)}.")

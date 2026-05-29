@@ -5,10 +5,10 @@ import json
 import os
 from typing import Any
 
-from langchain_core.messages import HumanMessage
-
 from bat.chat_model_client import ChatModelClient, ChatModelClientConfig
 from bat.logging import create_logger
+from langchain_core.messages import HumanMessage
+
 from ..contracts import QualitativeScores
 
 logger = create_logger(__name__, level="info")
@@ -18,7 +18,9 @@ logger = create_logger(__name__, level="info")
 # Judge ChatModelClient (bat-adk based)
 # ---------------------------------------------------------------------------
 
-_JUDGE_SYSTEM_BASE = "You are a precise evaluator. Always respond with valid JSON only."
+_JUDGE_SYSTEM_BASE = (
+    "You are a precise evaluator. Always respond with valid JSON only."
+)
 
 _judge_clients: dict[str, ChatModelClient] = {}
 
@@ -43,10 +45,16 @@ def _get_judge_client(judge_name: str = "default") -> ChatModelClient:
     if judge_name in _judge_clients:
         return _judge_clients[judge_name]
 
-    provider = os.getenv("JUDGE_PROVIDER", os.getenv("MODEL_PROVIDER", "openai"))
+    provider = os.getenv(
+        "JUDGE_PROVIDER", os.getenv("MODEL_PROVIDER", "openai")
+    )
     model = os.getenv("JUDGE_MODEL", "gpt-4.1-mini")
     base_url = os.getenv("JUDGE_BASE_URL", os.getenv("BASE_URL"))
-    custom = os.getenv(f"JUDGE_PROMPT_{judge_name.upper()}") if judge_name != "default" else None
+    custom = (
+        os.getenv(f"JUDGE_PROMPT_{judge_name.upper()}")
+        if judge_name != "default"
+        else None
+    )
 
     config = ChatModelClientConfig(
         model=model,
@@ -63,15 +71,22 @@ def _get_judge_client(judge_name: str = "default") -> ChatModelClient:
     logger.info(f"LLM Judge initialized: {provider}:{model} [{judge_name}]")
     return client
 
-def _call_llm_judge(prompt: str, judge_name: str = "default", max_retries: int = 2) -> dict[str, Any]:
+
+def _call_llm_judge(
+    prompt: str, judge_name: str = "default", max_retries: int = 2
+) -> dict[str, Any]:
     client = _get_judge_client(judge_name)
     for attempt in range(max_retries):
         try:
-            logger.info (f"Calling LLM judge (attempt {attempt + 1}/{max_retries}) ")
+            logger.info(
+                f"Calling LLM judge (attempt {attempt + 1}/{max_retries}) "
+            )
             response = client.invoke(HumanMessage(content=prompt))
             content = response.content.strip()
             if content.startswith("```json"):
-                content = content.split("```json", 1)[1].split("```", 1)[0].strip()
+                content = (
+                    content.split("```json", 1)[1].split("```", 1)[0].strip()
+                )
             elif content.startswith("```"):
                 content = content.split("```", 1)[1].split("```", 1)[0].strip()
             return json.loads(content)
@@ -79,6 +94,8 @@ def _call_llm_judge(prompt: str, judge_name: str = "default", max_retries: int =
             if attempt == max_retries - 1:
                 return {"score": None, "reasoning": f"Error: {exc}"}
     return {"score": None, "reasoning": "Max retries exceeded"}
+
+
 # ---------------------------------------------------------------------------
 # Prompt templates
 # ---------------------------------------------------------------------------
@@ -274,7 +291,7 @@ def evaluate_task_completion(
     response: str,
     status: str,
     expected_desc: str = "Task should complete successfully",
-    context: str = ""
+    context: str = "",
 ) -> dict[str, Any]:
     """Evaluate task completion quality including process and outcome."""
     prompt = TASK_COMPLETION_PROMPT.format(
@@ -282,7 +299,7 @@ def evaluate_task_completion(
         response=response,
         status=status,
         expected_desc=expected_desc,
-        context=context or "No conversation history available"
+        context=context or "No conversation history available",
     )
     return _call_llm_judge(prompt, judge_name="task_completion")
 
@@ -335,17 +352,39 @@ def evaluate_episode_quality(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         futures: dict[str, Any] = {
-            "relevance": pool.submit(evaluate_response_relevance, query, response, context),
-            "completion": pool.submit(evaluate_task_completion, query, response, status, expected_desc, context),
-            "hallucination": pool.submit(evaluate_hallucination, query, response, context, expected_desc, user_facts),
+            "relevance": pool.submit(
+                evaluate_response_relevance, query, response, context
+            ),
+            "completion": pool.submit(
+                evaluate_task_completion,
+                query,
+                response,
+                status,
+                expected_desc,
+                context,
+            ),
+            "hallucination": pool.submit(
+                evaluate_hallucination,
+                query,
+                response,
+                context,
+                expected_desc,
+                user_facts,
+            ),
         }
         if has_expected_tools:
             futures["tool_calls"] = pool.submit(
                 evaluate_tool_call_appropriateness,
-                query, response, context, tool_calls, expected_desc,
+                query,
+                response,
+                context,
+                tool_calls,
+                expected_desc,
             )
         else:
-            scores.judge_reasoning["tool_call_appropriateness"] = "skipped: no tool calls expected for this task"
+            scores.judge_reasoning["tool_call_appropriateness"] = (
+                "skipped: no tool calls expected for this task"
+            )
 
         try:
             r = futures["relevance"].result()
@@ -376,8 +415,12 @@ def evaluate_episode_quality(
                 r = futures["tool_calls"].result()
                 if isinstance(r, dict) and r.get("score") is not None:
                     scores.tool_call_appropriateness = float(r["score"])
-                    scores.judge_reasoning["tool_call_appropriateness"] = r.get("reasoning", "")
+                    scores.judge_reasoning["tool_call_appropriateness"] = r.get(
+                        "reasoning", ""
+                    )
             except Exception as e:
-                logger.error(f"Tool-call appropriateness evaluation failed: {e}")
+                logger.error(
+                    f"Tool-call appropriateness evaluation failed: {e}"
+                )
 
     return scores
