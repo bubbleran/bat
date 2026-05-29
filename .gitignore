@@ -6,3 +6,5 @@ uv.lock
 
 __pycache__/
 .coverage
+*.pyc
+CLAUDE.md
