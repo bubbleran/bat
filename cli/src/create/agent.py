@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
-BAT_ADK_VERSION = "2026.4.23"
+BAT_ADK_VERSION = "2026.06"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "agent"
 _DYNAMIC_TEMPLATE_FILES = {
