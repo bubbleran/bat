@@ -7,7 +7,8 @@
 As of today, it includes:
 
 - An **Agent Development Kit** (ADK) for Python: [bat-adk](adk)
+- A **Command Line Interface** tool (CLI) to facilitate agents development with bat-adk: [bat-cli](cli)
 
-Additional components (e.g. `bat-cli`) will be added over time.
+Additional components may be added over time.
 
-BAT is used internally at BubbleRAN and is also provided to customers as part of the MX-AI ecosystem.
+BAT is used internally at BubbleRAN and is also provided to BubbleRAN's customers as part of the MX-AI ecosystem.
