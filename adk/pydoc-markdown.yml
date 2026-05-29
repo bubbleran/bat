@@ -4,6 +4,7 @@ loaders:
     packages:
       - bat.agent
       - bat.chat_model_client
+      - bat.interop
       - bat.logging
       - bat.prebuilt
 
@@ -39,6 +40,9 @@ renderer:
             - bat.prebuilt.prebuilt_workflow.*
             - bat.prebuilt.react_loop.*
             - bat.prebuilt.call_agent_node.*
+        - title: Interoperability
+          contents:
+            - bat.interop.nvidia_nat.*
 
   mkdocs_config:
     site_name: BAT
