@@ -3,18 +3,8 @@
 .env
 .venv/
 uv.lock
-.codex
-CLAUDE.md
+
 __pycache__/
-
-# snapcraft build artifacts
-parts/
-stage/
-prime/
-overlay/
-.craft/
-*.snap
-snap/
-.snapcraftignore
-
+.coverage
 *.pyc
+CLAUDE.md
