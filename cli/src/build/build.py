@@ -1,0 +1,73 @@
+import subprocess
+from pathlib import Path
+
+import typer
+
+from image_defaults import resolve_registry, resolve_repo_name
+
+
+def build_image(
+    context: Path = typer.Option(
+        Path("."),
+        "--context",
+        "-C",
+        help="Directory used as docker build context and to infer the default repository name.",
+    ),
+    docker_registry: str | None = typer.Option(
+        None,
+        "--docker-registry",
+        help=(
+            "Docker registry hostname. Precedence: --docker-registry > "
+            "BAT_DOCKER_REGISTRY env var (or .env in current directory) > default_registry."
+        ),
+    ),
+    repo: str | None = typer.Option(
+        None,
+        "--repo",
+        help=(
+            "Image repository path. Precedence: --repo > BAT_DOCKER_REPO env var "
+            "(or .env in current directory) > default-repository/<project-name>."
+        ),
+    ),
+    version: str = typer.Option(
+        "latest",
+        "--version",
+        help="Image version, used as the image tag and VERSION build arg.",
+    ),
+    no_cache: bool = typer.Option(
+        False,
+        "--no-cache",
+        help="Disable docker layer cache during build.",
+    ),
+) -> None:
+    context_dir = context.resolve()
+    if not context_dir.is_dir():
+        typer.secho(f"Context directory not found: {context_dir}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    dockerfile_path = context_dir / "Dockerfile"
+    if not dockerfile_path.is_file():
+        typer.secho(f"Dockerfile not found in context: {dockerfile_path}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    resolved_registry = resolve_registry(context_dir, docker_registry)
+    resolved_repo = resolve_repo_name(context_dir, repo)
+    image = f"{resolved_registry}/{resolved_repo}:{version}"
+
+    command = ["docker", "build"]
+    if no_cache:
+        command.append("--no-cache")
+    command.extend(["--build-arg", f"VERSION={version}"])
+    command.extend(["--tag", image, "."])
+
+    typer.echo(f"Building Docker image: {image}")
+    try:
+        subprocess.run(command, check=True, cwd=context_dir)
+    except FileNotFoundError as exc:
+        typer.secho("Docker executable not found in PATH.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    except subprocess.CalledProcessError as exc:
+        typer.secho("Docker build failed.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=exc.returncode or 1) from exc
+
+    typer.secho(f"Docker image built successfully: {image}", fg=typer.colors.GREEN)
