@@ -81,10 +81,10 @@ class AgentApplication:
         agent graph.
 
         Args:
-            agent_graph (AgentGraph): The agent graph implementing the agent's
-                logic.
-            agent_card_path (str): The path to the agent card JSON file.
-                Defaults to `"./agent.json"`.
+            AgentGraphType (Type[AgentGraph]): The class to use to instantiate
+                the agent graph.
+            AgentStateType (Type[AgentState]): The class to use to instantiate
+                the agent state.
         """
         self.a2a_port = int(os.getenv("PORT", A2A_APPLICATION_DEFAULT_PORT))
         self.mcp_port = int(os.getenv("MCP_PORT", MCP_APPLICATION_DEFAULT_PORT))
