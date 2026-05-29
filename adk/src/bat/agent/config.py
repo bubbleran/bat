@@ -427,8 +427,7 @@ class AgentConfig(BaseModel):
                     raise e
                 else:
                     logger.warning(
-                        "Failed to get name from MCP server "
-                        f" '{mcp.name}': {e}"
+                        f"Failed to get name from MCP server  '{mcp.name}': {e}"
                     )
 
         logger.debug(
@@ -470,8 +469,7 @@ class AgentConfig(BaseModel):
                     raise e
                 else:
                     logger.warning(
-                        "Failed to get name from Agent "
-                        f"'{agent.name}': {e}"
+                        f"Failed to get name from Agent '{agent.name}': {e}"
                     )
 
         logger.debug(

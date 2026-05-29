@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from typing_extensions import AsyncIterable, override
 
 from ..agent.config import AgentConfig
-from ..chat_model_client.metadata import MetadataCollector
 from ..agent.state import AgentState
 from ..chat_model_client import ChatModelClient
 from ..chat_model_client.metadata import MetadataCollector, TraceMetadata
