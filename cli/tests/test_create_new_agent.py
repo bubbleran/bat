@@ -89,8 +89,8 @@ def test_create_new_agent_custom_name() -> None:
         assert 'ENTRYPOINT ["./demo"]' in dockerfile_content
 
         makefile_content = (root / "Makefile").read_text(encoding="utf-8")
-        assert "REPO ?= YOUR_REPOSITORY/demo" in makefile_content
-        assert "Building demo Agent Docker image" in makefile_content
+        assert "REPO ?= YOUR_REPOSITORY/demo_agent" in makefile_content
+        assert "Building demo_agent Docker image" in makefile_content
 
         agent_spec_content = (root / "agent.spec").read_text(encoding="utf-8")
         assert "name='demo'" in agent_spec_content
@@ -343,8 +343,6 @@ def test_build_command_runs_docker_build(monkeypatch) -> None:
                 "hub.bubbleran.com",
                 "--repo",
                 "orama/labs/rng-agent",
-                "--tag",
-                "latest",
                 "--version",
                 "v1.2.3",
                 "--no-cache",
@@ -359,13 +357,13 @@ def test_build_command_runs_docker_build(monkeypatch) -> None:
             "--build-arg",
             "VERSION=v1.2.3",
             "--tag",
-            "hub.bubbleran.com/orama/labs/rng-agent:latest",
+            "hub.bubbleran.com/orama/labs/rng-agent:v1.2.3",
             ".",
         ]
         assert captured["check"] is True
         assert captured["cwd"] == Path("agent").resolve()
         assert (
-            "Docker image built successfully: hub.bubbleran.com/orama/labs/rng-agent:latest"
+            "Docker image built successfully: hub.bubbleran.com/orama/labs/rng-agent:v1.2.3"
             in result.output
         )
 
@@ -393,7 +391,7 @@ def test_push_command_runs_docker_push(monkeypatch) -> None:
                 "hub.bubbleran.com",
                 "--repo",
                 "orama/labs/rng-agent",
-                "--tag",
+                "--version",
                 "latest",
             ],
         )

@@ -114,7 +114,7 @@ def _build_makefile_content(agent_dir_name: str) -> str:
     return _render_template(
         "Makefile",
         {
-            "PROJECT_NAME": _normalize_name(agent_dir_name, "project"),
+            "AGENT_NAME": agent_dir_name,
         },
     )
 

@@ -1,34 +1,28 @@
-KUBE_CONFIG := ~/.kube/config
 DOCKER_REGISTRY ?= INSERT_YOUR_DOCKER_REGISTRY_HERE
+REPO ?= YOUR_REPOSITORY/__AGENT_NAME__
 VERSION ?= $(shell git describe --tags --always --abbrev --dirty)
-
-PORT ?= 9900
-REPO ?= YOUR_REPOSITORY/__PROJECT_NAME__
-TAG ?= latest
-IMAGE := $(DOCKER_REGISTRY)/$(REPO):$(TAG)
+IMAGE_TAG := $(DOCKER_REGISTRY)/$(REPO):$(VERSION)
 
 .PHONY: build run push clean
 
 build:
-	@echo "Building __PROJECT_NAME__ Agent Docker image with tag: $(IMAGE) - Version: $(VERSION)"
+	@echo "Building __AGENT_NAME__ Docker image with tag: $(IMAGE_TAG) - Version: $(VERSION)"
 	docker build $(if $(NO_CACHE),--no-cache) \
 		--build-arg VERSION=$(VERSION) \
-		--tag $(IMAGE) .
-	@echo "__PROJECT_NAME__ Agent Docker image built successfully."
+		--tag $(IMAGE_TAG) .
+	@echo "__AGENT_NAME__ Docker image built successfully."
 
 run:
 	docker run --rm \
 		-it \
 		--env-file .env \
 		--network host \
-		-p $(PORT):$(PORT) \
-		-v $(KUBE_CONFIG):/root/.kube/config:ro \
-		$(IMAGE)
+		$(IMAGE_TAG)
 
 push:
-	@echo "Pushing __PROJECT_NAME__ Agent Docker image with tag: $(IMAGE)"
-	docker push $(IMAGE)
-	@echo "__PROJECT_NAME__ Agent Docker image pushed successfully."
+	@echo "Pushing __AGENT_NAME__ Docker image with tag: $(IMAGE_TAG)"
+	docker push $(IMAGE_TAG)
+	@echo "__AGENT_NAME__ Docker image pushed successfully."
 
 clean:
-	docker rmi $(IMAGE) || true
+	docker rmi $(IMAGE_TAG) || true

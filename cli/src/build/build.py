@@ -29,15 +29,10 @@ def build_image(
             "(or .env in current directory) > default-repository/<project-name>."
         ),
     ),
-    tag: str = typer.Option(
+    version: str = typer.Option(
         "latest",
-        "--tag",
-        help="Image tag.",
-    ),
-    version: str | None = typer.Option(
-        None,
         "--version",
-        help="Optional VERSION build arg passed to docker build.",
+        help="Image version, used as the image tag and VERSION build arg.",
     ),
     no_cache: bool = typer.Option(
         False,
@@ -57,13 +52,12 @@ def build_image(
 
     resolved_registry = resolve_registry(context_dir, docker_registry)
     resolved_repo = resolve_repo_name(context_dir, repo)
-    image = f"{resolved_registry}/{resolved_repo}:{tag}"
+    image = f"{resolved_registry}/{resolved_repo}:{version}"
 
     command = ["docker", "build"]
     if no_cache:
         command.append("--no-cache")
-    if version:
-        command.extend(["--build-arg", f"VERSION={version}"])
+    command.extend(["--build-arg", f"VERSION={version}"])
     command.extend(["--tag", image, "."])
 
     typer.echo(f"Building Docker image: {image}")

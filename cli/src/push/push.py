@@ -29,10 +29,10 @@ def push_image(
             "(or .env in current directory) > default-repository/<project-name>."
         ),
     ),
-    tag: str = typer.Option(
+    version: str = typer.Option(
         "latest",
-        "--tag",
-        help="Image tag.",
+        "--version",
+        help="Image version used as the tag.",
     ),
 ) -> None:
     context_dir = context.resolve()
@@ -46,7 +46,7 @@ def push_image(
 
     resolved_registry = resolve_registry(context_dir, docker_registry)
     resolved_repo = resolve_repo_name(context_dir, repo)
-    image = f"{resolved_registry}/{resolved_repo}:{tag}"
+    image = f"{resolved_registry}/{resolved_repo}:{version}"
     command = ["docker", "push", image]
 
     typer.echo(f"Pushing Docker image: {image}")

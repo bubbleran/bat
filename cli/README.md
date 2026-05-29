@@ -113,14 +113,13 @@ bat
 │   ├── --context, -C
 │   ├── --docker-registry
 │   ├── --repo
-│   ├── --tag
 │   ├── --version
 │   └── --no-cache
 └── push
     ├── --context, -C
     ├── --docker-registry
     ├── --repo
-    └── --tag
+    └── --version
 ```
 
 Built-in help is available at every level:
@@ -176,13 +175,16 @@ bat set env --docker-registry hub.bubbleran.com --repo orama/labs/my-agent
 ### 4. Build and push a Docker image
 
 ```bash
-bat build --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --tag latest
+# --version is used both as the image tag and as the VERSION build arg (default: latest)
+bat build --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --version latest
 
-# no-cache build with version build-arg
-bat build --context ./my_agent --repo orama/labs/my-agent --tag v1 --version 1.0.0 --no-cache
+# no-cache build with a specific version
+bat build --context ./my_agent --repo orama/labs/my-agent --version 1.0.0 --no-cache
 
-bat push --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --tag latest
+bat push --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --version latest
 ```
+
+The image reference is always `{registry}/{repo}:{version}`.
 
 If `BAT_DOCKER_REGISTRY` and `BAT_DOCKER_REPO` are already set in `.env` or the shell, `--docker-registry` and `--repo` can be omitted.
 
