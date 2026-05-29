@@ -34,6 +34,7 @@ logger = create_logger(__name__, "debug")
 A2A_APPLICATION_DEFAULT_PORT = 9900
 MCP_APPLICATION_DEFAULT_PORT = 9800
 DEFAULT_HTTPX_CLIENT_TIMEOUT = 180
+DEFAULT_AGENT_CARD_PATH = "./agent.json"
 
 
 class AgentApplication:
@@ -47,6 +48,7 @@ class AgentApplication:
         - `MCP_PORT`: The port for the MCP application. Defaults to 9800.
         - `CONFIG`: Path to a configuration file for the agent.
         Defaults to "config.yaml".
+        - `AGENT_CARD_PATH`: Path to the agent card. Defaults to "./agent.json"
         - `AGENT_CARD_DISPLAY`: Whether to display the AgentCard when the
         agent starts. Defaults to True.
 
@@ -74,21 +76,21 @@ class AgentApplication:
         self,
         AgentGraphType: Type[AgentGraph],
         AgentStateType: Type[AgentState],
-        agent_card_path: str = "./agent.json",
     ):
         """Initialize the AgentApplication with the given agent card path and
         agent graph.
 
         Args:
-            agent_graph (AgentGraph): The agent graph implementing the agent's
-                logic.
-            agent_card_path (str): The path to the agent card JSON file.
-                Defaults to `"./agent.json"`.
+            AgentGraphType (Type[AgentGraph]): The class to use to instantiate
+                the agent graph.
+            AgentStateType (Type[AgentState]): The class to use to instantiate
+                the agent state.
         """
         self.a2a_port = int(os.getenv("PORT", A2A_APPLICATION_DEFAULT_PORT))
         self.mcp_port = int(os.getenv("MCP_PORT", MCP_APPLICATION_DEFAULT_PORT))
 
         self._agent_card_display = bool(os.getenv("AGENT_CARD_DISPLAY", "1"))
+        agent_card_path = os.getenv("AGENT_CARD_PATH", DEFAULT_AGENT_CARD_PATH)
         self._agent_card = self.load_agent_card(agent_card_path)
         if self._agent_card_display:
             display_agent_card(self._agent_card)
@@ -136,6 +138,7 @@ class AgentApplication:
             FileNotFoundError: If the agent card file does not exist.
             ValidationError: If the agent card JSON is invalid.
         """
+        logger.info(f"Loading AgentCard from '{agent_card_path}'")
         url = os.getenv("URL")
         if url is None:
             logger.error("URL environment variable is not set.")
