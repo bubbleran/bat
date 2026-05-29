@@ -1,32 +1,39 @@
 import time
-from ..logging import create_logger
-from .graph import AgentGraph
-from .state import AgentTaskResult
-from a2a.helpers import new_text_part, new_text_message, new_task_from_user_message
+from typing import Dict
+
+from a2a.helpers import (
+    new_task_from_user_message,
+    new_text_message,
+    new_text_part,
+)
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.types import (
+from a2a.types import Task, TaskState
+from a2a.utils.errors import (
     InternalError,
-    Task,
-    TaskState,
+    InvalidRequestError,
     UnsupportedOperationError,
 )
-from a2a.utils.errors import InvalidRequestError, InternalError
-from typing import Dict
-from typing_extensions import override, Any
+from typing_extensions import Any, override
+
+from ..logging import create_logger
+from .graph import AgentGraph
+from .state import AgentTaskResult
 
 logger = create_logger(__name__, "debug")
 
+
 class MinimalAgentExecutor(AgentExecutor):
     """Minimal Agent Executor.
-    
-    Minimal implementation of the AgentExecutor interface used by the `AgentApplication` class to execute agent tasks.
+
+    Minimal implementation of the AgentExecutor interface used by the
+    `AgentApplication` class to execute agent tasks.
     """
 
     def __init__(
         self,
-        agent_graph: AgentGraph
+        agent_graph: AgentGraph,
     ):
         self.agent_graph = agent_graph
 
@@ -37,7 +44,9 @@ class MinimalAgentExecutor(AgentExecutor):
         event_queue: EventQueue,
     ) -> None:
         if not self._request_ok(context):
-            raise InvalidRequestError(message="AgentExecutor could not validate the request.")
+            raise InvalidRequestError(
+                message="AgentExecutor could not validate the request."
+            )
 
         query = context.get_user_input()
         task = context.current_task
@@ -54,18 +63,29 @@ class MinimalAgentExecutor(AgentExecutor):
             async for item in self.agent_graph.astream(query, config):
                 if item != prev_item:
                     if keep_streaming:
+                        usage_meta = self.agent_graph._get_usage_metadata(ts)
+                        trace_meta = self.agent_graph._get_trace_metadata(ts)
                         metadata: Dict[str, Any] = {
-                            'usage': self.agent_graph._get_usage_metadata(ts).model_dump(),
-                            'trace': self.agent_graph._get_trace_metadata(ts).model_dump(),
+                            "usage": usage_meta.model_dump(),
+                            "trace": trace_meta.model_dump(),
                         }
                         ts = time.time()
-                        keep_streaming = await self._process_task_result(task, item, updater, metadata)
+                        keep_streaming = await self._process_task_result(
+                            task=task,
+                            task_result=item,
+                            updater=updater,
+                            metadata=metadata,
+                        )
                     else:
-                        logger.warning("Artifact has been updated: ignoring additional streamed item.")
+                        logger.warning(
+                            "Artifact has been updated: ignoring item."
+                        )
                 prev_item = item
         except Exception as e:
-            logger.error(f'An error occurred while streaming the response: {e}')
-            raise InternalError(message="AgentExecutor encountered an error while streaming the response.") from e
+            logger.error(f"An error occurred while streaming the response: {e}")
+            raise InternalError(
+                message="Error encountered while streaming the response."
+            ) from e
 
     def _request_ok(self, context: RequestContext) -> bool:
         return True
@@ -75,7 +95,7 @@ class MinimalAgentExecutor(AgentExecutor):
         task: Task,
         task_result: AgentTaskResult,
         updater: TaskUpdater,
-        metadata: Dict[str, Any]
+        metadata: Dict[str, Any],
     ) -> bool:
         match task_result.task_status:
             case (
@@ -112,4 +132,6 @@ class MinimalAgentExecutor(AgentExecutor):
         request: RequestContext,
         event_queue: EventQueue,
     ) -> Task | None:
-        raise UnsupportedOperationError(message="AgentExecutor does not support task cancel operation yet.")
+        raise UnsupportedOperationError(
+            message="AgentExecutor does not support task cancel operation yet."
+        )

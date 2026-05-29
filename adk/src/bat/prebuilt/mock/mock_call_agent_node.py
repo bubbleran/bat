@@ -1,22 +1,18 @@
-from .mock_prebuilt_workflow import MockPrebuiltWorkflow
-from ...agent.config import AgentConfig
-from ...agent.state import AgentState
+from typing import Callable, Type
+
 from a2a.types import Message
 from langchain_core.runnables import RunnableConfig
-from typing import Callable, Type
 from typing_extensions import override
+
+from ...agent.config import AgentConfig
+from ...agent.state import AgentState
+from .mock_prebuilt_workflow import MockPrebuiltWorkflow
 
 
 class MockCallAgentNode(MockPrebuiltWorkflow):
-    """Mock version of CallAgentNode that modifies state without actual agent calls.
-    
-    Args:
-        mock_output: The simulated output string that will be returned instead of
-            making actual agent calls. This value will be used to populate the
-            output field and agent_response_content field in the state.
-            
-        for all other parameters, see CallAgentNode.
-    
+    """Mock version of CallAgentNode that modifies state without actual agent
+    calls.
+
     Example:
         mock_call_agent = MockCallAgentNode(
             config=config,
@@ -33,7 +29,7 @@ class MockCallAgentNode(MockPrebuiltWorkflow):
             mock_output="Operation completed successfully.",
         )
     """
-    
+
     def __init__(
         self,
         config: AgentConfig,
@@ -51,6 +47,14 @@ class MockCallAgentNode(MockPrebuiltWorkflow):
         agent_response_content: str = "agent_response_content",
         recursion_limit: int = 50,
     ) -> None:
+        """
+        Args:
+            mock_output: The simulated output string that will be returned
+                instead of making actual agent calls. This value will be used
+                to populate the output field and agent_response_content field
+                in the state.
+            other_params: all other parameters, see CallAgentNode.
+        """
         super().__init__(mock_output)
         self.config = config
         self.StateType = StateType
@@ -70,11 +74,15 @@ class MockCallAgentNode(MockPrebuiltWorkflow):
         self,
         state: Type[AgentState],
     ) -> Type[AgentState]:
-        """Modify state like CallAgentNode would, but with mock output instead of real calls."""
-        return state.model_copy(update={
-            self.output: self.mock_output,
-            self.agent_response_content: self.mock_output,
-            self.agent_response_status: "completed",
-            self.global_status: "completed",
-            self.agent_input_required: False,
-        })
+        """Modify state like CallAgentNode would, but with mock output instead
+        of real calls.
+        """
+        return state.model_copy(
+            update={
+                self.output: self.mock_output,
+                self.agent_response_content: self.mock_output,
+                self.agent_response_status: "completed",
+                self.global_status: "completed",
+                self.agent_input_required: False,
+            }
+        )
