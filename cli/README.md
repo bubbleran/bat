@@ -4,34 +4,30 @@ A CLI tool for creating, building, and evaluating BAT agent projects.
 
 ## Prerequisites
 
-- Python and [uv](https://docs.astral.sh/uv/) installed
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/) installed
 - Docker installed (required for `bat build` and `bat push`)
-- For evaluation commands: an existing BAT agent root containing `agent.json`, `config.yaml`, and `src/graph.py`
+- For evaluation commands: an existing BAT agent root containing `agent.json`, `config.yaml`, and `pyproject.toml`
 
 ---
 
 ## Installation
 
-### Option A — build and install a standalone binary (Linux/macOS)
+### Option A — install system-wide with `uv tool` (recommended)
 
-Run the helper script from the repo root:
+Installs `bat` into an isolated environment and puts the executable on your `PATH`,
+so it is available from any directory.
 
-```bash
-bash cli/build_and_install.sh
-```
+````bash
+# from PyPI
+uv tool install bat-cli
 
-This will:
 
-1. Sync `dev` and `packaging` dependency groups via `uv`.
-2. Build a one-file executable with PyInstaller.
-3. Move it to `~/.local/bin/bat` (uses `sudo` only when necessary).
-
-Make sure `~/.local/bin` is in your `PATH`:
+Make sure the uv tools bin directory is on your `PATH` (uv prints the path on first
+install; this is usually `~/.local/bin`):
 
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # or ~/.zshrc
-source ~/.bashrc
-```
+uv tool update-shell      # adds the uv tools dir to your shell profile
+````
 
 Then verify:
 
@@ -39,19 +35,38 @@ Then verify:
 bat --help
 ```
 
-### Option B — build manually
+To upgrade or remove later:
 
 ```bash
-uv sync --group dev --group packaging
-uv run pyinstaller --clean --noconfirm bat_cli.spec
-# binary is at dist/bat (Linux/macOS) or dist/bat.exe (Windows)
+uv tool upgrade bat-cli
+uv tool uninstall bat-cli
 ```
 
-On **Windows**, copy `dist/bat.exe` to a folder on your `PATH` (e.g. `C:\tools\bat`) and open a new terminal.
+### Option B — install into a virtual environment with `uv pip`
 
-> PyInstaller builds are OS-specific — build on each target OS.
+Use this when you want `bat` scoped to a specific project/venv rather than installed
+globally.
+
+```bash
+uv venv                      # create .venv (skip if you already have one)
+source .venv/bin/activate    # .venv\Scripts\activate on Windows
+
+# from PyPI
+uv pip install bat-cli
+
+# or from a local checkout (run from the cli/ directory)
+uv pip install .             # add -e for an editable/development install
+```
+
+`bat` is available whenever that virtual environment is active:
+
+```bash
+bat --help
+```
 
 ### Option C — run without installing (development)
+
+From the `cli/` directory:
 
 ```bash
 uv sync --group dev
@@ -89,7 +104,11 @@ bat
 ├── eval
 │   ├── init
 │   │   └── --force, -f
-│   └── run
+│   ├── run
+│   ├── show
+│   └── plot
+│       ├── --folder, -f
+│       └── --filter, -F
 ├── build
 │   ├── --context, -C
 │   ├── --docker-registry
@@ -109,6 +128,7 @@ Built-in help is available at every level:
 ```bash
 bat --help
 bat init agent --help
+bat eval --help
 bat build --help
 ```
 
@@ -126,6 +146,9 @@ bat init agent my_agent --output-dir .
 
 # pre-generate LLM clients
 bat init agent my_agent --clients reformulator,planner,executor
+
+# set the port/model/provider written to .env
+bat init agent my_agent --port 9900 --model gpt-4o-mini --model-provider openai
 ```
 
 ### 2. Add clients to an existing agent
@@ -141,10 +164,10 @@ bat add client planner,executor --force
 
 ### 3. Update agent environment variables
 
-Run from the agent root (updates or creates `.env`):
+Run from the agent root (updates an existing `.env`):
 
 ```bash
-bat set env --port 8080 --model gpt-4.1-mini --model-provider openai
+bat set env --port 8080 --model gpt-4o-mini --model-provider openai
 
 # also set Docker defaults for build/push
 bat set env --docker-registry hub.bubbleran.com --repo orama/labs/my-agent
@@ -172,11 +195,15 @@ If `BAT_DOCKER_REGISTRY` and `BAT_DOCKER_REPO` are already set in `.env` or the 
 
 ### 5. Run evaluation
 
-From an existing agent root:
+Run all `eval` commands from an existing agent root (must contain `agent.json`,
+`config.yaml`, and `pyproject.toml`):
 
 ```bash
 # scaffold evaluation files
 bat eval init
+
+# inspect the resolved configuration
+bat eval show
 
 # run evaluation
 bat eval run
@@ -192,22 +219,51 @@ Minimal `eval/eval.yaml`:
 
 ```yaml
 evaluation:
-  dataset: eval/input/tasks.json
-  output_dir: eval/output
+  dataset: eval/input/tasks.json # default path if omitted
+  output_dir: eval/output # default path if omitted
+  agent_url: http://127.0.0.1:9900 # must include the scheme; this is the default
+  agent_startup_timeout_s: 45
+  agent_shutdown_timeout_s: 10
   k: 1
-  qualitative: true
-  save_attempts: false
-
-judge:
-  provider: ollama
-  model: your-judge-model
-  base_url: http://localhost:11434
+  qualitative: false # set true to enable LLM judge scoring
 
 models:
   - provider: openai
     model: your-model-name
+  - provider: ollama
+    model: your-local-model
+    base_url: http://localhost:11434
+
+# required only when qualitative: true
+judge:
+  provider: ollama
+  model: local-judge-model
+  base_url: http://localhost:11434
+  # api_key_env: BAT_JUDGE_API_KEY      # env var name holding the judge's API key
 ```
 
-`eval run` requires the agent virtual environment at `.venv/bin/python` (`.venv/Scripts/python.exe` on Windows).
+Notes:
 
-For model that requires API_KEYS set it into the agent `.env` under <PROVIDER>\_API_KEY.
+- `bat eval run` starts the agent via `uv run .` from the agent root and waits until
+  `agent_url` accepts a TCP connection, so the agent project must have its
+  dependencies installed (its own `.venv`).
+- `models` entries may also be written as `"<provider>:<model>"` strings.
+- For models that require an API key, set it in the agent's `.env` under
+  `<PROVIDER>_API_KEY` (e.g. `OPENAI_API_KEY`).
+
+### 6. Plot evaluation metrics
+
+`bat eval plot` reads the `metrics.json` files produced by `eval run` and renders
+charts. Point `--folder` at an evaluation output directory; each sub-folder
+containing a `metrics.json` is treated as one run.
+
+```bash
+# plot every run found under the output folder
+bat eval plot --folder eval/output
+
+# restrict the per-task charts to task ids containing a substring
+bat eval plot --folder eval/output --filter smoke
+```
+
+Charts are saved back into the given folder. `--filter` only narrows the per-task
+charts; summary charts always cover all runs.
