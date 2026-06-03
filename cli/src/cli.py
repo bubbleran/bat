@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import click
@@ -93,6 +94,21 @@ eval_app.command("show", help="Show the resolved evaluation configuration.")(
 eval_app.command(
     "plot", help="Generate metric charts from an evaluation output folder."
 )(eval_plot)
+
+
+@app.command("version", help="Show the installed bat-cli version.")
+def show_version() -> None:
+    try:
+        installed_version = version("bat-cli")
+    except PackageNotFoundError:
+        typer.secho(
+            "bat-cli is not installed as a package; version unavailable.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+
+    typer.echo(f"bat-cli {installed_version}")
 
 
 def _parse_clients_option(raw_clients: str | None) -> list[str] | None:
