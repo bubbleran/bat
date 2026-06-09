@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
@@ -11,7 +13,6 @@ from a2a.helpers import (
     new_text_message,
 )
 from a2a.types import Role, SendMessageRequest, StreamResponse, TaskState
-from google.protobuf.json_format import MessageToDict
 from httpx import AsyncClient
 
 from .contracts import EpisodeResult, EpisodeTrace, TaskSpec, TraceEvent
@@ -30,40 +31,126 @@ _TASK_STATE_TO_STR = {
 }
 
 
-def _to_dict(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return value
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(by_alias=True)
-        return dumped if isinstance(dumped, dict) else {}
-    return {}
+# Span attribute keys emitted by the agent: OpenInference (LLM/tool spans) plus
+# the ADK manual spans. Usage and tool calls are reconstructed from the spans
+# the agent writes to JSON-Lines files (OTEL_TRACES_EXPORTER=file), since they
+# are no longer carried in the A2A message metadata.
+_ATTR_CONVERSATION_ID = "gen_ai.conversation.id"
+_ATTR_TOKEN_PROMPT = "llm.token_count.prompt"
+_ATTR_TOKEN_COMPLETION = "llm.token_count.completion"
+_ATTR_TOKEN_TOTAL = "llm.token_count.total"
+_ATTR_SPAN_KIND = "openinference.span.kind"
+_ATTR_TOOL_NAME = "tool.name"
+_ATTR_INPUT_VALUE = "input.value"
 
 
-def _struct_to_dict(metadata_struct: Any) -> dict[str, Any]:
-    if metadata_struct is None:
-        return {}
-    try:
-        return MessageToDict(metadata_struct) or {}
-    except Exception:
-        return {}
+def _read_spans_dir(directory: str) -> list[dict[str, Any]]:
+    """Read every ``*.jsonl`` span file in ``directory`` into one list.
+
+    A directory (not a single file) so multi-agent runs work: each agent
+    process writes its own span file there, and they are recomposed by
+    ``trace_id`` downstream. Missing directory or unreadable lines are skipped.
+    """
+    spans: list[dict[str, Any]] = []
+    base = Path(directory)
+    if not base.is_dir():
+        return spans
+    for span_file in sorted(base.glob("*.jsonl")):
+        try:
+            with open(span_file, encoding="utf-8") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        spans.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        except OSError:
+            continue
+    return spans
 
 
-def _chunk_key(chunk: StreamResponse) -> str:
-    if chunk.HasField("status_update"):
-        message_id = chunk.status_update.status.message.message_id
-        if message_id:
-            return f"status:{message_id}"
-    if chunk.HasField("artifact_update"):
-        artifact_id = chunk.artifact_update.artifact.artifact_id
-        if artifact_id:
-            return f"artifact:{artifact_id}"
-    if chunk.HasField("message") and chunk.message.message_id:
-        return f"message:{chunk.message.message_id}"
-    if chunk.HasField("task") and chunk.task.id:
-        return f"task:{chunk.task.id}"
-    return f"raw:{chunk.SerializeToString().hex()}"
+def _tool_call_from_span(
+    span: dict[str, Any], attributes: dict[str, Any]
+) -> dict[str, Any]:
+    name = attributes.get(_ATTR_TOOL_NAME) or attributes.get("gen_ai.tool.name")
+    args: dict[str, Any] = {}
+    raw = attributes.get(_ATTR_INPUT_VALUE)
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                args = parsed
+        except json.JSONDecodeError:
+            pass
+    return {"name": name, "args": args, "id": span.get("span_id")}
+
+
+def _aggregate_from_spans(
+    spans_dir: str, conversation_id: str
+) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
+    """Reconstruct ``(usage, tool_calls, found)`` for one episode from spans.
+
+    Spans are grouped by the trace(s) whose root carries
+    ``gen_ai.conversation.id == conversation_id``. Every span sharing one of
+    those ``trace_id``\\ s is then aggregated — including spans from remote
+    sub-agents, which run in their own process and write their own file but
+    share the ``trace_id`` via the propagated W3C ``traceparent``. This is how
+    multi-agent usage is recomposed across processes.
+
+    ``found`` is False when no span carries the conversation id yet (the agent
+    may not have written the root span); callers can retry to absorb the small
+    write race.
+    """
+    spans = _read_spans_dir(spans_dir)
+    trace_ids = {
+        span.get("trace_id")
+        for span in spans
+        if (span.get("attributes") or {}).get(_ATTR_CONVERSATION_ID)
+        == conversation_id
+    }
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "inference_time": 0.0,
+    }
+    tool_calls: list[dict[str, Any]] = []
+    if not trace_ids:
+        return usage, tool_calls, False
+
+    for span in spans:
+        if span.get("trace_id") not in trace_ids:
+            continue
+        attributes = span.get("attributes") or {}
+        prompt = attributes.get(_ATTR_TOKEN_PROMPT)
+        completion = attributes.get(_ATTR_TOKEN_COMPLETION)
+        if (
+            attributes.get(_ATTR_SPAN_KIND) == "LLM"
+            or prompt is not None
+            or completion is not None
+        ):
+            in_tok = int(prompt or 0)
+            out_tok = int(completion or 0)
+            usage["input_tokens"] += in_tok
+            usage["output_tokens"] += out_tok
+            usage["total_tokens"] += int(
+                attributes.get(_ATTR_TOKEN_TOTAL) or (in_tok + out_tok)
+            )
+            start, end = span.get("start_time"), span.get("end_time")
+            if isinstance(start, (int, float)) and isinstance(
+                end, (int, float)
+            ):
+                usage["inference_time"] += max(0.0, (end - start) / 1e9)
+
+        if (
+            attributes.get(_ATTR_SPAN_KIND) == "TOOL"
+            or _ATTR_TOOL_NAME in attributes
+        ):
+            tool_calls.append(_tool_call_from_span(span, attributes))
+
+    return usage, tool_calls, True
 
 
 def _extract_status_and_content(
@@ -88,114 +175,48 @@ def _extract_status_and_content(
     return None, ""
 
 
-def _extract_metadata(chunk: StreamResponse) -> dict[str, Any]:
-    metadata_struct: Any = None
-    if chunk.HasField("status_update"):
-        metadata_struct = chunk.status_update.metadata
-    elif chunk.HasField("artifact_update"):
-        metadata_struct = chunk.artifact_update.metadata
-    elif chunk.HasField("message"):
-        metadata_struct = chunk.message.metadata
-    elif chunk.HasField("task"):
-        metadata_struct = chunk.task.metadata
-
-    metadata = _struct_to_dict(metadata_struct)
-
-    if chunk.HasField("artifact_update"):
-        artifact_metadata = _struct_to_dict(
-            chunk.artifact_update.artifact.metadata
-        )
-        if artifact_metadata:
-            merged = dict(artifact_metadata)
-            merged.update(metadata)
-            metadata = merged
-
-    return metadata
-
-
-def _normalize_usage(metadata: dict[str, Any]) -> dict[str, Any]:
-    usage = _to_dict(metadata.get("usage"))
-    if not usage:
-        return {}
-
-    input_tokens = int(usage.get("input_tokens") or 0)
-    output_tokens = int(usage.get("output_tokens") or 0)
-    total_tokens = int(
-        usage.get("total_tokens") or (input_tokens + output_tokens)
-    )
-    inference_time = float(usage.get("inference_time") or 0.0)
-
-    if (
-        input_tokens == 0
-        and output_tokens == 0
-        and total_tokens == 0
-        and inference_time == 0.0
-    ):
-        return {}
-
-    return {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-        "inference_time": inference_time,
-    }
-
-
-def _add_usage(
-    total: dict[str, Any], incremental: dict[str, Any]
-) -> dict[str, Any]:
-    return {
-        "input_tokens": int(total.get("input_tokens") or 0)
-        + int(incremental.get("input_tokens") or 0),
-        "output_tokens": int(total.get("output_tokens") or 0)
-        + int(incremental.get("output_tokens") or 0),
-        "total_tokens": int(total.get("total_tokens") or 0)
-        + int(incremental.get("total_tokens") or 0),
-        "inference_time": float(total.get("inference_time") or 0.0)
-        + float(incremental.get("inference_time") or 0.0),
-    }
-
-
-def _extract_tool_calls(metadata: dict[str, Any]) -> list[dict[str, Any]]:
-    trace = _to_dict(metadata.get("trace"))
-    tool_calls = trace.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        return []
-    return [item for item in tool_calls if isinstance(item, dict)]
-
-
-def _tool_call_key(tool_call: dict[str, Any]) -> str:
-    call_id = tool_call.get("id")
-    if isinstance(call_id, str) and call_id:
-        return f"id:{call_id}"
-    return json.dumps(tool_call, sort_keys=True, ensure_ascii=True, default=str)
-
-
 class BatA2AAdapter:
     def __init__(
         self,
         agent_url: str,
         request_timeout_s: float = 180.0,
         max_events: int = 200,
+        spans_dir: str | None = None,
     ) -> None:
         self.agent_url = agent_url
         self.request_timeout_s = request_timeout_s
         self.max_events = max_events
+        # Directory of JSON-Lines span files written by the agent(s)
+        # (OTEL_TRACES_EXPORTER=file); usage and tool calls are reconstructed
+        # from it per episode, grouped by trace_id (multi-agent aware).
+        self.spans_dir = spans_dir
+
+    async def _collect_from_spans(
+        self, conversation_id: str
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Aggregate usage/tool-calls for an episode from the spans directory.
+
+        Retries briefly: the agent writes spans synchronously, but the root
+        span (which carries the conversation id) ends just after the response,
+        so it may not be on disk the instant the stream closes.
+        """
+        assert self.spans_dir is not None
+        usage: dict[str, Any] = {}
+        tool_calls: list[dict[str, Any]] = []
+        for _ in range(20):  # up to ~2s
+            usage, tool_calls, found = _aggregate_from_spans(
+                self.spans_dir, conversation_id
+            )
+            if found:
+                return usage, tool_calls
+            await asyncio.sleep(0.1)
+        return usage, tool_calls
 
     async def run_task(
         self, task: TaskSpec, *, thread_id: str
     ) -> EpisodeResult:
         t0_perf = time.perf_counter()
         trace = EpisodeTrace()
-
-        usage_total: dict[str, Any] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-            "inference_time": 0.0,
-        }
-        usage_seen: set[str] = set()
-        tool_calls_seen: set[str] = set()
 
         last_status: str | None = None
         last_content = ""
@@ -223,22 +244,6 @@ class BatA2AAdapter:
                     )
 
                     async for chunk in stream:
-                        metadata = _extract_metadata(chunk)
-
-                        usage = _normalize_usage(metadata)
-                        if usage:
-                            usage_key = f"{_chunk_key(chunk)}::{json.dumps(usage, sort_keys=True, ensure_ascii=True)}"
-                            if usage_key not in usage_seen:
-                                usage_seen.add(usage_key)
-                                usage_total = _add_usage(usage_total, usage)
-
-                        for tool_call in _extract_tool_calls(metadata):
-                            key = _tool_call_key(tool_call)
-                            if key in tool_calls_seen:
-                                continue
-                            tool_calls_seen.add(key)
-                            trace.tool_calls.append(tool_call)
-
                         status, content = _extract_status_and_content(chunk)
                         if status is None:
                             continue
@@ -266,7 +271,13 @@ class BatA2AAdapter:
                 last_content = f"{type(exc).__name__}: {exc}"
 
         trace.timings["wall_ms"] = (time.perf_counter() - t0_perf) * 1000.0
-        trace.usage = usage_total
+
+        # Usage and tool calls now come from the agent's OpenTelemetry spans
+        # (written to files), not from A2A message metadata.
+        if self.spans_dir:
+            usage, tool_calls = await self._collect_from_spans(thread_id)
+            trace.usage = usage
+            trace.tool_calls = tool_calls
 
         final_status = last_status or "error"
         final_output = last_content or ""

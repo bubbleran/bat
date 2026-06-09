@@ -37,12 +37,22 @@ nvidia = ["langchain-nvidia-ai-endpoints"]
 ollama = ["langchain-ollama"]
 openai = ["langchain-openai"]
 
+# OpenTelemetry instrumentation. Export to any OTLP backend (e.g. Arize
+# Phoenix). Auto-instruments LangChain/LangGraph via OpenInference.
+telemetry = [
+  "opentelemetry-api>=1.27.0",
+  "opentelemetry-sdk>=1.27.0",
+  "opentelemetry-exporter-otlp>=1.27.0",
+  "openinference-instrumentation-langchain>=0.1.29",
+]
+
 all = [
   "bat-adk[anthropic]",
   "bat-adk[deepseek]",
   "bat-adk[nvidia]",
   "bat-adk[ollama]",
   "bat-adk[openai]",
+  "bat-adk[telemetry]",
 ]
 
 [dependency-groups]

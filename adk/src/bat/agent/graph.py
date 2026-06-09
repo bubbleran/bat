@@ -1,24 +1,20 @@
 from abc import ABC, abstractmethod
-from typing import AsyncIterable, Dict, List, Optional, Type
+from typing import AsyncIterable, Dict, Optional, Type
 
 from a2a.helpers import new_text_message
 from a2a.types import Message, Role
-from langchain_core.messages import ToolCall
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
-from ..chat_model_client import ChatModelClient, TraceMetadata, UsageMetadata
+from ..chat_model_client import ChatModelClient
 from ..logging import create_logger
-from ..prebuilt import CallAgentNode
 from .config import AgentConfig
 from .state import AgentState, AgentTaskResult, AgentTaskStatus
 
 logger = create_logger(__name__, level="debug")
-
-USAGE_METADATA_KEY = "usage"
 
 
 class AgentGraph(ABC):
@@ -124,8 +120,6 @@ class AgentGraph(ABC):
         """
         self._memory = MemorySaver() if config.checkpoints else None
         self._graph = self._graph_builder.compile(checkpointer=self._memory)
-
-        self._usage_buffer = UsageMetadata()
 
     async def astream(
         self,
@@ -251,70 +245,6 @@ class AgentGraph(ABC):
                 f.write(mermaid_str)
         else:
             print(mermaid_str)
-
-    def _pop_usage_metadata_from_buf(
-        self,
-    ) -> UsageMetadata:
-        """Pop the usage metadata from the buffer and return it."""
-        usage = self._usage_buffer
-        self._usage_buffer = UsageMetadata()
-        return usage
-
-    def _get_usage_metadata(
-        self,
-        from_timestamp: Optional[float] = None,
-    ) -> UsageMetadata:
-        """Get the total usage metadata for the graph including all
-        ChatModelClient instances and other agents called using the
-        `consume_agent_stream` method.
-
-        Args:
-            from_timestamp (Optional[float]): If provided, only usage after this
-                timestamp is considered.
-                If None, all usage metadata is returned.
-        Returns:
-            UsageMetadata: The total usage metadata for the graph.
-        """
-        total = self._pop_usage_metadata_from_buf()
-        for _, value in self.__dict__.items():
-            if isinstance(value, (ChatModelClient, CallAgentNode)):
-                total += value.get_usage_metadata(
-                    from_timestamp=from_timestamp,
-                )
-        return total
-
-    def _get_trace_metadata(
-        self,
-        from_timestamp: Optional[float] = None,
-    ) -> TraceMetadata:
-        """Get aggregated trace metadata for the graph from components that
-        expose it.
-
-        Components opt in by implementing a callable method:
-            get_trace_metadata(from_timestamp: Optional[float]) -> TraceMetadata
-
-        Args:
-            from_timestamp (Optional[float]): If provided, only entries after
-                this timestamp are returned.
-
-        Returns:
-            TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
-                empty when no component has trace data to report.
-        """
-        tool_calls: List[ToolCall] = []
-
-        for _, value in self.__dict__.items():
-            get_trace_metadata = getattr(value, "get_trace_metadata", None)
-            if not callable(get_trace_metadata):
-                continue
-
-            trace_item = get_trace_metadata(from_timestamp=from_timestamp)
-            if not isinstance(trace_item, TraceMetadata):
-                continue
-
-            tool_calls.extend(trace_item.tool_calls)
-
-        return TraceMetadata(tool_calls=tool_calls)
 
     @staticmethod
     def build_message(

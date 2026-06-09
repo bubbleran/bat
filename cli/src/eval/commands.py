@@ -134,6 +134,7 @@ def _run_eval_orchestrator(
     run_name: str,
     qualitative: bool,
     env: Mapping[str, str],
+    spans_dir: str | None = None,
 ) -> None:
     with _temporary_env(env):
         asyncio.run(
@@ -148,6 +149,7 @@ def _run_eval_orchestrator(
                 enable_qualitative_eval=qualitative,
                 k=k,
                 out_dir=str(output_dir),
+                spans_dir=spans_dir,
             )
         )
 
@@ -431,6 +433,25 @@ def eval_run() -> None:
         server_env["PORT"] = str(parsed_port)
         server_env["URL"] = base_url
 
+        # Telemetry: have the agent write its OpenTelemetry spans to a file we
+        # read back to reconstruct per-episode token usage and tool calls
+        # (these are no longer carried in the A2A messages). The agent runs as
+        # a subprocess, so a file is the cross-process equivalent of an
+        # in-memory span exporter.
+        #
+        # The path is a per-model *directory*: the entry agent writes
+        # ``agent.jsonl`` there, and the eval reads every ``*.jsonl`` in it,
+        # grouping spans by trace_id. To capture a multi-agent run's full
+        # usage, point each remote sub-agent's OTEL_FILE_EXPORTER_PATH at a
+        # distinct file inside this same directory (the shared trace_id, carried
+        # by the propagated W3C traceparent, ties them together).
+        spans_dir = (cfg.output_dir / task_id / f"spans-{idx}").resolve()
+        spans_dir.mkdir(parents=True, exist_ok=True)
+        spans_dir_str = str(spans_dir)
+        server_env["TELEMETRY_ENABLED"] = "1"
+        server_env["OTEL_TRACES_EXPORTER"] = "file"
+        server_env["OTEL_FILE_EXPORTER_PATH"] = str(spans_dir / "agent.jsonl")
+
         if model_cfg.base_url:
             server_env["BASE_URL"] = model_cfg.base_url
         else:
@@ -508,6 +529,7 @@ def eval_run() -> None:
                 run_name=cfg.run_name,
                 qualitative=cfg.qualitative,
                 env=runner_env,
+                spans_dir=spans_dir_str,
             )
         finally:
             _stop_agent_process(process, timeout_s=cfg.agent_shutdown_timeout_s)

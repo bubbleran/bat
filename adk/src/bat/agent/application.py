@@ -23,6 +23,7 @@ from mcp.server import FastMCP
 from starlette.applications import Starlette
 
 from ..logging import create_logger
+from ..telemetry import setup_telemetry
 from ._executor import MinimalAgentExecutor
 from .config import AgentConfig
 from .graph import AgentGraph
@@ -94,6 +95,10 @@ class AgentApplication:
         self._agent_card = self.load_agent_card(agent_card_path)
         if self._agent_card_display:
             display_agent_card(self._agent_card)
+
+        # Opt-in telemetry. No-op unless TELEMETRY_ENABLED is set. The agent
+        # card name is used as the default OTel service.name.
+        setup_telemetry(service_name=self._agent_card.name)
 
         self._config_path = os.getenv("CONFIG", "config.yaml")
         self._config = AgentConfig.load(self._config_path)
