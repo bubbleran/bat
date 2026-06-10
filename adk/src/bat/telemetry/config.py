@@ -98,3 +98,53 @@ class TelemetryConfig:
             exporter=exporter,
             file_path=file_path,
         )
+
+    @classmethod
+    def from_settings(
+        cls,
+        *,
+        enabled: bool = False,
+        service_name: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        exporter: Optional[str] = None,
+        file_path: Optional[str] = None,
+        default_service_name: Optional[str] = None,
+    ) -> "TelemetryConfig":
+        """Build a :class:`TelemetryConfig` from explicit settings.
+
+        Used when telemetry is configured from ``config.yaml`` (the
+        ``telemetry`` section) rather than the environment. Only the API key is
+        still sourced from the environment (``PHOENIX_API_KEY``), since secrets
+        never live in config.yaml.
+
+        Args:
+            enabled (bool): Master switch.
+            service_name (Optional[str]): ``service.name``; falls back to
+                ``default_service_name`` then ``DEFAULT_SERVICE_NAME``.
+            endpoint (Optional[str]): OTLP collector base URL; defaults to
+                ``DEFAULT_COLLECTOR_ENDPOINT``.
+            exporter (Optional[str]): ``otlp`` (default), ``console`` or
+                ``file``.
+            file_path (Optional[str]): Target file for the ``file`` exporter.
+            default_service_name (Optional[str]): Fallback service name (e.g.
+                the agent card name).
+        """
+        resolved_service_name = (
+            service_name or default_service_name or DEFAULT_SERVICE_NAME
+        )
+        base_endpoint = (endpoint or DEFAULT_COLLECTOR_ENDPOINT).rstrip("/")
+        traces_endpoint = base_endpoint + _TRACES_PATH
+
+        headers: Dict[str, str] = {}
+        api_key = os.getenv("PHOENIX_API_KEY")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        return cls(
+            enabled=enabled,
+            service_name=resolved_service_name,
+            traces_endpoint=traces_endpoint,
+            headers=headers,
+            exporter=(exporter or "otlp").strip().lower(),
+            file_path=file_path,
+        )

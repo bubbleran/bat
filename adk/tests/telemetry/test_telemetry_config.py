@@ -1,4 +1,4 @@
-"""Tests for ``TelemetryConfig.from_env`` — env-var resolution and defaults."""
+"""Tests for ``TelemetryConfig`` env/settings resolution and defaults."""
 
 import pytest
 
@@ -98,3 +98,37 @@ def test_file_exporter_config(monkeypatch):
     cfg = TelemetryConfig.from_env()
     assert cfg.exporter == "file"  # normalized to lowercase
     assert cfg.file_path == "/tmp/spans.jsonl"
+
+
+# --- from_settings (config.yaml-driven, used by AgentApplication) -----------
+
+
+def test_from_settings_defaults():
+    cfg = TelemetryConfig.from_settings(default_service_name="Card")
+    assert cfg.enabled is False
+    assert cfg.service_name == "Card"
+    assert cfg.exporter == "otlp"
+    assert cfg.traces_endpoint == DEFAULT_COLLECTOR_ENDPOINT + "/v1/traces"
+    assert cfg.file_path is None
+
+
+def test_from_settings_explicit_values():
+    cfg = TelemetryConfig.from_settings(
+        enabled=True,
+        service_name="svc",
+        endpoint="http://phoenix:6006/",
+        exporter="FILE",
+        file_path="/tmp/s.jsonl",
+        default_service_name="Card",
+    )
+    assert cfg.enabled is True
+    assert cfg.service_name == "svc"  # explicit wins over default
+    assert cfg.exporter == "file"  # normalized
+    assert cfg.traces_endpoint == "http://phoenix:6006/v1/traces"
+    assert cfg.file_path == "/tmp/s.jsonl"
+
+
+def test_from_settings_api_key_still_from_env(monkeypatch):
+    monkeypatch.setenv("PHOENIX_API_KEY", "secret")
+    cfg = TelemetryConfig.from_settings(enabled=True)
+    assert cfg.headers == {"Authorization": "Bearer secret"}

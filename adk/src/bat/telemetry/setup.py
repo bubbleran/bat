@@ -119,14 +119,21 @@ def _patch_openinference_langgraph_callbacks() -> None:
         pass
 
 
-def setup_telemetry(service_name: Optional[str] = None) -> bool:
+def setup_telemetry(
+    service_name: Optional[str] = None,
+    *,
+    config: Optional[TelemetryConfig] = None,
+) -> bool:
     """Configure the global tracer provider and auto-instrumentation.
 
     Idempotent: safe to call multiple times; only the first call has effect.
 
     Args:
-        service_name (Optional[str]): Fallback ``service.name`` when
-            ``OTEL_SERVICE_NAME`` is not set (e.g. the agent card name).
+        service_name (Optional[str]): Fallback ``service.name`` used only when
+            ``config`` is not provided (built via ``TelemetryConfig.from_env``).
+        config (Optional[TelemetryConfig]): Resolved telemetry settings. When
+            given (e.g. built from ``config.yaml`` by ``AgentApplication``) it
+            is used as-is; otherwise the config is read from the environment.
 
     Returns:
         bool: ``True`` if telemetry was activated, ``False`` if it is disabled
@@ -140,9 +147,16 @@ def setup_telemetry(service_name: Optional[str] = None) -> bool:
     if _initialized:
         return True
 
-    cfg = TelemetryConfig.from_env(default_service_name=service_name)
+    cfg = (
+        config
+        if config is not None
+        else TelemetryConfig.from_env(default_service_name=service_name)
+    )
     if not cfg.enabled:
-        logger.debug("Telemetry disabled (set TELEMETRY_ENABLED=1 to enable).")
+        logger.debug(
+            "Telemetry disabled (set telemetry.enabled in config.yaml, or "
+            "TELEMETRY_ENABLED=1 for env-based setups)."
+        )
         return False
 
     if trace is None:

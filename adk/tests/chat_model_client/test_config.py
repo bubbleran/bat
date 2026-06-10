@@ -44,7 +44,7 @@ def test_from_env_requires_model(monkeypatch):
     monkeypatch.delenv("BASE_URL", raising=False)
 
     with pytest.raises(
-        EnvironmentError, match="MODEL environment variable not set"
+        EnvironmentError, match="Model name not configured"
     ):
         ChatModelClientConfig.from_env()
 
@@ -54,7 +54,7 @@ def test_from_env_requires_model_provider_if_model_not_prefixed(monkeypatch):
     monkeypatch.delenv("MODEL_PROVIDER", raising=False)
 
     with pytest.raises(
-        EnvironmentError, match="MODEL_PROVIDER environment variable not set"
+        EnvironmentError, match="provider not configured"
     ):
         ChatModelClientConfig.from_env()
 

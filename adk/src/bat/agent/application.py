@@ -22,10 +22,11 @@ from jsonschema import ValidationError
 from mcp.server import FastMCP
 from starlette.applications import Starlette
 
+from ..chat_model_client import ChatModelClientConfig
 from ..logging import create_logger
-from ..telemetry import setup_telemetry
+from ..telemetry import TelemetryConfig, setup_telemetry
 from ._executor import MinimalAgentExecutor
-from .config import AgentConfig
+from .config import AgentConfig, TelemetrySettings
 from .graph import AgentGraph
 from .state import AgentState
 
@@ -43,15 +44,19 @@ class AgentApplication:
     This class sets up an agent application that can handle A2A and MCP
     protocols.
 
-    Supported Environment Variables:
-        - `URL` (required): The base URL where the agent will be hosted.
-        - `PORT`: The port for the A2A application. Defaults to 9900.
-        - `MCP_PORT`: The port for the MCP application. Defaults to 9800.
-        - `CONFIG`: Path to a configuration file for the agent.
-        Defaults to "config.yaml".
-        - `AGENT_CARD_PATH`: Path to the agent card. Defaults to "./agent.json"
-        - `AGENT_CARD_DISPLAY`: Whether to display the AgentCard when the
-        agent starts. Defaults to True.
+    Configuration:
+        Settings are read from ``./config.yaml`` (see :class:`AgentConfig`):
+        - ``endpoint.url`` (required): base URL where the agent is hosted.
+        - ``endpoint.port``: A2A application port. Defaults to 9900.
+        - ``endpoint.mcp_port``: MCP application port. Defaults to 9800.
+        - ``model``: provider/name/base_url for the chat model (the env vars
+          ``MODEL``/``MODEL_PROVIDER``/``BASE_URL`` still override these).
+        - ``telemetry``: OpenTelemetry settings (see :class:`AgentConfig`).
+
+        Only secrets stay in the environment (API keys, e.g. ``OPENAI_API_KEY``,
+        ``PHOENIX_API_KEY``). ``AGENT_CARD_PATH`` (default ``./agent.json``) and
+        ``AGENT_CARD_DISPLAY`` (default true) are still read from the
+        environment.
 
     Attributes
     -------
@@ -87,8 +92,31 @@ class AgentApplication:
             AgentStateType (Type[AgentState]): The class to use to instantiate
                 the agent state.
         """
-        self.a2a_port = int(os.getenv("PORT", A2A_APPLICATION_DEFAULT_PORT))
-        self.mcp_port = int(os.getenv("MCP_PORT", MCP_APPLICATION_DEFAULT_PORT))
+        # config.yaml (in the cwd) is the source of truth for settings.
+        self._config = AgentConfig.load()
+
+        # Model: install the config.yaml defaults so ChatModelClient picks them
+        # up. The env vars MODEL/MODEL_PROVIDER/BASE_URL still override these.
+        if self._config.model is not None:
+            ChatModelClientConfig.set_defaults(
+                provider=self._config.model.provider,
+                name=self._config.model.name,
+                base_url=self._config.model.base_url,
+            )
+
+        # Endpoint (ports + base URL) from config.
+        endpoint = self._config.endpoint
+        self.a2a_port = (
+            endpoint.port
+            if endpoint is not None and endpoint.port is not None
+            else A2A_APPLICATION_DEFAULT_PORT
+        )
+        self.mcp_port = (
+            endpoint.mcp_port
+            if endpoint is not None and endpoint.mcp_port is not None
+            else MCP_APPLICATION_DEFAULT_PORT
+        )
+        self._url = endpoint.url if endpoint is not None else None
 
         self._agent_card_display = bool(os.getenv("AGENT_CARD_DISPLAY", "1"))
         agent_card_path = os.getenv("AGENT_CARD_PATH", DEFAULT_AGENT_CARD_PATH)
@@ -96,12 +124,19 @@ class AgentApplication:
         if self._agent_card_display:
             display_agent_card(self._agent_card)
 
-        # Opt-in telemetry. No-op unless TELEMETRY_ENABLED is set. The agent
-        # card name is used as the default OTel service.name.
-        setup_telemetry(service_name=self._agent_card.name)
-
-        self._config_path = os.getenv("CONFIG", "config.yaml")
-        self._config = AgentConfig.load(self._config_path)
+        # Opt-in telemetry, configured from config.yaml's `telemetry` section
+        # (no-op unless telemetry.enabled). The agent card name is the default
+        # OTel service.name; the API key still comes from the environment.
+        telemetry = self._config.telemetry or TelemetrySettings()
+        telemetry_config = TelemetryConfig.from_settings(
+            enabled=telemetry.enabled,
+            service_name=telemetry.service_name,
+            endpoint=telemetry.endpoint,
+            exporter=telemetry.exporter,
+            file_path=telemetry.file_path,
+            default_service_name=self._agent_card.name,
+        )
+        setup_telemetry(config=telemetry_config)
 
         self._AgentStateType = AgentStateType
         self._AgentGraphType = AgentGraphType
@@ -139,19 +174,22 @@ class AgentApplication:
 
         Raises:
             Exception: For general errors during loading.
-            EnvironmentError: If the URL environment variable is not set.
+            EnvironmentError: If ``endpoint.url`` is not set in config.yaml.
             FileNotFoundError: If the agent card file does not exist.
             ValidationError: If the agent card JSON is invalid.
         """
         logger.info(f"Loading AgentCard from '{agent_card_path}'")
-        url = os.getenv("URL")
+        url = self._url
         if url is None:
-            logger.error("URL environment variable is not set.")
-            raise EnvironmentError("URL environment variable is not set.")
+            logger.error("Agent endpoint URL is not set.")
+            raise EnvironmentError(
+                "Agent endpoint URL is not set. Add 'endpoint.url' to "
+                "config.yaml."
+            )
         if not url.startswith("http://") and not url.startswith("https://"):
             url = "http://" + url
         url = url.rstrip("/")
-        port = int(os.getenv("PORT", A2A_APPLICATION_DEFAULT_PORT))
+        port = self.a2a_port
 
         interfaceUrl = f"{url}:{port}"
         try:

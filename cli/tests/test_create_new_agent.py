@@ -97,10 +97,17 @@ def test_create_new_agent_custom_name() -> None:
 
         assert not (root / ".env.template").exists()
 
+        # Endpoint/model now live in config.yaml; .env carries only the API key.
+        config_content = (root / "config.yaml").read_text(encoding="utf-8")
+        assert "port: 9900" in config_content
+        assert "name: gpt-4o-mini" in config_content
+        assert "provider: openai" in config_content
+        assert "telemetry:" in config_content
+
         env_content = (root / ".env").read_text(encoding="utf-8")
-        assert "PORT=9900" in env_content
-        assert "MODEL=gpt-4o-mini" in env_content
-        assert "MODEL_PROVIDER=openai" in env_content
+        assert "OPENAI_API_KEY=" in env_content
+        assert "MODEL=" not in env_content
+        assert "PORT=" not in env_content
 
         graph_content = (root / "src" / "graph.py").read_text(encoding="utf-8")
         assert (
@@ -247,7 +254,7 @@ def test_create_new_agent_clients_are_normalized_and_deduplicated() -> None:
         assert (root / "planner_agent_client.py").exists()
 
 
-def test_create_new_agent_writes_custom_env_template_values() -> None:
+def test_create_new_agent_writes_custom_config_values() -> None:
     with runner.isolated_filesystem():
         result = runner.invoke(
             app,
@@ -265,10 +272,17 @@ def test_create_new_agent_writes_custom_env_template_values() -> None:
         )
 
         assert result.exit_code == 0
+        # The CLI options now populate config.yaml, not .env.
+        config_file = Path("envagent", "config.yaml").read_text(
+            encoding="utf-8"
+        )
+        assert "port: 8088" in config_file
+        assert "name: gpt-4.1-mini" in config_file
+        assert "provider: openai" in config_file
+
         env_file = Path("envagent", ".env").read_text(encoding="utf-8")
-        assert "PORT=8088" in env_file
-        assert "MODEL=gpt-4.1-mini" in env_file
-        assert "MODEL_PROVIDER=openai" in env_file
+        assert "OPENAI_API_KEY=" in env_file
+        assert "MODEL=" not in env_file
         assert not Path("envagent", ".env.template").exists()
 
 
@@ -426,16 +440,10 @@ def test_push_command_errors_when_context_missing() -> None:
         assert "Context directory not found" in result.output
 
 
-def test_set_env_updates_values_in_existing_agent_env_file() -> None:
+def test_set_env_writes_config_yaml_and_env() -> None:
     with runner.isolated_filesystem():
         init_result = runner.invoke(app, ["init", "agent", "api"])
         assert init_result.exit_code == 0
-
-        env_path = Path("api", ".env")
-        env_path.write_text(
-            "PORT=9900\nMODEL=gpt-4o-mini\nMODEL_PROVIDER=openai\n",
-            encoding="utf-8",
-        )
 
         start_dir = Path.cwd()
         os.chdir(Path("api"))
@@ -461,21 +469,31 @@ def test_set_env_updates_values_in_existing_agent_env_file() -> None:
             os.chdir(start_dir)
 
         assert result.exit_code == 0
-        content = env_path.read_text(encoding="utf-8")
-        assert "PORT=8080" in content
-        assert "MODEL=gpt-4.1-mini" in content
-        assert "MODEL_PROVIDER=openai" in content
-        assert "BAT_DOCKER_REGISTRY=hub.bubbleran.com" in content
-        assert "BAT_DOCKER_REPO=orama/labs/demo" in content
+
+        # Endpoint/model land in config.yaml.
+        import yaml
+
+        config = yaml.safe_load(
+            Path("api", "config.yaml").read_text(encoding="utf-8")
+        )
+        assert config["endpoint"]["port"] == 8080
+        assert config["model"]["name"] == "gpt-4.1-mini"
+        assert config["model"]["provider"] == "openai"
+
+        # Docker build/push defaults stay in .env.
+        env_content = Path("api", ".env").read_text(encoding="utf-8")
+        assert "BAT_DOCKER_REGISTRY=hub.bubbleran.com" in env_content
+        assert "BAT_DOCKER_REPO=orama/labs/demo" in env_content
+        assert "MODEL=" not in env_content
+        assert "PORT=" not in env_content
 
 
-def test_set_env_requires_env_when_missing() -> None:
+def test_set_env_requires_config_yaml_when_missing() -> None:
     with runner.isolated_filesystem():
         init_result = runner.invoke(app, ["init", "agent", "api"])
         assert init_result.exit_code == 0
 
-        env_path = Path("api", ".env")
-        env_path.unlink()
+        Path("api", "config.yaml").unlink()
 
         start_dir = Path.cwd()
         os.chdir(Path("api"))
@@ -485,7 +503,7 @@ def test_set_env_requires_env_when_missing() -> None:
             os.chdir(start_dir)
 
         assert result.exit_code == 1
-        assert "must contain .env" in result.output
+        assert "must contain config.yaml" in result.output
 
 
 def test_set_env_requires_agent_root() -> None:
@@ -493,7 +511,7 @@ def test_set_env_requires_agent_root() -> None:
         result = runner.invoke(app, ["set", "env", "--port", "7777"])
 
         assert result.exit_code == 1
-        assert "must contain .env" in result.output
+        assert "must contain config.yaml" in result.output
 
 
 def test_set_env_requires_at_least_one_option() -> None:

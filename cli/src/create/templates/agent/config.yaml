@@ -1,1 +1,26 @@
+endpoint:
+  url: http://localhost
+  port: __PORT__
+
+model:
+  provider: __MODEL_PROVIDER__
+  name: __MODEL__
+  # base_url: http://localhost:11434   # optional (e.g. for ollama)
+
 checkpoints: false
+
+telemetry:
+  enabled: false
+  exporter: otlp                       # otlp | console | file
+  endpoint: http://localhost:6006
+  # service_name: my-agent             # optional (defaults to the agent name)
+  # file_path: spans.jsonl             # only for exporter: file
+
+# remote-agents:
+#   - name: SMO Agent
+#     url: http://localhost:10001
+#     protocol: a2a
+
+# mcp-servers:
+#   - name: my-mcp
+#     url: http://localhost:8000

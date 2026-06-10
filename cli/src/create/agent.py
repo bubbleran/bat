@@ -9,6 +9,7 @@ _DYNAMIC_TEMPLATE_FILES = {
     ".env.template",
     "agent.json.template",
     "agent.spec",
+    "config.yaml",
     "Dockerfile",
     "Makefile",
     "llm_client.py.template",
@@ -16,6 +17,15 @@ _DYNAMIC_TEMPLATE_FILES = {
     "src/graph.py",
     "src/__init__.py",
     "__main__.py",
+}
+
+# Provider -> the env var its SDK reads for the API key. The API key is the only
+# setting that stays in .env; everything else lives in config.yaml.
+_PROVIDER_API_KEY_VAR = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "nvidia": "API_KEY",
 }
 
 
@@ -182,18 +192,36 @@ def _build_agent_json_content(agent_dir_name: str) -> str:
     )
 
 
-def _build_env_template_content(
+def _build_config_yaml_content(
     *,
     port: int,
     model: str,
     model_provider: str,
 ) -> str:
     return _render_template(
-        ".env.template",
+        "config.yaml",
         {
             "PORT": str(port),
             "MODEL": model,
             "MODEL_PROVIDER": model_provider,
+        },
+    )
+
+
+def _build_env_template_content(
+    *,
+    model_provider: str,
+) -> str:
+    key_var = _PROVIDER_API_KEY_VAR.get(model_provider.lower())
+    api_key_line = (
+        f"{key_var}="
+        if key_var
+        else f"# The '{model_provider}' provider needs no API key."
+    )
+    return _render_template(
+        ".env.template",
+        {
+            "API_KEY_LINE": api_key_line,
         },
     )
 
@@ -350,14 +378,22 @@ def create_agent_scaffold(
         )
         created.append(agent_json_path)
 
-    env_path = target_dir / ".env"
-    if force or not env_path.exists():
-        env_path.write_text(
-            _build_env_template_content(
+    config_path = target_dir / "config.yaml"
+    if force or not config_path.exists():
+        config_path.write_text(
+            _build_config_yaml_content(
                 port=port,
                 model=model,
                 model_provider=model_provider,
             ),
+            encoding="utf-8",
+        )
+        created.append(config_path)
+
+    env_path = target_dir / ".env"
+    if force or not env_path.exists():
+        env_path.write_text(
+            _build_env_template_content(model_provider=model_provider),
             encoding="utf-8",
         )
         created.append(env_path)

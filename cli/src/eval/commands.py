@@ -9,10 +9,11 @@ import socket
 import subprocess
 import time
 from pathlib import Path
-from typing import Iterator, Mapping
+from typing import Any, Iterator, Mapping
 from urllib.parse import urlparse
 
 import typer
+import yaml
 from dotenv import dotenv_values
 
 from .engine.contracts import JudgeSpec
@@ -104,6 +105,45 @@ def _validate_agent_root(agent_root: Path) -> None:
         raise typer.BadParameter(
             f"Current directory does not look like an agent root. Missing: {missing_text}. Please add this files or run this command from the root of an existing agent.",
         )
+
+
+def _patch_agent_config(
+    agent_root: Path, overrides: Mapping[str, Any]
+) -> str | None:
+    """Merge ``overrides`` into the agent's ``./config.yaml`` for one run.
+
+    The agent reads ``config.yaml`` as the source of truth for the endpoint and
+    telemetry; the eval injects per-run values (bind URL/port, enable the file
+    span exporter at the per-run path) by patching that file. Returns the
+    original file contents (or ``None`` if absent) so the caller can restore it
+    via :func:`_restore_agent_config`.
+    """
+    config_path = agent_root / "config.yaml"
+    original = (
+        config_path.read_text(encoding="utf-8")
+        if config_path.exists()
+        else None
+    )
+    data: dict[str, Any] = {}
+    if original is not None:
+        loaded = yaml.safe_load(original)
+        if isinstance(loaded, dict):
+            data = loaded
+    for key, value in overrides.items():
+        data[key] = value
+    config_path.write_text(
+        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+    )
+    return original
+
+
+def _restore_agent_config(agent_root: Path, original: str | None) -> None:
+    """Restore ``config.yaml`` to the contents captured by ``_patch_agent_config``."""
+    config_path = agent_root / "config.yaml"
+    if original is None:
+        config_path.unlink(missing_ok=True)
+    else:
+        config_path.write_text(original, encoding="utf-8")
 
 
 @contextlib.contextmanager
@@ -427,35 +467,27 @@ def eval_run() -> None:
             f"- {model_cfg.provider}:{model_cfg.model}", fg=typer.colors.CYAN
         )
 
+        # Model selection rides on env vars: the agent lets MODEL /
+        # MODEL_PROVIDER / BASE_URL override the config.yaml `model` section, so
+        # the eval can sweep models without rewriting config per model.
         server_env = os.environ.copy()
         server_env["MODEL_PROVIDER"] = model_cfg.provider
         server_env["MODEL"] = model_cfg.model
-        server_env["PORT"] = str(parsed_port)
-        server_env["URL"] = base_url
-
-        # Telemetry: have the agent write its OpenTelemetry spans to a file we
-        # read back to reconstruct per-episode token usage and tool calls
-        # (these are no longer carried in the A2A messages). The agent runs as
-        # a subprocess, so a file is the cross-process equivalent of an
-        # in-memory span exporter.
-        #
-        # The path is a per-model *directory*: the entry agent writes
-        # ``agent.jsonl`` there, and the eval reads every ``*.jsonl`` in it,
-        # grouping spans by trace_id. To capture a multi-agent run's full
-        # usage, point each remote sub-agent's OTEL_FILE_EXPORTER_PATH at a
-        # distinct file inside this same directory (the shared trace_id, carried
-        # by the propagated W3C traceparent, ties them together).
-        spans_dir = (cfg.output_dir / task_id / f"spans-{idx}").resolve()
-        spans_dir.mkdir(parents=True, exist_ok=True)
-        spans_dir_str = str(spans_dir)
-        server_env["TELEMETRY_ENABLED"] = "1"
-        server_env["OTEL_TRACES_EXPORTER"] = "file"
-        server_env["OTEL_FILE_EXPORTER_PATH"] = str(spans_dir / "agent.jsonl")
 
         if model_cfg.base_url:
             server_env["BASE_URL"] = model_cfg.base_url
         else:
             server_env.pop("BASE_URL", None)
+
+        # Per-run telemetry spans directory: the agent writes ``agent.jsonl``
+        # here and the eval reads every ``*.jsonl`` in it, grouping spans by
+        # trace_id. For multi-agent runs, point each remote sub-agent's
+        # telemetry.file_path at a distinct file in this same directory (the
+        # shared trace_id, carried by the propagated W3C traceparent, ties them
+        # together).
+        spans_dir = (cfg.output_dir / task_id / f"spans-{idx}").resolve()
+        spans_dir.mkdir(parents=True, exist_ok=True)
+        spans_dir_str = str(spans_dir)
 
         _apply_env_overrides(
             server_env,
@@ -463,9 +495,25 @@ def eval_run() -> None:
             section_name=f"models[{idx}]",
         )
 
-        process = _start_agent_process(agent_root, server_env)
+        # Endpoint and telemetry are read from config.yaml (not env), so patch
+        # them in for this run: bind the agent to the eval's URL/port and turn
+        # on the file span exporter at the per-run path. Always restored in the
+        # `finally` below, even if the agent fails to start.
+        original_config = _patch_agent_config(
+            agent_root,
+            {
+                "endpoint": {"url": base_url, "port": parsed_port},
+                "telemetry": {
+                    "enabled": True,
+                    "exporter": "file",
+                    "file_path": str(spans_dir / "agent.jsonl"),
+                },
+            },
+        )
 
+        process: subprocess.Popen | None = None
         try:
+            process = _start_agent_process(agent_root, server_env)
             _wait_for_agent_port(
                 cfg.agent_url,
                 timeout_s=cfg.agent_startup_timeout_s,
@@ -532,7 +580,11 @@ def eval_run() -> None:
                 spans_dir=spans_dir_str,
             )
         finally:
-            _stop_agent_process(process, timeout_s=cfg.agent_shutdown_timeout_s)
+            if process is not None:
+                _stop_agent_process(
+                    process, timeout_s=cfg.agent_shutdown_timeout_s
+                )
+            _restore_agent_config(agent_root, original_config)
 
     typer.secho(
         f"Evaluation completed. Output: {cfg.output_dir / task_id}",

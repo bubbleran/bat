@@ -1,5 +1,5 @@
 import asyncio
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import yaml
 from a2a.client import A2ACardResolver
@@ -79,6 +79,66 @@ class A2AConnection(BaseModel):
     timeout: int
 
 
+class EndpointConfig(BaseModel):
+    """Where the agent is served (base URL and ports).
+
+    Read directly by ``AgentApplication`` (not via environment variables).
+
+    Attributes:
+        url (Optional[str]): Base URL the agent is hosted at (used to build the
+            agent card interface URL).
+        port (Optional[int]): A2A server port. Defaults to 9900.
+        mcp_port (Optional[int]): MCP server port. Defaults to 9800.
+    """
+
+    url: Optional[str] = None
+    port: Optional[int] = None
+    mcp_port: Optional[int] = None
+
+
+class ModelConfig(BaseModel):
+    """Chat model selection.
+
+    These three values are the only ones an environment variable may override:
+    ``MODEL`` / ``MODEL_PROVIDER`` / ``BASE_URL`` take precedence when set (see
+    :meth:`bat.chat_model_client.ChatModelClientConfig.from_env`).
+
+    Attributes:
+        provider (Optional[str]): Model provider, e.g. ``openai``.
+        name (Optional[str]): Model name, e.g. ``gpt-4.1-mini``.
+        base_url (Optional[str]): Optional base URL for the provider; needed by
+            local providers such as ollama.
+    """
+
+    provider: Optional[str] = None
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+class TelemetrySettings(BaseModel):
+    """OpenTelemetry settings (the enabling switch and exporter).
+
+    Named ``TelemetrySettings`` to avoid colliding with
+    ``bat.telemetry.config.TelemetryConfig``. ``AgentApplication`` reads these
+    directly and feeds them to ``TelemetryConfig.from_settings``; only the API
+    key still comes from the environment (``PHOENIX_API_KEY``).
+
+    Attributes:
+        enabled (bool): Master switch.
+        exporter (Optional[str]): ``otlp`` | ``console`` | ``file``.
+        endpoint (Optional[str]): OTLP collector base URL.
+        service_name (Optional[str]): ``service.name``; defaults to the agent
+            card name.
+        file_path (Optional[str]): Target file for the ``file`` exporter.
+    """
+
+    enabled: bool = False
+    exporter: Optional[str] = None
+    endpoint: Optional[str] = None
+    service_name: Optional[str] = None
+    file_path: Optional[str] = None
+
+
 class AgentConfig(BaseModel):
     """
     Agent Configuration, including MCP servers and remote agents.
@@ -105,6 +165,9 @@ class AgentConfig(BaseModel):
     """
 
     checkpoints: bool = Field(default=False)
+    endpoint: Optional[EndpointConfig] = None
+    model: Optional[ModelConfig] = None
+    telemetry: Optional[TelemetrySettings] = None
     mcp_servers: List[MCPServerConfig] = Field(default=[], alias="mcp-servers")
     remote_agents: List[RemoteAgentConfig] = Field(
         default=[], alias="remote-agents"
