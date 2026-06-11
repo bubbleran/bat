@@ -115,28 +115,47 @@ class ModelConfig(BaseModel):
     base_url: Optional[str] = None
 
 
+class OutputConfig(BaseModel):
+    """A single telemetry export destination.
+
+    Attributes:
+        type (str): ``local`` (JSONL file), ``remote`` (OTLP/Phoenix) or
+            ``console`` (stdout).
+        file_path (Optional[str]): Target file for ``local`` (defaults to
+            ``spans.jsonl``).
+        endpoint (Optional[str]): OTLP collector base URL for ``remote``
+            (defaults to ``http://localhost:6006``).
+    """
+
+    type: Literal["local", "remote", "console"]
+    file_path: Optional[str] = None
+    endpoint: Optional[str] = None
+
+
 class TelemetrySettings(BaseModel):
-    """OpenTelemetry settings (the enabling switch and exporter).
+    """OpenTelemetry settings (the enabling switch and exporter list).
 
     Named ``TelemetrySettings`` to avoid colliding with
     ``bat.telemetry.config.TelemetryConfig``. ``AgentApplication`` reads these
-    directly and feeds them to ``TelemetryConfig.from_settings``; only the API
-    key still comes from the environment (``PHOENIX_API_KEY``).
+    directly and feeds them to ``TelemetryConfig.from_settings``.
+
+    Spans are fanned out to **every** entry in ``output``, e.g.::
+
+        telemetry:
+          output:
+            - type: local
+              file_path: spans.jsonl
+            - type: remote
+              endpoint: http://localhost:6006
 
     Attributes:
-        enabled (bool): Master switch.
-        exporter (Optional[str]): ``otlp`` | ``console`` | ``file``.
-        endpoint (Optional[str]): OTLP collector base URL.
         service_name (Optional[str]): ``service.name``; defaults to the agent
             card name.
-        file_path (Optional[str]): Target file for the ``file`` exporter.
+        output (List[OutputConfig]): One entry per active destination.
     """
 
-    enabled: bool = False
-    exporter: Optional[str] = None
-    endpoint: Optional[str] = None
     service_name: Optional[str] = None
-    file_path: Optional[str] = None
+    output: List[OutputConfig] = Field(default=[])
 
 
 class AgentConfig(BaseModel):
@@ -145,6 +164,8 @@ class AgentConfig(BaseModel):
 
     Attributes
     -------
+        agent_card (Optional[str]): Path to the agent card JSON file. When
+            unset it defaults to ``./agent.json`` (see ``AgentApplication``).
         mcp_servers (List[MCPServerConfig]): List of MCP server
             configurations.
         remote_agents (List[RemoteAgentConfig]): List of remote agent
@@ -165,6 +186,7 @@ class AgentConfig(BaseModel):
     """
 
     checkpoints: bool = Field(default=False)
+    agent_card: Optional[str] = None
     endpoint: Optional[EndpointConfig] = None
     model: Optional[ModelConfig] = None
     telemetry: Optional[TelemetrySettings] = None

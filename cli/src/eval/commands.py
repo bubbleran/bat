@@ -107,16 +107,39 @@ def _validate_agent_root(agent_root: Path) -> None:
         )
 
 
+def _agent_url_from_config(agent_root: Path) -> str:
+    """Build the URL the eval connects to from the agent's own ``config.yaml``.
+
+    The agent binds to ``endpoint.url`` + ``endpoint.port`` (see
+    ``AgentApplication``); the eval reads the *same* values so it connects
+    exactly where the agent listens, instead of overriding them. Missing
+    values fall back to the same defaults the agent uses
+    (``http://localhost`` / ``9900``).
+    """
+    config_path = agent_root / "config.yaml"
+    data: dict[str, Any] = {}
+    if config_path.exists():
+        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            data = loaded
+    endpoint = data.get("endpoint") or {}
+    url = endpoint.get("url") or "http://localhost"
+    port = endpoint.get("port") or 9900
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+    return f"{url.rstrip('/')}:{port}"
+
+
 def _patch_agent_config(
     agent_root: Path, overrides: Mapping[str, Any]
 ) -> str | None:
     """Merge ``overrides`` into the agent's ``./config.yaml`` for one run.
 
-    The agent reads ``config.yaml`` as the source of truth for the endpoint and
-    telemetry; the eval injects per-run values (bind URL/port, enable the file
-    span exporter at the per-run path) by patching that file. Returns the
-    original file contents (or ``None`` if absent) so the caller can restore it
-    via :func:`_restore_agent_config`.
+    The agent reads ``config.yaml`` as the source of truth for telemetry; the
+    eval injects per-run values (enable the local file span exporter at the
+    per-run path) by patching that file. Returns the original file contents
+    (or ``None`` if absent) so the caller can restore it via
+    :func:`_restore_agent_config`.
     """
     config_path = agent_root / "config.yaml"
     original = (
@@ -268,7 +291,8 @@ def _parse_agent_url(agent_url: str) -> tuple[str, int, str]:
     parsed = urlparse(agent_url.strip())
     if not parsed.scheme or not parsed.hostname:
         raise typer.BadParameter(
-            "evaluation.agent_url must be a full URL, for example: http://127.0.0.1:9900"
+            "The agent's config.yaml endpoint must resolve to a full URL, "
+            "for example: http://127.0.0.1:9900"
         )
 
     port = parsed.port
@@ -279,7 +303,7 @@ def _parse_agent_url(agent_url: str) -> tuple[str, int, str]:
             port = 80
         else:
             raise typer.BadParameter(
-                "evaluation.agent_url must use http or https"
+                "The agent's config.yaml endpoint URL must use http or https"
             )
 
     base_url = f"{parsed.scheme}://{parsed.hostname}"
@@ -460,7 +484,9 @@ def eval_run() -> None:
         fg=typer.colors.CYAN,
     )
 
-    _, parsed_port, base_url = _parse_agent_url(cfg.agent_url)
+    # The agent's endpoint is its own config.yaml's responsibility; the eval
+    # reads it (rather than patching it) and connects there.
+    agent_url = _agent_url_from_config(agent_root)
 
     for idx, model_cfg in enumerate(cfg.models):
         typer.secho(
@@ -481,10 +507,10 @@ def eval_run() -> None:
 
         # Per-run telemetry spans directory: the agent writes ``agent.jsonl``
         # here and the eval reads every ``*.jsonl`` in it, grouping spans by
-        # trace_id. For multi-agent runs, point each remote sub-agent's
-        # telemetry.file_path at a distinct file in this same directory (the
-        # shared trace_id, carried by the propagated W3C traceparent, ties them
-        # together).
+        # trace_id. For multi-agent runs, point each remote sub-agent's local
+        # output (telemetry.output[].file_path) at a distinct file in this same
+        # directory (the shared trace_id, carried by the propagated W3C
+        # traceparent, ties them together).
         spans_dir = (cfg.output_dir / task_id / f"spans-{idx}").resolve()
         spans_dir.mkdir(parents=True, exist_ok=True)
         spans_dir_str = str(spans_dir)
@@ -495,18 +521,22 @@ def eval_run() -> None:
             section_name=f"models[{idx}]",
         )
 
-        # Endpoint and telemetry are read from config.yaml (not env), so patch
-        # them in for this run: bind the agent to the eval's URL/port and turn
-        # on the file span exporter at the per-run path. Always restored in the
-        # `finally` below, even if the agent fails to start.
+        # Telemetry is read from config.yaml (not env), so patch in for this
+        # run a single local (JSONL file) span exporter at the per-run path --
+        # the eval reconstructs usage/tool-calls from these files and never
+        # needs a remote collector. The endpoint is NOT patched: the agent
+        # binds to its own config.yaml and the eval reads it. Always restored
+        # in the `finally` below, even if the agent fails to start.
         original_config = _patch_agent_config(
             agent_root,
             {
-                "endpoint": {"url": base_url, "port": parsed_port},
                 "telemetry": {
-                    "enabled": True,
-                    "exporter": "file",
-                    "file_path": str(spans_dir / "agent.jsonl"),
+                    "output": [
+                        {
+                            "type": "local",
+                            "file_path": str(spans_dir / "agent.jsonl"),
+                        }
+                    ],
                 },
             },
         )
@@ -515,7 +545,7 @@ def eval_run() -> None:
         try:
             process = _start_agent_process(agent_root, server_env)
             _wait_for_agent_port(
-                cfg.agent_url,
+                agent_url,
                 timeout_s=cfg.agent_startup_timeout_s,
                 process=process,
             )
@@ -567,7 +597,7 @@ def eval_run() -> None:
                     runner_env.pop(f"JUDGE_PROMPT_{prompt_key.upper()}", None)
 
             _run_eval_orchestrator(
-                agent_url=cfg.agent_url,
+                agent_url=agent_url,
                 model_provider=model_cfg.provider,
                 model=model_cfg.model,
                 dataset=cfg.dataset,

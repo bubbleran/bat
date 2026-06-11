@@ -1,6 +1,7 @@
 import pytest
 
 from bat.telemetry import setup as setup_mod
+from bat.telemetry.config import TelemetryConfig
 from bat.telemetry.setup import setup_telemetry
 
 
@@ -8,7 +9,6 @@ from bat.telemetry.setup import setup_telemetry
 def reset_state(monkeypatch):
     """Reset the module-level init guard so each test starts uninitialized."""
     monkeypatch.setattr(setup_mod, "_initialized", False)
-    monkeypatch.delenv("TELEMETRY_ENABLED", raising=False)
     yield
     # The guard is mutated via ``global`` inside setup_telemetry; force it back
     # so a successful run in one test cannot leak into the next.
@@ -17,22 +17,22 @@ def reset_state(monkeypatch):
 
 def test_setup_raises_when_enabled_but_otel_missing(monkeypatch):
     """Telemetry on + OpenTelemetry absent must hard-fail, not no-op."""
-    monkeypatch.setenv("TELEMETRY_ENABLED", "1")
+    cfg = TelemetryConfig(enabled=True, service_name="test-agent")
     # Simulate the ``telemetry`` extra not being installed.
     monkeypatch.setattr(setup_mod, "trace", None)
     monkeypatch.setattr(setup_mod, "propagate", None)
 
     with pytest.raises(RuntimeError, match="OpenTelemetry is not installed"):
-        setup_telemetry(service_name="test-agent")
+        setup_telemetry(config=cfg)
 
     assert setup_mod.is_enabled() is False
 
 
 def test_setup_disabled_does_not_raise_without_otel(monkeypatch):
     """Telemetry off stays import-safe even when OpenTelemetry is absent."""
-    # TELEMETRY_ENABLED unset by the fixture -> disabled.
+    cfg = TelemetryConfig(enabled=False, service_name="test-agent")
     monkeypatch.setattr(setup_mod, "trace", None)
     monkeypatch.setattr(setup_mod, "propagate", None)
 
-    assert setup_telemetry(service_name="test-agent") is False
+    assert setup_telemetry(config=cfg) is False
     assert setup_mod.is_enabled() is False

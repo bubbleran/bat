@@ -1,6 +1,8 @@
-endpoint:
+endpoint:                              # where the agent binds (the eval reads this too)
   url: http://localhost
   port: __PORT__
+
+# agent_card: ./agent.json             # optional; path to the agent card (default: ./agent.json)
 
 model:
   provider: __MODEL_PROVIDER__
@@ -10,11 +12,12 @@ model:
 checkpoints: false
 
 telemetry:
-  enabled: false
-  exporter: otlp                       # otlp | console | file
-  endpoint: http://localhost:6006
   # service_name: my-agent             # optional (defaults to the agent name)
-  # file_path: spans.jsonl             # only for exporter: file
+  output:                              # telemetry is ON when output has >=1 entry; spans fan out to every entry
+    # - type: remote                   # remote | local | console
+    #   endpoint: http://localhost:6006  # OTLP collector (e.g. Phoenix)
+    # - type: local
+    #   file_path: spans.jsonl         # JSON Lines, one span per line
 
 # remote-agents:
 #   - name: SMO Agent

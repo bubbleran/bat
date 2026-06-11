@@ -15,7 +15,12 @@ runner = CliRunner()
 
 
 def _write_minimal_agent_root(root: Path) -> None:
-    (root / "config.yaml").write_text("name: test\n", encoding="utf-8")
+    # The eval reads the agent's endpoint from config.yaml to know where to
+    # connect (it no longer patches/forces it).
+    (root / "config.yaml").write_text(
+        "name: test\nendpoint:\n  url: http://127.0.0.1\n  port: 9900\n",
+        encoding="utf-8",
+    )
     (root / "agent.json").write_text("{}\n", encoding="utf-8")
     (root / "pyproject.toml").write_text(
         "[project]\nname='agent'\nversion='0.1.0'\n", encoding="utf-8"
@@ -86,7 +91,6 @@ def test_eval_show_prints_resolved_config(monkeypatch) -> None:
         config = EvalConfig(
             dataset=dataset.resolve(),
             output_dir=eval_output.resolve(),
-            agent_url="http://127.0.0.1:9900",
             agent_startup_timeout_s=15,
             agent_shutdown_timeout_s=5,
             k=2,
@@ -211,7 +215,6 @@ def test_eval_run_starts_agent_and_runs_orchestrator(monkeypatch) -> None:
         config = EvalConfig(
             dataset=dataset.resolve(),
             output_dir=eval_output.resolve(),
-            agent_url="http://127.0.0.1:9900",
             agent_startup_timeout_s=15,
             agent_shutdown_timeout_s=5,
             k=2,
@@ -312,9 +315,9 @@ def test_eval_run_starts_agent_and_runs_orchestrator(monkeypatch) -> None:
         assert popen_env["MODEL"] == "gpt-4.1-mini"
         assert popen_env["BASE_URL"] == "http://model.local"
         assert popen_env["MODEL_ALIAS"] == "gpt-4.1-mini"
-        assert popen_env["PORT"] == "9900"
-        assert popen_env["URL"] == "http://127.0.0.1"
 
+        # agent_url is derived from the agent's config.yaml endpoint, not from
+        # the eval config or env vars.
         assert captured["wait_agent_url"] == "http://127.0.0.1:9900"
         assert captured["wait_timeout_s"] == 15
 

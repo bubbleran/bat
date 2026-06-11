@@ -73,9 +73,8 @@ class MinimalAgentExecutor(AgentExecutor):
             task = new_task_from_user_message(context.message)
             await event_queue.enqueue_event(task)
         updater = TaskUpdater(event_queue, task.id, task.context_id)
-        # Continue a trace started by a calling agent, if one was propagated
-        # through the incoming message metadata (W3C traceparent).
         parent_ctx = extract_context(_carrier_from_message(context.message))
+        
         # The agent name is derived from the graph class name (the "Graph"
         # suffix dropped), so it travels with the graph instead of being
         # propagated as a separate attribute.

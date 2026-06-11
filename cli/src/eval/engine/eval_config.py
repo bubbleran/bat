@@ -227,11 +227,6 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
     output_dir = _resolve_path(
         agent_root, evaluation_section.get("output_dir"), "eval/output"
     )
-    agent_url = (
-        _to_optional_str(evaluation_section.get("agent_url"))
-        or "http://127.0.0.1:9900"
-    )
-
     agent_startup_timeout_s = _to_positive_int(
         evaluation_section.get("agent_startup_timeout_s"),
         field_name="evaluation.agent_startup_timeout_s",
@@ -261,7 +256,6 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
     return EvalConfig(
         dataset=dataset,
         output_dir=output_dir,
-        agent_url=agent_url,
         agent_startup_timeout_s=agent_startup_timeout_s,
         agent_shutdown_timeout_s=agent_shutdown_timeout_s,
         k=k,
@@ -277,7 +271,6 @@ def default_eval_yaml() -> str:
         "evaluation:\n"
         "  dataset: eval/input/tasks.json\n"
         "  output_dir: eval/output\n"
-        "  agent_url: http://127.0.0.1:9900\n"
         "  agent_startup_timeout_s: 45\n"
         "  agent_shutdown_timeout_s: 10\n"
         "  k: 1\n"

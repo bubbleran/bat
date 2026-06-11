@@ -52,11 +52,12 @@ class AgentApplication:
         - ``model``: provider/name/base_url for the chat model (the env vars
           ``MODEL``/``MODEL_PROVIDER``/``BASE_URL`` still override these).
         - ``telemetry``: OpenTelemetry settings (see :class:`AgentConfig`).
+        - ``agent_card``: path to the agent card JSON. Optional; defaults to
+          ``./agent.json`` (``AGENT_CARD_PATH`` env still works as a fallback).
 
-        Only secrets stay in the environment (API keys, e.g. ``OPENAI_API_KEY``,
-        ``PHOENIX_API_KEY``). ``AGENT_CARD_PATH`` (default ``./agent.json``) and
-        ``AGENT_CARD_DISPLAY`` (default true) are still read from the
-        environment.
+        Only secrets stay in the environment (API keys, e.g.
+        ``OPENAI_API_KEY``). ``AGENT_CARD_DISPLAY`` (default true) is still read
+        from the environment.
 
     Attributes
     -------
@@ -119,21 +120,31 @@ class AgentApplication:
         self._url = endpoint.url if endpoint is not None else None
 
         self._agent_card_display = bool(os.getenv("AGENT_CARD_DISPLAY", "1"))
-        agent_card_path = os.getenv("AGENT_CARD_PATH", DEFAULT_AGENT_CARD_PATH)
+        # Agent card path: config.yaml's `agent_card` is the source of truth;
+        # AGENT_CARD_PATH env stays as a fallback, then the default location.
+        agent_card_path = (
+            self._config.agent_card
+            or os.getenv("AGENT_CARD_PATH")
+            or DEFAULT_AGENT_CARD_PATH
+        )
         self._agent_card = self.load_agent_card(agent_card_path)
         if self._agent_card_display:
             display_agent_card(self._agent_card)
 
         # Opt-in telemetry, configured from config.yaml's `telemetry` section
-        # (no-op unless telemetry.enabled). The agent card name is the default
-        # OTel service.name; the API key still comes from the environment.
-        telemetry = self._config.telemetry or TelemetrySettings()
+        # (no-op unless an output is configured). The agent card name is the
+        # default OTel service.name.
+        enabled = False
+        if self._config.telemetry is not None:
+            telemetry = self._config.telemetry
+            enabled = bool (telemetry.output)
+        else:
+            telemetry = TelemetrySettings() 
+            logger.debug("No telemetry config found in config.yaml; telemetry is " "disabled by default. To enable, add a `telemetry` section with a valid output to config.yaml.")
         telemetry_config = TelemetryConfig.from_settings(
-            enabled=telemetry.enabled,
+            enabled=enabled,
             service_name=telemetry.service_name,
-            endpoint=telemetry.endpoint,
-            exporter=telemetry.exporter,
-            file_path=telemetry.file_path,
+            outputs=[o.model_dump() for o in telemetry.output],
             default_service_name=self._agent_card.name,
         )
         setup_telemetry(config=telemetry_config)

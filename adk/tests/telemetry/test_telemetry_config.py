@@ -1,134 +1,86 @@
-"""Tests for ``TelemetryConfig`` env/settings resolution and defaults."""
+"""Tests for ``TelemetryConfig.from_settings`` resolution and defaults.
 
-import pytest
+Telemetry is configured exclusively from ``config.yaml`` (the ``telemetry``
+section), so the only builder is ``from_settings``; there is no env-var path.
+"""
 
 from bat.telemetry.config import (
     DEFAULT_COLLECTOR_ENDPOINT,
+    DEFAULT_FILE_PATH,
     DEFAULT_SERVICE_NAME,
     TelemetryConfig,
 )
 
-_TELEMETRY_ENV_VARS = (
-    "TELEMETRY_ENABLED",
-    "OTEL_SERVICE_NAME",
-    "PHOENIX_COLLECTOR_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "PHOENIX_API_KEY",
-    "OTEL_TRACES_EXPORTER",
-    "OTEL_FILE_EXPORTER_PATH",
-)
+_OTLP_ENDPOINT = DEFAULT_COLLECTOR_ENDPOINT + "/v1/traces"
 
 
-@pytest.fixture(autouse=True)
-def _clear_env(monkeypatch):
-    """Isolate from the host environment so defaults are deterministic."""
-    for name in _TELEMETRY_ENV_VARS:
-        monkeypatch.delenv(name, raising=False)
-    yield
-
-
-def test_disabled_by_default():
-    cfg = TelemetryConfig.from_env()
-    assert cfg.enabled is False
-    assert cfg.service_name == DEFAULT_SERVICE_NAME
-    assert cfg.traces_endpoint == DEFAULT_COLLECTOR_ENDPOINT + "/v1/traces"
-    assert cfg.exporter == "otlp"
-    assert cfg.headers == {}
-    assert cfg.file_path is None
-
-
-@pytest.mark.parametrize(
-    "value,expected",
-    [
-        ("1", True),
-        ("true", True),
-        ("YES", True),
-        ("on", True),
-        ("0", False),
-        ("false", False),
-        ("", False),
-        ("nope", False),
-    ],
-)
-def test_enabled_flag_strict_allowlist(monkeypatch, value, expected):
-    monkeypatch.setenv("TELEMETRY_ENABLED", value)
-    assert TelemetryConfig.from_env().enabled is expected
-
-
-def test_service_name_precedence(monkeypatch):
-    # OTEL_SERVICE_NAME wins over the passed default.
-    monkeypatch.setenv("OTEL_SERVICE_NAME", "from-env")
-    assert (
-        TelemetryConfig.from_env(default_service_name="from-arg").service_name
-        == "from-env"
-    )
-    # Without the env var, the passed default is used.
-    monkeypatch.delenv("OTEL_SERVICE_NAME", raising=False)
-    assert (
-        TelemetryConfig.from_env(default_service_name="from-arg").service_name
-        == "from-arg"
-    )
-
-
-def test_endpoint_precedence_and_suffix(monkeypatch):
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel:4318")
-    assert (
-        TelemetryConfig.from_env().traces_endpoint
-        == "http://otel:4318/v1/traces"
-    )
-    # PHOENIX_COLLECTOR_ENDPOINT takes precedence and a trailing slash is
-    # stripped before the /v1/traces path is appended.
-    monkeypatch.setenv("PHOENIX_COLLECTOR_ENDPOINT", "http://phoenix:6006/")
-    assert (
-        TelemetryConfig.from_env().traces_endpoint
-        == "http://phoenix:6006/v1/traces"
-    )
-
-
-def test_api_key_becomes_bearer_header(monkeypatch):
-    monkeypatch.setenv("PHOENIX_API_KEY", "secret")
-    assert TelemetryConfig.from_env().headers == {
-        "Authorization": "Bearer secret"
-    }
-
-
-def test_file_exporter_config(monkeypatch):
-    monkeypatch.setenv("OTEL_TRACES_EXPORTER", "FILE")
-    monkeypatch.setenv("OTEL_FILE_EXPORTER_PATH", "/tmp/spans.jsonl")
-    cfg = TelemetryConfig.from_env()
-    assert cfg.exporter == "file"  # normalized to lowercase
-    assert cfg.file_path == "/tmp/spans.jsonl"
-
-
-# --- from_settings (config.yaml-driven, used by AgentApplication) -----------
-
-
-def test_from_settings_defaults():
+def test_disabled_with_no_outputs():
     cfg = TelemetryConfig.from_settings(default_service_name="Card")
     assert cfg.enabled is False
     assert cfg.service_name == "Card"
-    assert cfg.exporter == "otlp"
-    assert cfg.traces_endpoint == DEFAULT_COLLECTOR_ENDPOINT + "/v1/traces"
-    assert cfg.file_path is None
+    # Disabled and no outputs -> nothing resolved.
+    assert cfg.exporters == []
 
 
-def test_from_settings_explicit_values():
+def test_service_name_precedence():
+    # Explicit service_name wins over the passed default.
+    cfg = TelemetryConfig.from_settings(
+        service_name="explicit", default_service_name="Card"
+    )
+    assert cfg.service_name == "explicit"
+    # Without it, the passed default is used.
+    cfg = TelemetryConfig.from_settings(default_service_name="Card")
+    assert cfg.service_name == "Card"
+    # With neither, the module default.
+    cfg = TelemetryConfig.from_settings()
+    assert cfg.service_name == DEFAULT_SERVICE_NAME
+
+
+def test_enabled_without_outputs_defaults_to_remote():
+    cfg = TelemetryConfig.from_settings(enabled=True, default_service_name="C")
+    assert len(cfg.exporters) == 1
+    assert cfg.exporters[0].kind == "otlp"
+    assert cfg.exporters[0].traces_endpoint == _OTLP_ENDPOINT
+
+
+def test_multiple_outputs_fan_out():
     cfg = TelemetryConfig.from_settings(
         enabled=True,
         service_name="svc",
-        endpoint="http://phoenix:6006/",
-        exporter="FILE",
-        file_path="/tmp/s.jsonl",
+        outputs=[
+            {"type": "local", "file_path": "/tmp/s.jsonl"},
+            {"type": "remote", "endpoint": "http://phoenix:6006/"},
+            {"type": "console"},
+        ],
         default_service_name="Card",
     )
     assert cfg.enabled is True
     assert cfg.service_name == "svc"  # explicit wins over default
-    assert cfg.exporter == "file"  # normalized
-    assert cfg.traces_endpoint == "http://phoenix:6006/v1/traces"
-    assert cfg.file_path == "/tmp/s.jsonl"
+    kinds = [s.kind for s in cfg.exporters]
+    assert kinds == ["file", "otlp", "console"]
+    assert cfg.exporters[0].file_path == "/tmp/s.jsonl"
+    # Trailing slash stripped before the /v1/traces path is appended.
+    assert cfg.exporters[1].traces_endpoint == "http://phoenix:6006/v1/traces"
 
 
-def test_from_settings_api_key_still_from_env(monkeypatch):
-    monkeypatch.setenv("PHOENIX_API_KEY", "secret")
-    cfg = TelemetryConfig.from_settings(enabled=True)
-    assert cfg.headers == {"Authorization": "Bearer secret"}
+def test_local_and_remote_defaults():
+    # `local` with no file_path -> default file; `remote` with no endpoint ->
+    # default collector.
+    cfg = TelemetryConfig.from_settings(
+        enabled=True,
+        outputs=[{"type": "local"}, {"type": "remote"}],
+    )
+    assert cfg.exporters[0].kind == "file"
+    assert cfg.exporters[0].file_path == DEFAULT_FILE_PATH
+    assert cfg.exporters[1].kind == "otlp"
+    assert cfg.exporters[1].traces_endpoint == _OTLP_ENDPOINT
+
+
+def test_unknown_type_is_skipped():
+    # A typo'd type is dropped (with a warning), not silently turned into a
+    # console exporter; valid entries alongside it still resolve.
+    cfg = TelemetryConfig.from_settings(
+        enabled=True,
+        outputs=[{"type": "bogus"}, {"type": "local"}],
+    )
+    assert [s.kind for s in cfg.exporters] == ["file"]

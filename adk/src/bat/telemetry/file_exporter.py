@@ -4,8 +4,8 @@ Each finished span is written as one JSON object per line. It is synchronous by
 design (pair it with a ``SimpleSpanProcessor``) so spans are on disk the moment
 they end, with no batch/flush delay.
 
-Primary use case: the eval engine launches the agent as a subprocess with
-``OTEL_TRACES_EXPORTER=file`` and reads this file back to reconstruct per-turn
+Primary use case: the eval engine launches the agent as a subprocess with a
+``local`` telemetry output and reads this file back to reconstruct per-turn
 token usage and tool calls — replacing the metadata that used to be carried in
 the A2A messages. A separate process means an in-memory exporter cannot reach
 the agent's spans; a file is the cross-process equivalent.

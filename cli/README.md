@@ -223,7 +223,6 @@ Minimal `eval/eval.yaml`:
 evaluation:
   dataset: eval/input/tasks.json # default path if omitted
   output_dir: eval/output # default path if omitted
-  agent_url: http://127.0.0.1:9900 # must include the scheme; this is the default
   agent_startup_timeout_s: 45
   agent_shutdown_timeout_s: 10
   k: 1
@@ -247,8 +246,10 @@ judge:
 Notes:
 
 - `bat eval run` starts the agent via `uv run .` from the agent root and waits until
-  `agent_url` accepts a TCP connection, so the agent project must have its
-  dependencies installed (its own `.venv`).
+  the agent's `config.yaml` endpoint (`endpoint.url:port`) accepts a TCP
+  connection, so the agent project must have its dependencies installed (its own
+  `.venv`). The eval reads that endpoint from the agent's `config.yaml`; it is no
+  longer configured in `eval.yaml`.
 - `models` entries may also be written as `"<provider>:<model>"` strings.
 - For models that require an API key, set it in the agent's `.env` under
   `<PROVIDER>_API_KEY` (e.g. `OPENAI_API_KEY`).
