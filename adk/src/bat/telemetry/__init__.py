@@ -6,6 +6,7 @@ from .setup import (
     get_tracer,
     inject_context,
     is_enabled,
+    links_from_context,
     setup_telemetry,
     shutdown_telemetry,
 )

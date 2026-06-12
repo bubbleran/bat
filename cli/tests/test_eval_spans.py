@@ -100,7 +100,9 @@ def test_aggregate_single_agent(tmp_path: Path) -> None:
     assert usage["output_tokens"] == 7
     assert usage["total_tokens"] == 20
     assert usage["inference_time"] == 10.0  # two 5s LLM spans
-    assert tool_calls == [{"name": "search", "args": {"q": "hi"}, "id": "tool-1"}]
+    assert tool_calls == [
+        {"name": "search", "args": {"q": "hi"}, "id": "tool-1"}
+    ]
 
 
 def test_aggregate_not_found_when_conversation_absent(tmp_path: Path) -> None:

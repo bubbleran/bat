@@ -111,6 +111,25 @@ def show_version() -> None:
     typer.echo(f"bat-cli {installed_version}")
 
 
+def _validate_agent_name(name: str) -> str:
+    candidate = name.strip()
+    if not candidate:
+        raise typer.BadParameter("Agent name must not be empty.")
+    if (
+        candidate in {".", ".."}
+        or "/" in candidate
+        or "\\" in candidate
+        or "\x00" in candidate
+        or Path(candidate).is_absolute()
+    ):
+        raise typer.BadParameter(
+            "Agent name must be a single directory name, not a path "
+            "(no '/', '\\', '..', or absolute paths). Use --output-dir to "
+            "choose where the agent folder is created."
+        )
+    return candidate
+
+
 def _parse_clients_option(raw_clients: str | None) -> list[str] | None:
     if raw_clients is None:
         return None
@@ -162,7 +181,7 @@ def create_new_agent(
         help="Model provider written to config.yaml (model.provider).",
     ),
 ) -> None:
-    target_dir = output_dir / name
+    target_dir = output_dir / _validate_agent_name(name)
     parsed_clients = _parse_clients_option(clients)
 
     try:

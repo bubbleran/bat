@@ -1,8 +1,7 @@
+import json
 import re
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 
 def _upsert_env_var(content: str, key: str, value: str) -> str:
@@ -18,13 +17,64 @@ def _upsert_env_var(content: str, key: str, value: str) -> str:
     return f"{content}{replacement}\n"
 
 
-def _set_nested(data: dict[str, Any], section: str, key: str, value: Any) -> None:
-    """Set ``data[section][key] = value``, creating the section if needed."""
-    current = data.get(section)
-    if not isinstance(current, dict):
-        current = {}
-    current[key] = value
-    data[section] = current
+def _format_yaml_scalar(value: Any) -> str:
+    """Render ``value`` as a YAML scalar, quoting it only when necessary."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    text = str(value)
+    needs_quotes = (
+        text == ""
+        or text != text.strip()
+        or bool(re.search(r"""[:#\[\]{}&*!|>%@`,"']""", text))
+    )
+    # json.dumps yields an ASCII, double-quoted string that is also valid YAML.
+    return json.dumps(text) if needs_quotes else text
+
+
+def _set_yaml_value(text: str, section: str, key: str, value: Any) -> str:
+    """Set ``section.key`` to ``value`` in YAML ``text`` in place.
+
+    Edits only the target line so surrounding comments, blank lines and key
+    ordering survive (unlike a ``safe_load``/``safe_dump`` round-trip). Inserts
+    the key (or the whole section) when missing.
+    """
+    scalar = _format_yaml_scalar(value)
+    lines = text.splitlines(keepends=True)
+    section_re = re.compile(rf"^{re.escape(section)}\s*:")
+    key_re = re.compile(rf"^(\s+){re.escape(key)}\s*:(.*)$")
+
+    section_start = next(
+        (i for i, line in enumerate(lines) if section_re.match(line)), None
+    )
+
+    if section_start is None:
+        suffix = "" if (not text or text.endswith("\n")) else "\n"
+        return f"{text}{suffix}{section}:\n  {key}: {scalar}\n"
+
+    for i in range(section_start + 1, len(lines)):
+        raw = lines[i]
+        line = raw.rstrip("\r\n")
+        eol = raw[len(line):] or "\n"
+        stripped = line.strip()
+        # A non-indented, non-blank, non-comment line ends the section block.
+        if stripped and not line[:1].isspace() and not stripped.startswith("#"):
+            break
+        match = key_re.match(line)
+        if match:
+            indent, after = match.group(1), match.group(2)
+            comment_match = re.search(r"\s#", after)
+            comment = after[comment_match.start():] if comment_match else ""
+            lines[i] = f"{indent}{key}: {scalar}{comment}{eol}"
+            return "".join(lines)
+
+    # Section present but key absent: insert it as the first child.
+    header = lines[section_start]
+    if not header.endswith("\n"):
+        lines[section_start] = header + "\n"
+    lines.insert(section_start + 1, f"  {key}: {scalar}\n")
+    return "".join(lines)
 
 
 def _patch_config_yaml(
@@ -34,36 +84,33 @@ def _patch_config_yaml(
     model: str | None,
     model_provider: str | None,
 ) -> tuple[Path | None, list[str]]:
-    """Write endpoint/model values into config.yaml.
+    """Write endpoint/model values into config.yaml, preserving comments.
 
-    Loads the existing config.yaml (the agent-root marker), merges the given
-    values into the ``endpoint`` / ``model`` sections, and writes it back. Note
-    that comments in config.yaml are not preserved (YAML round-trip).
+    Edits the existing config.yaml (the agent-root marker) line by line so
+    comments and structure are kept intact, then writes it back.
     """
     if port is None and model is None and model_provider is None:
         return None, []
 
     config_path = agent_dir / "config.yaml"
-    data: dict[str, Any] = {}
-    if config_path.is_file():
-        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            data = loaded
+    content = (
+        config_path.read_text(encoding="utf-8")
+        if config_path.is_file()
+        else ""
+    )
 
     updated: list[str] = []
     if port is not None:
-        _set_nested(data, "endpoint", "port", port)
+        content = _set_yaml_value(content, "endpoint", "port", port)
         updated.append("endpoint.port")
     if model is not None:
-        _set_nested(data, "model", "name", model)
+        content = _set_yaml_value(content, "model", "name", model)
         updated.append("model.name")
     if model_provider is not None:
-        _set_nested(data, "model", "provider", model_provider)
+        content = _set_yaml_value(content, "model", "provider", model_provider)
         updated.append("model.provider")
 
-    config_path.write_text(
-        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
-    )
+    config_path.write_text(content, encoding="utf-8")
     return config_path, updated
 
 

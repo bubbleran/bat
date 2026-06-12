@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import time
@@ -342,6 +343,10 @@ def _start_agent_process(
             ["uv", "run", "."],
             cwd=agent_root,
             env=env,
+            # Own session/process group so teardown can signal the whole tree:
+            # `uv run .` forks the actual agent server as a child, and signaling
+            # only `uv` would orphan that server (leaking its port).
+            start_new_session=True,
         )
     except FileNotFoundError as exc:
         raise typer.BadParameter(
@@ -349,15 +354,29 @@ def _start_agent_process(
         ) from exc
 
 
+def _signal_agent_tree(process: subprocess.Popen, sig: int) -> None:
+    """Send ``sig`` to the agent's whole process group, falling back to the
+    launched process alone if the group can't be addressed (e.g. non-POSIX)."""
+    try:
+        os.killpg(os.getpgid(process.pid), sig)
+    except (ProcessLookupError, PermissionError, OSError, AttributeError):
+        with contextlib.suppress(ProcessLookupError, OSError):
+            process.send_signal(sig)
+
+
 def _stop_agent_process(process: subprocess.Popen, timeout_s: int) -> None:
     if process.poll() is not None:
         return
 
-    process.terminate()
+    _signal_agent_tree(process, signal.SIGTERM)
     try:
         process.wait(timeout=timeout_s)
+        return
     except subprocess.TimeoutExpired:
-        process.kill()
+        pass
+
+    _signal_agent_tree(process, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
         process.wait(timeout=timeout_s)
 
 
@@ -488,6 +507,8 @@ def eval_run() -> None:
     # reads it (rather than patching it) and connects there.
     agent_url = _agent_url_from_config(agent_root)
 
+    failed_models: list[tuple[str, str]] = []
+
     for idx, model_cfg in enumerate(cfg.models):
         typer.secho(
             f"- {model_cfg.provider}:{model_cfg.model}", fg=typer.colors.CYAN
@@ -609,6 +630,18 @@ def eval_run() -> None:
                 env=runner_env,
                 spans_dir=spans_dir_str,
             )
+        except Exception as exc:
+            # One model's failure (startup timeout, orchestrator error, ...)
+            # must not abort the whole sweep: record it and move on. Teardown
+            # still runs in the `finally` below. KeyboardInterrupt is a
+            # BaseException, so Ctrl-C still stops the run.
+            label = f"{model_cfg.provider}:{model_cfg.model}"
+            failed_models.append((label, str(exc)))
+            typer.secho(
+                f"  Model {label} failed: {exc}",
+                fg=typer.colors.RED,
+                err=True,
+            )
         finally:
             if process is not None:
                 _stop_agent_process(
@@ -616,10 +649,23 @@ def eval_run() -> None:
                 )
             _restore_agent_config(agent_root, original_config)
 
-    typer.secho(
-        f"Evaluation completed. Output: {cfg.output_dir / task_id}",
-        fg=typer.colors.GREEN,
-    )
+    completed = len(cfg.models) - len(failed_models)
+    output_path = cfg.output_dir / task_id
+    if failed_models:
+        typer.secho(
+            f"Evaluation finished: {completed}/{len(cfg.models)} model(s) "
+            f"completed, {len(failed_models)} failed. Output: {output_path}",
+            fg=typer.colors.YELLOW,
+        )
+        for label, err in failed_models:
+            typer.secho(f"  - {label}: {err}", fg=typer.colors.RED, err=True)
+        if completed == 0:
+            raise typer.Exit(code=1)
+    else:
+        typer.secho(
+            f"Evaluation completed. Output: {output_path}",
+            fg=typer.colors.GREEN,
+        )
 
 
 def eval_plot(

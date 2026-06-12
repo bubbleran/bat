@@ -15,16 +15,21 @@ def reset_state(monkeypatch):
     setup_mod._initialized = False
 
 
-def test_setup_raises_when_enabled_but_otel_missing(monkeypatch):
-    """Telemetry on + OpenTelemetry absent must hard-fail, not no-op."""
+def test_setup_disables_without_crashing_when_enabled_but_otel_missing(
+    monkeypatch,
+):
+    """Telemetry on + OpenTelemetry absent degrades gracefully, no crash.
+
+    Rather than crashing the whole agent for a missing optional extra, setup
+    logs a clear error (see ``setup_telemetry``) and returns ``False`` so the
+    agent keeps serving requests instead of raising to the caller.
+    """
     cfg = TelemetryConfig(enabled=True, service_name="test-agent")
     # Simulate the ``telemetry`` extra not being installed.
     monkeypatch.setattr(setup_mod, "trace", None)
     monkeypatch.setattr(setup_mod, "propagate", None)
 
-    with pytest.raises(RuntimeError, match="OpenTelemetry is not installed"):
-        setup_telemetry(config=cfg)
-
+    assert setup_telemetry(config=cfg) is False
     assert setup_mod.is_enabled() is False
 
 

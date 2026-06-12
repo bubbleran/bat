@@ -13,9 +13,12 @@ from a2a.helpers import (
     new_text_message,
 )
 from a2a.types import Role, SendMessageRequest, StreamResponse, TaskState
+from bat.logging import create_logger
 from httpx import AsyncClient
 
 from .contracts import EpisodeResult, EpisodeTrace, TaskSpec, TraceEvent
+
+logger = create_logger(__name__, level="info")
 
 TERMINAL_STATUSES = {"completed", "error", "input-required"}
 
@@ -210,6 +213,15 @@ class BatA2AAdapter:
             if found:
                 return usage, tool_calls
             await asyncio.sleep(0.1)
+        # Fail-open, but make it visible: no span carried this conversation id,
+        # so usage/tool-calls stay empty. Most likely the agent has telemetry
+        # disabled, or a sub-agent did not inherit the caller's context_id.
+        logger.warning(
+            "No telemetry spans found for conversation '%s' in %s after "
+            "retries; usage and tool-calls will be empty for this episode.",
+            conversation_id,
+            self.spans_dir,
+        )
         return usage, tool_calls
 
     async def run_task(

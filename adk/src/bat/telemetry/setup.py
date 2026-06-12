@@ -114,22 +114,18 @@ def setup_telemetry(
 
     Returns:
         bool: ``True`` if telemetry was activated, ``False`` if it is disabled
-            (no outputs configured).
-
-    Raises:
-        RuntimeError: if telemetry is enabled but the ``telemetry`` extra
-            (OpenTelemetry) is not installed.
+            (no outputs configured, or enabled but the ``telemetry`` extra is
+            not installed — in which case a clear error is logged and the agent
+            keeps running without telemetry rather than crashing).
     """
     global _initialized, _provider
-    
-    #Idempotent check
+
+    # Idempotent check
     if _initialized:
         return True
 
-    cfg = (
-        config
-    )
-    if not cfg.enabled:
+    cfg = config
+    if cfg is None or not cfg.enabled:
         logger.debug(
             "Telemetry disabled (add a `telemetry.output` entry in "
             "config.yaml to enable)."
@@ -137,11 +133,13 @@ def setup_telemetry(
         return False
 
     if trace is None:
-        raise RuntimeError(
-            "Telemetry is enabled but OpenTelemetry is not installed. "
-            "Install the extra: pip install 'bat-adk[telemetry]'."
+        logger.error(
+            "Telemetry is enabled in config.yaml but no telemetry is "
+            "installed; continuing with telemetry disabled. Install the "
+            "extra to enable it: pip install 'bat-adk[telemetry]'."
         )
-        
+        return False
+
     # Necessary imports (OTel SDK and exporters) are deferred until this point
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
@@ -224,13 +222,17 @@ def shutdown_telemetry() -> None:
 
 
 def get_tracer(name: str) -> Any:
-    """Return a tracer, or a no-op tracer when telemetry is not initialized.
+    """Return a tracer for ``name``.
 
-    Until :func:`setup_telemetry` has run successfully (telemetry disabled, or
-    simply not set up yet) a no-op tracer is returned, so usage at call sites is
-    always safe.
+    When OpenTelemetry is not installed, returns a no-op tracer. Otherwise it
+    returns OTel's tracer, which is a *proxy*: before :func:`setup_telemetry`
+    installs a provider it produces non-recording spans, and it automatically
+    starts recording once the provider is set. This is what makes a
+    module-level ``tracer = get_tracer(__name__)`` (captured at import time,
+    before ``setup_telemetry`` runs) work -- returning a ``_NoopTracer`` here
+    would cache a dead no-op and silently drop every manual span.
     """
-    if not _initialized:
+    if trace is None:
         return _NoopTracer()
     return trace.get_tracer(name)
 
@@ -257,6 +259,25 @@ def extract_context(carrier: Dict[str, str]) -> Optional[Any]:
     if not _initialized or not carrier:
         return None
     return propagate.extract(carrier)
+
+
+def links_from_context(parent_ctx: Optional[Any]) -> list:
+    """Build a span ``Link`` list pointing at the propagated parent trace.
+
+    Returned value is meant for ``start_as_current_span(links=...)``. We use a
+    Link (instead of ``context=parent_ctx``) so a called agent runs as its own
+    **separate trace** while staying causally connected to the caller's trace.
+    Returns ``[]`` when telemetry is off, OTel is absent, or no valid parent
+    context was propagated.
+    """
+    if not _initialized or parent_ctx is None:
+        return []
+    span_ctx = trace.get_current_span(parent_ctx).get_span_context()
+    if not span_ctx.is_valid:
+        return []
+    from opentelemetry.trace import Link
+
+    return [Link(span_ctx)]
 
 
 def is_enabled() -> bool:

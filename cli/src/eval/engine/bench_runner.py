@@ -5,8 +5,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .contracts import EpisodeResult, TaskSpec
+from bat.logging import create_logger
+
+from .contracts import EpisodeResult, EpisodeVerdict, TaskSpec
 from .evaluator import EpisodeEvaluator
+
+logger = create_logger(__name__, level="info")
 
 _QUALITATIVE_FIELDS = (
     "response_relevance",
@@ -106,18 +110,36 @@ class BenchRunner:
         for task in tasks:
             for i in range(max(1, int(self.config.k))):
                 thread_id = f"{task.id}__try{i}"
-                episode = await self.adapter.run_task(
-                    task=task, thread_id=thread_id
-                )
-                episode.verdict = self.evaluator.evaluate(
-                    episode.final_status,
-                    episode.final_output,
-                    episode.trace.tool_calls,
-                    task.expected,
-                )
-                episode.expected_outcome = task.expected.expected_outcome
-                episode.model_name = self.config.model
-                episode.aux["attempt_index"] = i
+                try:
+                    episode = await self.adapter.run_task(
+                        task=task, thread_id=thread_id
+                    )
+                    episode.verdict = self.evaluator.evaluate(
+                        episode.final_status,
+                        episode.final_output,
+                        episode.trace.tool_calls,
+                        task.expected,
+                    )
+                    episode.expected_outcome = task.expected.expected_outcome
+                    episode.model_name = self.config.model
+                    episode.aux["attempt_index"] = i
+                except Exception as exc:
+                    # One bad attempt must not abort the whole run: record it as
+                    # a failed episode so the summary still accounts for it.
+                    logger.error(
+                        "Task '%s' attempt %d failed: %s", task.id, i, exc
+                    )
+                    episode = EpisodeResult(
+                        model_name=self.config.model,
+                        task_id=task.id,
+                        expected_outcome=task.expected.expected_outcome,
+                        final_status="error",
+                        final_output=f"<eval error: {exc}>",
+                        verdict=EpisodeVerdict(
+                            passed=False, reason=f"eval error: {exc}"
+                        ),
+                        aux={"attempt_index": i, "error": str(exc)},
+                    )
                 all_attempts.append(episode)
 
         self.persist_results(all_attempts)
