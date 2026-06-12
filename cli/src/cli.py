@@ -162,7 +162,7 @@ def create_new_agent(
         help="Model provider value written to .env.",
     ),
 ) -> None:
-    target_dir = output_dir / name
+    target_dir = output_dir / name.lower()
     parsed_clients = _parse_clients_option(clients)
 
     try:
@@ -173,6 +173,7 @@ def create_new_agent(
             port=port,
             model=model,
             model_provider=model_provider,
+            class_name_source=name,
         )
     except FileExistsError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
