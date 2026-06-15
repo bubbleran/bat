@@ -131,9 +131,7 @@ This means that once an agent's `.env` carries the Docker defaults, `bat build` 
 
 The **evaluation engine** is the most substantial part of BAT-CLI. It runs a dataset of tasks against a live agent, judges the outcomes, and produces machine-readable artifacts and charts. It is exposed through four subcommands — `init`, `show`, `run`, and `plot` — and is implemented as a pipeline of cooperating components.
 
-<p align="center">
-  <img src="images/eval-pipeline.png" alt="The BAT-CLI evaluation pipeline: from dataset to evaluation result" width="600">
-</p>
+![The BAT-CLI evaluation pipeline: from dataset to evaluation result](images/eval-pipeline.png)
 
 ### Pipeline Overview
 
