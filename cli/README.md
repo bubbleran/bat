@@ -115,11 +115,12 @@ bat
 │   ├── --repo
 │   ├── --version
 │   └── --no-cache
-└── push
-    ├── --context, -C
-    ├── --docker-registry
-    ├── --repo
-    └── --version
+├── push
+│   ├── --context, -C
+│   ├── --docker-registry
+│   ├── --repo
+│   └── --version
+└── version
 ```
 
 Built-in help is available at every level:
@@ -146,7 +147,7 @@ bat init agent my_agent --output-dir .
 # pre-generate LLM clients
 bat init agent my_agent --clients reformulator,planner,executor
 
-# set the port/model/provider written to .env
+# set the port/model/provider written to config.yaml
 bat init agent my_agent --port 9900 --model gpt-4o-mini --model-provider openai
 ```
 
@@ -161,14 +162,18 @@ bat add client planner,executor
 bat add client planner,executor --force
 ```
 
-### 3. Update agent environment variables
+### 3. Update agent settings
 
-Run from the agent root (updates an existing `.env`):
+Run from the agent root (must contain `config.yaml`). The runtime values
+(`--port`, `--model`, `--model-provider`) are written into `config.yaml`
+(`endpoint.port`, `model.name`, `model.provider`); the Docker defaults
+(`--docker-registry`, `--repo`) are written into `.env`:
 
 ```bash
+# endpoint.port / model.name / model.provider in config.yaml
 bat set env --port 8080 --model gpt-4o-mini --model-provider openai
 
-# also set Docker defaults for build/push
+# Docker defaults for build/push, written to .env
 bat set env --docker-registry hub.bubbleran.com --repo orama/labs/my-agent
 ```
 

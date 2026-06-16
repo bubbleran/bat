@@ -261,25 +261,6 @@ def extract_context(carrier: Dict[str, str]) -> Optional[Any]:
     return propagate.extract(carrier)
 
 
-def links_from_context(parent_ctx: Optional[Any]) -> list:
-    """Build a span ``Link`` list pointing at the propagated parent trace.
-
-    Returned value is meant for ``start_as_current_span(links=...)``. We use a
-    Link (instead of ``context=parent_ctx``) so a called agent runs as its own
-    **separate trace** while staying causally connected to the caller's trace.
-    Returns ``[]`` when telemetry is off, OTel is absent, or no valid parent
-    context was propagated.
-    """
-    if not _initialized or parent_ctx is None:
-        return []
-    span_ctx = trace.get_current_span(parent_ctx).get_span_context()
-    if not span_ctx.is_valid:
-        return []
-    from opentelemetry.trace import Link
-
-    return [Link(span_ctx)]
-
-
 def is_enabled() -> bool:
     """Whether telemetry has been successfully initialized."""
     return _initialized
