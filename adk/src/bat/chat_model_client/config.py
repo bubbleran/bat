@@ -138,7 +138,7 @@ class ChatModelClientConfig(BaseModel):
         )
 
     @classmethod
-    def from_env(
+    def load(
         cls,
         client_name: Optional[str] = None,
     ) -> "ChatModelClientConfig":

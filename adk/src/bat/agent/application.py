@@ -94,7 +94,8 @@ class AgentApplication:
                 the agent state.
         """
         # config.yaml (in the cwd) is the source of truth for settings.
-        self._config = AgentConfig.load()
+        config_path = os.getenv("CONFIG_PATH", "./config.yaml")
+        self._config = AgentConfig.load(config_path)
 
         # Model: install the config.yaml defaults so ChatModelClient picks them
         # up. The env vars MODEL/MODEL_PROVIDER/BASE_URL still override these.
