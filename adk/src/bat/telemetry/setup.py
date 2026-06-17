@@ -1,6 +1,7 @@
 import atexit
 import contextlib
 from typing import Any, Dict, Optional
+from .attributes import OPENINFERENCE_PROJECT_NAME
 from .file_exporter import JsonFileSpanExporter
 from ..logging import create_logger
 from .config import TelemetryConfig
@@ -145,7 +146,13 @@ def setup_telemetry(
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    resource = Resource.create({"service.name": cfg.service_name})
+    resource_attributes = {"service.name": cfg.service_name}
+    # Phoenix files a trace under the project named by this resource attribute
+    # (omitted -> Phoenix's "default" project). Set only when configured so we
+    # don't pin every deployment to a single project.
+    if cfg.project_name:
+        resource_attributes[OPENINFERENCE_PROJECT_NAME] = cfg.project_name
+    resource = Resource.create(resource_attributes)
     provider = TracerProvider(resource=resource)
 
     # Fan out to every configured destination: one span processor per exporter,

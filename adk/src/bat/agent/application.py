@@ -144,6 +144,7 @@ class AgentApplication:
         telemetry_config = TelemetryConfig.from_settings(
             enabled=enabled,
             service_name=telemetry.service_name,
+            project_name=telemetry.project_name,
             outputs=[o.model_dump() for o in telemetry.output],
             default_service_name=self._agent_card.name,
         )

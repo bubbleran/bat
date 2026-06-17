@@ -75,12 +75,16 @@ class TelemetryConfig:
     Attributes:
         enabled (bool): Master switch.
         service_name (str): Value of the ``service.name`` resource attribute.
+        project_name (Optional[str]): OpenInference/Phoenix project name, set as
+            the ``openinference.project.name`` resource attribute. ``None``
+            leaves Phoenix's ``default`` project.
         exporters (List[ExporterSpec]): One entry per active destination; the
             spans are fanned out to all of them.
     """
 
     enabled: bool
     service_name: str
+    project_name: Optional[str] = None
     exporters: List[ExporterSpec] = field(default_factory=list)
     
     @classmethod
@@ -89,6 +93,7 @@ class TelemetryConfig:
         *,
         enabled: bool = False,
         service_name: Optional[str] = None,
+        project_name: Optional[str] = None,
         outputs: Optional[List[Any]] = None,
         default_service_name: Optional[str] = None,
     ) -> "TelemetryConfig":
@@ -101,6 +106,9 @@ class TelemetryConfig:
             enabled (bool): Master switch.
             service_name (Optional[str]): ``service.name``; falls back to
                 ``default_service_name`` then ``DEFAULT_SERVICE_NAME``.
+            project_name (Optional[str]): OpenInference/Phoenix project name
+                (the ``openinference.project.name`` resource attribute); ``None``
+                leaves Phoenix's ``default`` project.
             outputs (Optional[List[Any]]): One entry per destination, each a
                 dict (or object) with ``type`` (``local``/``remote``/
                 ``console``) plus ``file_path`` / ``endpoint`` as relevant.
@@ -133,5 +141,6 @@ class TelemetryConfig:
         return cls(
             enabled=enabled,
             service_name=resolved_service_name,
+            project_name=project_name,
             exporters=specs,
         )

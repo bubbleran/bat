@@ -84,3 +84,15 @@ def test_unknown_type_is_skipped():
         outputs=[{"type": "bogus"}, {"type": "local"}],
     )
     assert [s.kind for s in cfg.exporters] == ["file"]
+
+
+def test_project_name_passthrough():
+    # project_name flows through; absent -> None (Phoenix's "default" project).
+    cfg = TelemetryConfig.from_settings(
+        enabled=True, project_name="my-proj", outputs=[{"type": "console"}]
+    )
+    assert cfg.project_name == "my-proj"
+    cfg = TelemetryConfig.from_settings(
+        enabled=True, outputs=[{"type": "console"}]
+    )
+    assert cfg.project_name is None

@@ -151,10 +151,17 @@ class TelemetrySettings(BaseModel):
     Attributes:
         service_name (Optional[str]): ``service.name``; defaults to the agent
             card name.
+        project_name (Optional[str]): OpenInference/Phoenix project to file
+            traces under (the ``openinference.project.name`` resource
+            attribute). When unset, Phoenix uses the ``default`` project. This
+            is distinct from ``service_name`` (which labels spans within a
+            project). Agents that share a distributed trace must use the same
+            project or the trace fragments across projects.
         output (List[OutputConfig]): One entry per active destination.
     """
 
     service_name: Optional[str] = None
+    project_name: Optional[str] = None
     output: List[OutputConfig] = Field(default=[])
 
 
