@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Dict, List, Literal, Optional, Tuple
 
 import yaml
@@ -101,7 +102,7 @@ class ModelConfig(BaseModel):
 
     These three values are the only ones an environment variable may override:
     ``MODEL`` / ``MODEL_PROVIDER`` / ``BASE_URL`` take precedence when set (see
-    :meth:`bat.chat_model_client.ChatModelClientConfig.from_env`).
+    :meth:`bat.chat_model_client.ChatModelClientConfig.load`).
 
     Attributes:
         provider (Optional[str]): Model provider, e.g. ``openai``.
@@ -275,6 +276,10 @@ class AgentConfig(BaseModel):
         """Load the agent configuration from a YAML file. If the YAML file is
         not found, an empty configuration is used.
 
+        Environment variables referenced as ``$VAR`` or ``${VAR}`` are expanded
+        in the file before parsing, so values can be templated from the
+        environment (e.g. ``port: ${PORT}``). Unset variables are left literal.
+
         Args:
             path (str): The path to the configuration YAML file.
 
@@ -287,7 +292,7 @@ class AgentConfig(BaseModel):
         """
         try:
             with open(path, "r") as f:
-                data = yaml.safe_load(f)
+                data = yaml.safe_load(os.path.expandvars(f.read()))
             cfg = cls.model_validate(data)
             cfg._mcp_server_connections = _build_mcp_server_connections(
                 mcp_servers=cfg.mcp_servers,

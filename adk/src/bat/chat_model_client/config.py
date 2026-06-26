@@ -43,7 +43,7 @@ class ChatModelClientConfig(BaseModel):
         client_name (str, optional): Name for the client.
 
     The class can be instantiated directly or created from environment variables
-    using the `from_env` class method (usually preferred).
+    using the `load` class method (usually preferred).
 
     Examples
     -------
@@ -59,7 +59,7 @@ class ChatModelClientConfig(BaseModel):
 
     From environment variables:
     ```python
-    config = ChatModelClientConfig.from_env(
+    config = ChatModelClientConfig.load(
         client_name="SampleClient",
     )
     ```
@@ -70,7 +70,7 @@ class ChatModelClientConfig(BaseModel):
 
     # Fallback model settings sourced from config.yaml's ``model`` section,
     # installed by ``AgentApplication`` before the graph is built. Environment
-    # variables take precedence over these (see :meth:`from_env`). Never holds
+    # variables take precedence over these (see :meth:`load`). Never holds
     # secrets (API keys stay in the environment).
     _config_defaults: ClassVar[Dict[str, Optional[str]]] = {}
 
@@ -89,7 +89,7 @@ class ChatModelClientConfig(BaseModel):
     )
 
     @classmethod
-    def set_defaults(
+    def _set_defaults(
         cls,
         *,
         provider: Optional[str] = None,
@@ -98,7 +98,7 @@ class ChatModelClientConfig(BaseModel):
     ) -> None:
         """Install fallback model settings (typically from config.yaml).
 
-        ``from_env`` uses these only when the corresponding environment variable
+        ``load`` uses these only when the corresponding environment variable
         is absent, implementing the precedence ``env > config.yaml`` for the
         model, provider and base URL.
         """
@@ -109,7 +109,7 @@ class ChatModelClientConfig(BaseModel):
         }
 
     @classmethod
-    def clear_defaults(cls) -> None:
+    def _clear_defaults(cls) -> None:
         """Drop any installed fallback model settings."""
         cls._config_defaults = {}
 
@@ -143,7 +143,7 @@ class ChatModelClientConfig(BaseModel):
         client_name: Optional[str] = None,
     ) -> "ChatModelClientConfig":
         """Create a `ChatModelClientConfig` from environment variables, falling
-        back to the config.yaml defaults installed via :meth:`set_defaults`.
+        back to the config.yaml.
 
         Resolution follows the precedence ``env > config.yaml``:
         - `MODEL`: model name (or `<provider>:<model>`); falls back to
@@ -200,6 +200,26 @@ class ChatModelClientConfig(BaseModel):
             base_url=base_url,
             client_name=client_name,
         )
+
+    @classmethod
+    def from_env(
+        cls,
+        client_name: Optional[str] = None,
+    ) -> "ChatModelClientConfig":
+        """Backward-compatible alias for :meth:`load`.
+
+        ``from_env`` was the original name of this constructor; it is retained
+        so existing callers keep working. New code should call :meth:`load`,
+        which this delegates to verbatim (same environment/config.yaml
+        precedence and the same raised errors).
+
+        Args:
+            client_name (Optional[str]): Name for the client.
+
+        Returns:
+            An instance of `ChatModelClientConfig`.
+        """
+        return cls.load(client_name=client_name)
 
     def build_default_headers(
         self,

@@ -16,6 +16,7 @@ imported when the ``telemetry`` extra is installed (setup.py imports it lazily).
 
 import contextlib
 import json
+import os
 import threading
 from typing import Any, Dict, Sequence
 
@@ -52,6 +53,11 @@ class JsonFileSpanExporter(SpanExporter):
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
+        # Create the parent directory when the configured path points into one
+        # that does not exist yet, so a nested file_path "just works".
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         # Long-lived append handle (kept open across exports); the eval passes
         # a fresh path per run.
         self._file = open(path, "a", encoding="utf-8")  # noqa: SIM115

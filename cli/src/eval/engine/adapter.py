@@ -42,6 +42,7 @@ _ATTR_CONVERSATION_ID = "gen_ai.conversation.id"
 _ATTR_TOKEN_PROMPT = "llm.token_count.prompt"
 _ATTR_TOKEN_COMPLETION = "llm.token_count.completion"
 _ATTR_TOKEN_TOTAL = "llm.token_count.total"
+_ATTR_TOKEN_CACHE_READ = "llm.token_count.prompt_details.cache_read"
 _ATTR_SPAN_KIND = "openinference.span.kind"
 _ATTR_TOOL_NAME = "tool.name"
 _ATTR_INPUT_VALUE = "input.value"
@@ -117,6 +118,7 @@ def _aggregate_from_spans(
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
+        "cached_input_tokens": 0,
         "inference_time": 0.0,
     }
     tool_calls: list[dict[str, Any]] = []
@@ -140,6 +142,9 @@ def _aggregate_from_spans(
             usage["output_tokens"] += out_tok
             usage["total_tokens"] += int(
                 attributes.get(_ATTR_TOKEN_TOTAL) or (in_tok + out_tok)
+            )
+            usage["cached_input_tokens"] += int(
+                attributes.get(_ATTR_TOKEN_CACHE_READ) or 0
             )
             start, end = span.get("start_time"), span.get("end_time")
             if isinstance(start, (int, float)) and isinstance(

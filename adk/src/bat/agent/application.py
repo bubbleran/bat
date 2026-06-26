@@ -100,7 +100,7 @@ class AgentApplication:
         # Model: install the config.yaml defaults so ChatModelClient picks them
         # up. The env vars MODEL/MODEL_PROVIDER/BASE_URL still override these.
         if self._config.model is not None:
-            ChatModelClientConfig.set_defaults(
+            ChatModelClientConfig._set_defaults(
                 provider=self._config.model.provider,
                 name=self._config.model.name,
                 base_url=self._config.model.base_url,
@@ -120,7 +120,9 @@ class AgentApplication:
         )
         self._url = endpoint.url if endpoint is not None else None
 
-        self._agent_card_display = bool(os.getenv("AGENT_CARD_DISPLAY", "1"))
+        self._agent_card_display = os.getenv(
+            "AGENT_CARD_DISPLAY", "1"
+        ).strip().lower() in {"1", "true", "yes", "on"}
         # Agent card path: config.yaml's `agent_card` is the source of truth;
         # AGENT_CARD_PATH env stays as a fallback, then the default location.
         agent_card_path = (

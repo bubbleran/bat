@@ -36,11 +36,11 @@ def test_service_name_precedence():
     assert cfg.service_name == DEFAULT_SERVICE_NAME
 
 
-def test_enabled_without_outputs_defaults_to_remote():
+def test_enabled_without_outputs_resolves_no_exporters():
+    # No implicit fallback: enabling telemetry without any output yields no
+    # exporters (an output entry is required to pick a destination).
     cfg = TelemetryConfig.from_settings(enabled=True, default_service_name="C")
-    assert len(cfg.exporters) == 1
-    assert cfg.exporters[0].kind == "otlp"
-    assert cfg.exporters[0].traces_endpoint == _OTLP_ENDPOINT
+    assert cfg.exporters == []
 
 
 def test_multiple_outputs_fan_out():

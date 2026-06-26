@@ -41,14 +41,7 @@ def _spec_from_type(
     Unknown ``type`` values are skipped (with a warning) rather than raising,
     so one bad entry never disables the whole telemetry pipeline.
     """
-    kind= type_value.strip().lower() if type_value else None
-    if kind is None:
-        logger.warning(
-            "Unknown telemetry output type %r; skipping (expected one of "
-            "local, remote, console).",
-            type_value,
-        )
-        return None
+    kind = type_value.strip().lower() if type_value else None
     if kind == "file" or kind == "local":
         return ExporterSpec(
             kind="file", file_path=file_path or DEFAULT_FILE_PATH
@@ -61,8 +54,10 @@ def _spec_from_type(
         )
     if kind == "console":
         return ExporterSpec(kind="console")
-    
-    logger.warning("Unknown telemetry output type %r; skipping (expected one of local, remote, console).",
+
+    logger.warning(
+        "Unknown telemetry output type %r; skipping (expected one of "
+        "local, remote, console).",
         type_value,
     )
     return None
@@ -127,16 +122,6 @@ class TelemetryConfig:
             )
             if spec is not None:
                 specs.append(spec)
-
-        # Enabled with no usable output -> fall back to a remote (OTLP)
-        # exporter at the default collector, matching the historical default.
-        if enabled and not specs:
-            logger.debug(
-                "Telemetry enabled with no outputs; defaulting to remote "
-                "(OTLP) at %s.",
-                DEFAULT_COLLECTOR_ENDPOINT,
-            )
-            specs.append(_spec_from_type("remote"))
 
         return cls(
             enabled=enabled,

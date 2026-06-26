@@ -167,9 +167,19 @@ def setup_telemetry(
             path = exporter.file_path or "spans.jsonl"
             # SimpleSpanProcessor: synchronous write on span end, so a reader
             # (e.g. the eval engine) sees spans without a flush/batch delay.
-            provider.add_span_processor( SimpleSpanProcessor(JsonFileSpanExporter(path)))
+            try:
+                provider.add_span_processor(
+                    SimpleSpanProcessor(JsonFileSpanExporter(path))
+                )
+            except OSError as e:
+                logger.error(
+                    "Telemetry: cannot open file exporter at %s (%s); "
+                    "skipping this destination.",
+                    path,
+                    e,
+                )
+                continue
             logger.info("Telemetry: file exporter -> %s.", path)
-            
         elif exporter.kind == "otlp":
             otlp_exp = OTLPSpanExporter(endpoint=exporter.traces_endpoint)
             provider.add_span_processor(BatchSpanProcessor(otlp_exp))
