@@ -49,7 +49,7 @@ class ChatModelClient:
 
     Examples:
     ```python
-    config = ChatModelClientConfig.from_env(
+    config = ChatModelClientConfig.load(
         client_name="SampleClient",
     )
     client = ChatModelClient(
@@ -96,7 +96,7 @@ class ChatModelClient:
             )
 
         self.config = (
-            ChatModelClientConfig.from_env()
+            ChatModelClientConfig.load()
             if chat_model_config is None
             else chat_model_config
         )

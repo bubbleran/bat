@@ -105,7 +105,6 @@ class JudgeSpec(BaseModel):
 class EvalConfig(BaseModel):
     dataset: Path
     output_dir: Path
-    agent_url: str
     agent_startup_timeout_s: int = 45
     agent_shutdown_timeout_s: int = 10
     k: int

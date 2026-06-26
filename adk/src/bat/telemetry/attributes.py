@@ -38,6 +38,14 @@ BAT_TASK_ID = "bat.a2a.task_id"
 # Session.
 SESSION_ID = "session.id"
 
+# OpenInference/Phoenix project routing. Set as a *Resource* attribute, it tells
+# Phoenix which project to file a trace under (default project: "default").
+# Distinct from service.name: service.name only labels spans *within* a project,
+# whereas this selects the project itself. NOTE: Phoenix reconstructs a trace
+# within a single project, so agents that share a distributed trace (via the
+# propagated traceparent) must use the same project or the trace fragments.
+OPENINFERENCE_PROJECT_NAME = "openinference.project.name"
+
 # --- OpenInference attributes (read side: Fase C aggregation) --------------
 OPENINFERENCE_LLM_TOKEN_PROMPT = "llm.token_count.prompt"
 OPENINFERENCE_LLM_TOKEN_COMPLETION = "llm.token_count.completion"
