@@ -2,13 +2,27 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import yaml
+from bat.chat_model_client.config import ModelProvider
 
 from .contracts import EvalConfig, JudgeSpec, ModelSpec
 
 _ENV_VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Providers the agent's ChatModelClient actually accepts (a closed Literal in
+# bat-adk). Validated here so a bad provider fails as an upfront config error
+# instead of a late, per-episode ValidationError from the client.
+_VALID_PROVIDERS = frozenset(get_args(ModelProvider))
+
+
+def _validate_provider(provider: str, *, field_name: str) -> None:
+    if provider not in _VALID_PROVIDERS:
+        raise ValueError(
+            f"{field_name}.provider '{provider}' is not supported. "
+            f"Valid providers: {', '.join(sorted(_VALID_PROVIDERS))}."
+        )
 
 
 def _to_bool(value: Any, *, default: bool) -> bool:
@@ -125,6 +139,7 @@ def _parse_env_map(raw: Any, *, section_name: str) -> dict[str, str]:
 def _parse_model_spec(item: Any, *, section_name: str) -> ModelSpec:
     if isinstance(item, str):
         provider, model = _split_provider_model(item, field_name=section_name)
+        _validate_provider(provider, field_name=section_name)
         return ModelSpec(provider=provider, model=model)
 
     if not isinstance(item, dict):
@@ -147,6 +162,8 @@ def _parse_model_spec(item: Any, *, section_name: str) -> ModelSpec:
             f"{section_name} must define at least one valid provider and model (or model as '<provider>:<model>')"
         )
 
+    _validate_provider(provider, field_name=section_name)
+
     return ModelSpec(
         provider=provider,
         model=model,
@@ -161,6 +178,7 @@ def _parse_judge_spec(item: Any) -> JudgeSpec | None:
 
     if isinstance(item, str):
         provider, model = _split_provider_model(item, field_name="judge")
+        _validate_provider(provider, field_name="judge")
         return JudgeSpec(provider=provider, model=model)
 
     if not isinstance(item, dict):
@@ -190,6 +208,8 @@ def _parse_judge_spec(item: Any) -> JudgeSpec | None:
         raise ValueError(
             "judge must define provider and model (or model as '<provider>:<model>')"
         )
+
+    _validate_provider(provider, field_name="judge")
 
     return JudgeSpec(
         provider=provider,
@@ -227,11 +247,6 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
     output_dir = _resolve_path(
         agent_root, evaluation_section.get("output_dir"), "eval/output"
     )
-    agent_url = (
-        _to_optional_str(evaluation_section.get("agent_url"))
-        or "http://127.0.0.1:9900"
-    )
-
     agent_startup_timeout_s = _to_positive_int(
         evaluation_section.get("agent_startup_timeout_s"),
         field_name="evaluation.agent_startup_timeout_s",
@@ -261,7 +276,6 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
     return EvalConfig(
         dataset=dataset,
         output_dir=output_dir,
-        agent_url=agent_url,
         agent_startup_timeout_s=agent_startup_timeout_s,
         agent_shutdown_timeout_s=agent_shutdown_timeout_s,
         k=k,
@@ -277,7 +291,6 @@ def default_eval_yaml() -> str:
         "evaluation:\n"
         "  dataset: eval/input/tasks.json\n"
         "  output_dir: eval/output\n"
-        "  agent_url: http://127.0.0.1:9900\n"
         "  agent_startup_timeout_s: 45\n"
         "  agent_shutdown_timeout_s: 10\n"
         "  k: 1\n"

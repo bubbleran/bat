@@ -53,9 +53,9 @@ replacing the manual collection and exporting to **Arize Phoenix**.
   remote A2A calls).
 - **Backend:** **Arize Phoenix** over OTLP/HTTP, runnable locally; but the setup is
   vendor-neutral (see [§7](#7-export-and-backend-alternatives)).
-- **Fully opt-in:** without `TELEMETRY_ENABLED=1` everything is a no-op and the ADK
-  behaves exactly as before (no spans, no exporters). The OTel dependencies live
-  in an optional extra.
+- **Fully opt-in:** without a configured `telemetry.output` in `config.yaml`
+  everything is a no-op and the ADK behaves exactly as before (no spans, no
+  exporters). The OTel dependencies live in an optional extra.
 
 ---
 
@@ -118,33 +118,38 @@ Centralized registry of span attribute names and operation values. Two families:
 file* needs updating. The write/read split lets the two specs evolve independently.
 
 #### `src/bat/telemetry/config.py`
-Resolves configuration from environment variables. Exposes the `TelemetryConfig`
-dataclass with `from_env()`. Variables read:
+The `TelemetryConfig` dataclass (holding a list of `ExporterSpec`, one per
+destination) with a single builder:
 
-| Variable | Effect | Default |
-|---|---|---|
-| `TELEMETRY_ENABLED` | master switch (opt-in) | `false` |
-| `OTEL_SERVICE_NAME` | `service.name` | agent card name |
-| `PHOENIX_COLLECTOR_ENDPOINT` | base endpoint (checked first) | `http://localhost:6006` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | base endpoint (fallback) | — |
-| `PHOENIX_API_KEY` | sent as `Authorization: Bearer` header | — |
-| `OTEL_TRACES_EXPORTER` | `otlp` or `console` | `otlp` |
+- **`from_settings(...)`** — the only builder: `AgentApplication` reads the
+  `telemetry` section of `config.yaml` (a `service_name` plus the `output` list)
+  and passes it in. Each `output` entry is resolved into one `ExporterSpec` by
+  `type`:
 
-The final traces endpoint is `<base>/v1/traces` (OTLP/HTTP). Boolean parsing uses a
-strict allowlist (`1/true/yes/on`) to avoid accidental enablement.
-**Why:** a single source of truth for endpoint, headers and flags; it reads both the
-Phoenix variables and the standard OTel ones, so it's already ready for other
-backends.
+| `type` | Exporter | Relevant field | Default |
+|---|---|---|---|
+| `local` | JSONL file (`JsonFileSpanExporter`) | `file_path` | `spans.jsonl` |
+| `remote` | OTLP/HTTP to Phoenix | `endpoint` | `http://localhost:6006` |
+| `console` | stdout (`ConsoleSpanExporter`) | — | — |
+
+For `remote` the final traces endpoint is `<endpoint>/v1/traces`. Unknown
+`type` values are dropped with a warning (they never disable the whole
+pipeline). Telemetry is **enabled when at least one valid output is configured**
+— there is no `enabled` flag and nothing is read from the environment.
+**Why:** a single source of truth in `config.yaml`; enablement is implied by
+configuring a destination, so there is no separate switch to forget.
 
 #### `src/bat/telemetry/setup.py`
 The OpenTelemetry bootstrap and the helpers. Main components:
 
-- **`setup_telemetry(service_name=None) -> bool`**: idempotent. If telemetry is
-  disabled or the dependencies are missing, it is a no-op and returns `False` (logs
-  a warning guiding to install the extra). Otherwise it creates
-  `Resource(service.name=...)`, `TracerProvider`, a `BatchSpanProcessor` with an
-  `OTLPSpanExporter` (HTTP) — or a `ConsoleSpanExporter` if
-  `OTEL_TRACES_EXPORTER=console` — sets the global tracer provider and enables
+- **`setup_telemetry(config) -> bool`**: idempotent. If telemetry is disabled
+  (no outputs) it is a no-op and returns `False`; if it is enabled but the
+  dependencies are missing it raises (guiding to install the extra). Otherwise it
+  creates `Resource(service.name=...)`, a `TracerProvider`, and **one span
+  processor per configured output** (a `SimpleSpanProcessor` for `local`,
+  a `BatchSpanProcessor` with `OTLPSpanExporter`/`ConsoleSpanExporter` for
+  `remote`/`console`), so spans fan out to every destination at once. It then
+  sets the global tracer provider and enables
   `LangChainInstrumentor().instrument(...)` from OpenInference. Finally it applies
   the `_patch_openinference_langgraph_callbacks()` shim. It also registers
   `shutdown_telemetry()` with `atexit` to flush the exporters on exit.
@@ -176,9 +181,9 @@ buffered spans; it is idempotent and a no-op when telemetry was never set up.
 
 #### `src/bat/telemetry/file_exporter.py`
 A minimal `SpanExporter` that appends each finished span to a file as one JSON
-object per line (JSON Lines). Selected with `OTEL_TRACES_EXPORTER=file` and
-`OTEL_FILE_EXPORTER_PATH=<path>`; paired with a `SimpleSpanProcessor` so spans
-hit disk **synchronously** the moment they end (no batch/flush delay).
+object per line (JSON Lines). Selected with a `local` output (`file_path`);
+paired with a `SimpleSpanProcessor` so spans hit disk **synchronously** the
+moment they end (no batch/flush delay).
 **Why:** the eval engine runs the agent as a subprocess, so an in-memory
 exporter cannot reach its spans — a file is the cross-process equivalent. The
 eval reconstructs per-episode token usage and tool calls from these files (this
@@ -201,13 +206,15 @@ Added the optional **`telemetry`** extra:
 `openinference-instrumentation-langchain`. Also added to the `all` meta-extra.
 **Why:** keep the base install lightweight; telemetry is pulled only with
 `pip install 'bat-adk[telemetry]'`. Installation is decoupled from enablement
-(`TELEMETRY_ENABLED`).
+(configuring a `telemetry.output` in `config.yaml`).
 
 #### `src/bat/agent/application.py`
-Imports `setup_telemetry` and calls it in `AgentApplication.__init__`, after loading
-the agent card, passing `service_name=self._agent_card.name`.
-**Why:** a single initialization at startup; the agent card name becomes the OTel
-`service.name`. If telemetry is off, it's a no-op (backward compatible).
+Loads `config.yaml` first, builds a `TelemetryConfig` from its `telemetry` section
+via `TelemetryConfig.from_settings(..., default_service_name=self._agent_card.name)`,
+and calls `setup_telemetry(config=...)`. It also installs the `model` defaults on
+`ChatModelClientConfig` and reads the endpoint (url/ports) from `config.endpoint`.
+**Why:** `config.yaml` is the single source of truth; the agent card name becomes
+the default OTel `service.name`. If telemetry is off, it's a no-op.
 
 #### `src/bat/agent/_executor.py`
 - Module-level tracer `tracer = get_tracer(__name__)`.
@@ -258,8 +265,9 @@ problem disappears. This is the fix for a bug actually hit while running two age
 
 **No-op safety.** The entire `bat.telemetry` module is designed to have no effect
 when: (a) the `telemetry` extra is not installed (`_OTEL_AVAILABLE=False` →
-`_NoopTracer`), or (b) `TELEMETRY_ENABLED` is not set (`setup_telemetry` returns
-`False` and does not initialize the provider). In both cases the call sites
+`_NoopTracer`), or (b) telemetry is not enabled (no `telemetry.output`
+configured in `config.yaml`, so `setup_telemetry` returns `False` and does not
+initialize the provider). In both cases the call sites
 (`tracer.start_as_current_span(...)`, `inject_context(...)`, etc.) work without
 raising and at negligible cost.
 
@@ -300,34 +308,48 @@ pip install arize-phoenix     # only to run Phoenix locally
 phoenix serve
 ```
 
-**Environment variables** before launching the agent:
-```bash
-export TELEMETRY_ENABLED=1                              # opt-in (mind the trailing D!)
-export PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 # where to export
-export OTEL_INSTRUMENTATION_A2A_SDK_ENABLED=false       # silence the a2a.server.* spans (optional)
+**Enable it in `config.yaml`** (the `telemetry` section — telemetry is read from
+config, not the environment):
+```yaml
+telemetry:
+  # service_name: my-agent       # optional (defaults to the agent card name)
+  output:                        # spans are fanned out to EVERY entry
+    - type: remote               # remote | local | console
+      endpoint: http://localhost:6006
+    # - type: local
+    #   file_path: spans.jsonl   # JSON Lines, one span per line
+    # - type: console
 ```
-Optional: `OTEL_SERVICE_NAME=<name>` (default = agent card name),
-`OTEL_TRACES_EXPORTER=console` (print spans to the log instead of exporting them).
+There is no `enabled` flag: telemetry turns on as soon as `output` has at least
+one entry, and is a no-op when the `telemetry` section is absent or `output` is
+empty.
+`output` is a **list**, so a run can export to several destinations at once
+(e.g. a local file *and* a remote collector). The three types are: `remote`
+(OTLP/HTTP to Phoenix), `local` (a JSONL file) and `console` (stdout). No
+telemetry value is read from the environment. The many `a2a.server.*` spans the
+a2a-sdk emits are silenced by default (the ADK sets
+`OTEL_INSTRUMENTATION_A2A_SDK_ENABLED=false` at import time); export
+`OTEL_INSTRUMENTATION_A2A_SDK_ENABLED=true` to re-enable them, leaving only the
+ADK + OpenInference spans.
 
-**File exporter (used by the eval engine).** With
-`OTEL_TRACES_EXPORTER=file` and `OTEL_FILE_EXPORTER_PATH=<path>` the agent writes
-each finished span as one JSON line to `<path>` (synchronously). The `bat eval`
-runner sets this automatically: it points the agent at
-`<output>/<task_id>/spans-<i>/agent.jsonl` and then reads **every `*.jsonl` in
-that directory**, grouping spans by `trace_id`, to reconstruct each episode's
-token usage and tool calls. For a **multi-agent** eval, point each remote
-sub-agent's `OTEL_FILE_EXPORTER_PATH` at a distinct file in that same directory:
-the shared `trace_id` (carried by the propagated `traceparent`) ties their spans
-to the entry agent's trace, so their tokens are recomposed into the totals.
-
-> Note: `OTEL_INSTRUMENTATION_A2A_SDK_ENABLED` is an **a2a-sdk** variable, not an ADK
-> one: the a2a-sdk's own OTel instrumentation hooks into our tracer provider and
-> produces many `a2a.server.*` spans; setting it to `false` leaves only the ADK +
-> OpenInference spans.
+**Local output (used by the eval engine).** With a `local` output and a
+`file_path`, the agent writes each finished span as one JSON line to the file
+(synchronously). The `bat eval` runner configures this automatically — it
+**patches the agent's `config.yaml`** for the run (telemetry section → a single
+`local` output at `<output>/<task_id>/spans-<i>/agent.jsonl`), then restores the
+file afterwards. The endpoint is **not** patched: the agent binds to its own
+`config.yaml` endpoint and the eval reads it to know where to connect. It reads
+**every `*.jsonl` in that
+directory**, grouping spans by `trace_id`, to reconstruct each episode's token
+usage and tool calls. For a **multi-agent** eval, point each remote sub-agent's
+`local` output `file_path` at a distinct file in that same directory: the shared
+`trace_id` (carried by the propagated `traceparent`) ties their spans to the
+entry agent's trace, so their tokens are recomposed into the totals.
 
 **Launch** and verify: at startup the log must show
 ```
-Telemetry enabled (OTLP exporter -> http://localhost:6006/v1/traces, service=<agent>)
+Telemetry: OTLP exporter -> http://localhost:6006/v1/traces.
+Telemetry enabled (1 exporter(s), service=<agent>)
 ```
 Spans appear in Phoenix **only after** the agent handles a request (nothing is
 produced at startup).
@@ -550,7 +572,8 @@ Ref.: [Arize-ai/phoenix#3120](https://github.com/Arize-ai/phoenix/issues/3120), 
 Today the `Resource` only has `service.name`. Add `service.version` (semver/git hash,
 from the package version) and `deployment.environment.name` (`staging`/`production`).
 They are **stable** and enable segmentation/comparison at zero runtime cost. Extend
-`TelemetryConfig.from_env()` respecting `OTEL_RESOURCE_ATTRIBUTES`.
+`TelemetryConfig.from_settings()` (and the `Resource.create(...)` call in
+`setup_telemetry`).
 Ref.: [Resource semconv](https://opentelemetry.io/docs/specs/semconv/resource/), [Deployment environment](https://opentelemetry.io/docs/specs/semconv/resource/deployment-environment/).
 
 ### 3. Add the METRICS signal (medium effort)
@@ -566,7 +589,7 @@ Ref.: [GenAI metrics](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-
 ### 4. "Phase C" — spans as the single source of truth ✅ done (for the eval path)
 The legacy `MetadataCollector` has been **removed**: usage/tool-calls are derived
 exclusively from spans. The chosen mechanism is **out-of-process read-back**: the
-agent exports spans to a file (`OTEL_TRACES_EXPORTER=file`) and the eval engine
+agent exports spans to a file (a `local` output) and the eval engine
 reconstructs per-episode usage/tool-calls by reading the run's span directory and
 grouping by `trace_id` / `gen_ai.conversation.id` (multi-agent included). This was
 preferred over an in-process `SpanProcessor` because the eval runs the agent as a

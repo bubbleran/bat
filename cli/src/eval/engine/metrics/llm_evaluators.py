@@ -39,7 +39,10 @@ def _get_judge_client(judge_name: str = "default") -> ChatModelClient:
     """
     Lazy-init a ChatModelClient configured for the judge model.
 
-    Reads JUDGE_PROVIDER / JUDGE_MODEL env vars (falls back to MODEL_PROVIDER / MODEL).
+    Reads JUDGE_PROVIDER / JUDGE_MODEL env vars (provider falls back to
+    MODEL_PROVIDER). The base URL comes ONLY from JUDGE_BASE_URL -- it must not
+    fall back to the model-under-test's BASE_URL, or a judge without its own
+    endpoint would be pointed at the evaluated model's server.
     For named judges, also reads JUDGE_PROMPT_<NAME> as an optional system-message suffix.
     """
     if judge_name in _judge_clients:
@@ -49,7 +52,7 @@ def _get_judge_client(judge_name: str = "default") -> ChatModelClient:
         "JUDGE_PROVIDER", os.getenv("MODEL_PROVIDER", "openai")
     )
     model = os.getenv("JUDGE_MODEL", "gpt-4.1-mini")
-    base_url = os.getenv("JUDGE_BASE_URL", os.getenv("BASE_URL"))
+    base_url = os.getenv("JUDGE_BASE_URL")
     custom = (
         os.getenv(f"JUDGE_PROMPT_{judge_name.upper()}")
         if judge_name != "default"
@@ -76,10 +79,12 @@ def _call_llm_judge(
     prompt: str, judge_name: str = "default", max_retries: int = 2
 ) -> dict[str, Any]:
     client = _get_judge_client(judge_name)
+    last_exc: Exception | None = None
     for attempt in range(max_retries):
         try:
             logger.info(
-                f"Calling LLM judge (attempt {attempt + 1}/{max_retries}) "
+                f"Calling LLM judge '{judge_name}' "
+                f"(attempt {attempt + 1}/{max_retries})"
             )
             response = client.invoke(HumanMessage(content=prompt))
             content = response.content.strip()
@@ -91,9 +96,16 @@ def _call_llm_judge(
                 content = content.split("```", 1)[1].split("```", 1)[0].strip()
             return json.loads(content)
         except Exception as exc:
-            if attempt == max_retries - 1:
-                return {"score": None, "reasoning": f"Error: {exc}"}
-    return {"score": None, "reasoning": "Max retries exceeded"}
+            last_exc = exc
+            logger.warning(
+                f"LLM judge '{judge_name}' attempt "
+                f"{attempt + 1}/{max_retries} failed: {exc}"
+            )
+    logger.error(
+        f"LLM judge '{judge_name}' failed after {max_retries} attempts: "
+        f"{last_exc}"
+    )
+    return {"score": None, "reasoning": f"Error: {last_exc}"}
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +350,55 @@ def evaluate_tool_call_appropriateness(
     return _call_llm_judge(prompt, judge_name="tool_call")
 
 
+def _apply_judge_result(
+    scores: QualitativeScores,
+    future: Any,
+    *,
+    score_attr: str,
+    reasoning_key: str,
+    label: str,
+) -> None:
+    """Fold one judge future into ``scores``.
+
+    Always records the judge's reasoning -- including the error text on
+    failure -- so a misconfigured judge leaves a diagnostic in
+    ``judge_reasoning`` (and the logs) instead of silently producing an
+    all-``None`` "successful" eval. The numeric score is only set when the
+    judge returned a usable number.
+    """
+    try:
+        result = future.result()
+    except Exception as exc:
+        logger.error(f"{label} evaluation failed: {exc}")
+        scores.judge_reasoning[reasoning_key] = f"Error: {exc}"
+        return
+
+    reasoning = result.get("reasoning", "") if isinstance(result, dict) else ""
+    raw_score = result.get("score") if isinstance(result, dict) else None
+
+    if raw_score is None:
+        logger.warning(
+            f"{label} judge returned no score (reasoning: {reasoning or 'n/a'})"
+        )
+        scores.judge_reasoning[reasoning_key] = (
+            reasoning or "Error: judge returned no score"
+        )
+        return
+
+    try:
+        setattr(scores, score_attr, float(raw_score))
+    except (TypeError, ValueError) as exc:
+        logger.error(
+            f"{label} judge returned non-numeric score {raw_score!r}: {exc}"
+        )
+        scores.judge_reasoning[reasoning_key] = (
+            reasoning or f"Error: non-numeric score {raw_score!r}"
+        )
+        return
+
+    scores.judge_reasoning[reasoning_key] = reasoning
+
+
 def evaluate_episode_quality(
     query: str,
     response: str,
@@ -386,41 +447,34 @@ def evaluate_episode_quality(
                 "skipped: no tool calls expected for this task"
             )
 
-        try:
-            r = futures["relevance"].result()
-            if isinstance(r, dict) and r.get("score") is not None:
-                scores.response_relevance = float(r["score"])
-                scores.judge_reasoning["relevance"] = r.get("reasoning", "")
-        except Exception as e:
-            logger.error(f"Response relevance evaluation failed: {e}")
-
-        try:
-            r = futures["completion"].result()
-            if isinstance(r, dict) and r.get("score") is not None:
-                scores.task_completion_quality = float(r["score"])
-                scores.judge_reasoning["completion"] = r.get("reasoning", "")
-        except Exception as e:
-            logger.error(f"Task completion evaluation failed: {e}")
-
-        try:
-            r = futures["hallucination"].result()
-            if isinstance(r, dict) and r.get("score") is not None:
-                scores.hallucination_score = float(r["score"])
-                scores.judge_reasoning["hallucination"] = r.get("reasoning", "")
-        except Exception as e:
-            logger.error(f"Hallucination evaluation failed: {e}")
-
+        _apply_judge_result(
+            scores,
+            futures["relevance"],
+            score_attr="response_relevance",
+            reasoning_key="relevance",
+            label="Response relevance",
+        )
+        _apply_judge_result(
+            scores,
+            futures["completion"],
+            score_attr="task_completion_quality",
+            reasoning_key="completion",
+            label="Task completion",
+        )
+        _apply_judge_result(
+            scores,
+            futures["hallucination"],
+            score_attr="hallucination_score",
+            reasoning_key="hallucination",
+            label="Hallucination",
+        )
         if "tool_calls" in futures:
-            try:
-                r = futures["tool_calls"].result()
-                if isinstance(r, dict) and r.get("score") is not None:
-                    scores.tool_call_appropriateness = float(r["score"])
-                    scores.judge_reasoning["tool_call_appropriateness"] = r.get(
-                        "reasoning", ""
-                    )
-            except Exception as e:
-                logger.error(
-                    f"Tool-call appropriateness evaluation failed: {e}"
-                )
+            _apply_judge_result(
+                scores,
+                futures["tool_calls"],
+                score_attr="tool_call_appropriateness",
+                reasoning_key="tool_call_appropriateness",
+                label="Tool-call appropriateness",
+            )
 
     return scores

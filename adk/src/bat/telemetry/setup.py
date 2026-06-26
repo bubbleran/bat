@@ -1,29 +1,8 @@
-"""OpenTelemetry bootstrap for the ADK.
-
-This module is import-safe even when the optional ``telemetry`` extra is not
-installed: the OpenTelemetry packages are imported defensively, so instrumenting
-the ADK never changes behavior while telemetry is disabled. When
-``TELEMETRY_ENABLED`` is set, however, OpenTelemetry is required:
-:func:`setup_telemetry` raises if the extra is missing rather than silently
-running the agent without traces.
-
-Typical usage (done once, at application start-up)::
-
-    from bat.telemetry import setup_telemetry
-    setup_telemetry(service_name="my-agent")
-
-and then, anywhere in the hot path::
-
-    from bat.telemetry import get_tracer, SpanKind, attributes as attrs
-    tracer = get_tracer(__name__)
-    with tracer.start_as_current_span("invoke_agent x", kind=SpanKind.INTERNAL):
-        ...
-"""
-
 import atexit
 import contextlib
 from typing import Any, Dict, Optional
-
+from .attributes import OPENINFERENCE_PROJECT_NAME
+from .file_exporter import JsonFileSpanExporter
 from ..logging import create_logger
 from .config import TelemetryConfig
 
@@ -119,77 +98,100 @@ def _patch_openinference_langgraph_callbacks() -> None:
         pass
 
 
-def setup_telemetry(service_name: Optional[str] = None) -> bool:
+def setup_telemetry(
+    service_name: Optional[str] = None,
+    *,
+    config: Optional[TelemetryConfig] = None,
+) -> bool:
     """Configure the global tracer provider and auto-instrumentation.
 
     Idempotent: safe to call multiple times; only the first call has effect.
 
     Args:
-        service_name (Optional[str]): Fallback ``service.name`` when
-            ``OTEL_SERVICE_NAME`` is not set (e.g. the agent card name).
+        service_name (Optional[str]): Unused; telemetry is configured solely
+            via ``config``. Kept for signature compatibility.
+        config (TelemetryConfig): Resolved telemetry settings, built from the
+            ``config.yaml`` ``telemetry`` section by ``AgentApplication``.
 
     Returns:
         bool: ``True`` if telemetry was activated, ``False`` if it is disabled
-            by config.
-
-    Raises:
-        RuntimeError: if telemetry is enabled but the ``telemetry`` extra
-            (OpenTelemetry) is not installed.
+            (no outputs configured, or enabled but the ``telemetry`` extra is
+            not installed — in which case a clear error is logged and the agent
+            keeps running without telemetry rather than crashing).
     """
     global _initialized, _provider
+
+    # Idempotent check
     if _initialized:
         return True
 
-    cfg = TelemetryConfig.from_env(default_service_name=service_name)
-    if not cfg.enabled:
-        logger.debug("Telemetry disabled (set TELEMETRY_ENABLED=1 to enable).")
+    cfg = config
+    if cfg is None or not cfg.enabled:
+        logger.debug(
+            "Telemetry disabled (add a `telemetry.output` entry in "
+            "config.yaml to enable)."
+        )
         return False
 
     if trace is None:
-        raise RuntimeError(
-            "TELEMETRY_ENABLED is set but OpenTelemetry is not installed. "
-            "Install the extra: pip install 'bat-adk[telemetry]'."
+        logger.error(
+            "Telemetry is enabled in config.yaml but no telemetry is "
+            "installed; continuing with telemetry disabled. Install the "
+            "extra to enable it: pip install 'bat-adk[telemetry]'."
         )
+        return False
 
+    # Necessary imports (OTel SDK and exporters) are deferred until this point
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import (
-        BatchSpanProcessor,
-        ConsoleSpanExporter,
-        SimpleSpanProcessor,
-    )
-
-    resource = Resource.create({"service.name": cfg.service_name})
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    resource_attributes = {"service.name": cfg.service_name}
+    # Phoenix files a trace under the project named by this resource attribute
+    # (omitted -> Phoenix's "default" project). Set only when configured so we
+    # don't pin every deployment to a single project.
+    if cfg.project_name:
+        resource_attributes[OPENINFERENCE_PROJECT_NAME] = cfg.project_name
+    resource = Resource.create(resource_attributes)
     provider = TracerProvider(resource=resource)
 
-    if cfg.exporter == "console":
-        provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
-        logger.info("Telemetry enabled (console exporter).")
-    elif cfg.exporter == "file":
-        from .file_exporter import JsonFileSpanExporter
+    # Fan out to every configured destination: one span processor per exporter,
+    # so the same spans reach a local file and a remote collector together.
+    for exporter in cfg.exporters:
+        if exporter.kind == "console":
+            provider.add_span_processor(
+                BatchSpanProcessor(ConsoleSpanExporter())
+            )
+            logger.info("Telemetry: console exporter active.")
+        elif exporter.kind == "file":
+            path = exporter.file_path or "spans.jsonl"
+            # SimpleSpanProcessor: synchronous write on span end, so a reader
+            # (e.g. the eval engine) sees spans without a flush/batch delay.
+            try:
+                provider.add_span_processor(
+                    SimpleSpanProcessor(JsonFileSpanExporter(path))
+                )
+            except OSError as e:
+                logger.error(
+                    "Telemetry: cannot open file exporter at %s (%s); "
+                    "skipping this destination.",
+                    path,
+                    e,
+                )
+                continue
+            logger.info("Telemetry: file exporter -> %s.", path)
+        elif exporter.kind == "otlp":
+            otlp_exp = OTLPSpanExporter(endpoint=exporter.traces_endpoint)
+            provider.add_span_processor(BatchSpanProcessor(otlp_exp))
+            logger.info(
+                "Telemetry: OTLP exporter -> %s.", exporter.traces_endpoint
+            )
 
-        path = cfg.file_path or "spans.jsonl"
-        # SimpleSpanProcessor: synchronous write on span end, so a reader
-        # (e.g. the eval engine) sees spans without a flush/batch delay.
-        provider.add_span_processor(
-            SimpleSpanProcessor(JsonFileSpanExporter(path))
-        )
-        logger.info("Telemetry enabled (file exporter -> %s).", path)
-    else:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-            OTLPSpanExporter,
-        )
-
-        exporter = OTLPSpanExporter(
-            endpoint=cfg.traces_endpoint,
-            headers=cfg.headers or None,
-        )
-        provider.add_span_processor(BatchSpanProcessor(exporter))
-        logger.info(
-            "Telemetry enabled (OTLP exporter -> %s, service=%s).",
-            cfg.traces_endpoint,
-            cfg.service_name,
-        )
+    logger.info(
+        "Telemetry enabled (%d exporter(s), service=%s).",
+        len(cfg.exporters),
+        cfg.service_name,
+    )
 
     trace.set_tracer_provider(provider)
     _provider = provider
@@ -202,13 +204,12 @@ def setup_telemetry(service_name: Optional[str] = None) -> bool:
     # Auto-instrument LangChain / LangGraph via OpenInference. This captures
     # LLM calls, graph nodes and tool executions without touching call sites.
     try:
-        from openinference.instrumentation.langchain import (
-            LangChainInstrumentor,
-        )
+        from openinference.instrumentation.langchain import LangChainInstrumentor
 
         LangChainInstrumentor().instrument(tracer_provider=provider)
         _patch_openinference_langgraph_callbacks()
         logger.debug("OpenInference LangChain instrumentation active.")
+        
     except ImportError:
         logger.warning(
             "openinference-instrumentation-langchain not installed: "
@@ -238,13 +239,17 @@ def shutdown_telemetry() -> None:
 
 
 def get_tracer(name: str) -> Any:
-    """Return a tracer, or a no-op tracer when telemetry is not initialized.
+    """Return a tracer for ``name``.
 
-    Until :func:`setup_telemetry` has run successfully (telemetry disabled, or
-    simply not set up yet) a no-op tracer is returned, so usage at call sites is
-    always safe.
+    When OpenTelemetry is not installed, returns a no-op tracer. Otherwise it
+    returns OTel's tracer, which is a *proxy*: before :func:`setup_telemetry`
+    installs a provider it produces non-recording spans, and it automatically
+    starts recording once the provider is set. This is what makes a
+    module-level ``tracer = get_tracer(__name__)`` (captured at import time,
+    before ``setup_telemetry`` runs) work -- returning a ``_NoopTracer`` here
+    would cache a dead no-op and silently drop every manual span.
     """
-    if not _initialized:
+    if trace is None:
         return _NoopTracer()
     return trace.get_tracer(name)
 

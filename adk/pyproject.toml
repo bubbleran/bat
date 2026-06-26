@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-adk"
-version = "2026.6"
+version = "2026.6.26a0"
 authors = [
   { name="Andrea LEONE", email="andrea.leone@bubbleran.com" },
   { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },

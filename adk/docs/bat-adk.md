@@ -47,7 +47,7 @@ An **Agent Application** is the entry point object for agents built with **BAT-A
 When you create an `AgentApplication`, it automatically:
 
 - Loads the **Agent Card** from `./agent.json` and the **Agent Configuration** from `./config.yaml`
-  - When loading the Agent Card, it expects the `supportedInterfaces` field to be empty, as it will configure it with the endpoint specified in the apposite environment variables (URL and PORT).
+  - When loading the Agent Card, it expects the `supportedInterfaces` field to be empty, as it will configure it with the endpoint specified in `config.yaml`'s `endpoint` section (`url` and `port`).
 - Instantiates the **AgentGraph**
 - Sets up the **AgentExecutor**, Request Handler, and a **Starlette** web application
 
@@ -66,7 +66,7 @@ After creation, call the `run()` method of the Agent Application to start the **
 - **A2A:** 9900 (default)  
 - **MCP:** 9800 (default)  
 
-You can override these using the `PORT` and `MCP_PORT` environment variables.
+You can override these in `config.yaml` via `endpoint.port` and `endpoint.mcp_port`.
 
 
 
@@ -74,7 +74,10 @@ You can override these using the `PORT` and `MCP_PORT` environment variables.
 
 The **AgentConfig** defines how an agent behaves and what external resources it can access, including:
 
+- The **endpoint** (URL and ports) the agent binds to  
+- The default **model** (provider, name, base URL) for the agent's clients  
 - Whether to perform **checkpoints**  
+- **Telemetry** (OpenTelemetry) settings — see [TELEMETRY.md](TELEMETRY.md)  
 - Which **MCP Servers** and other **Agents** it needs to communicate with
 
 ### Loading and Validation
@@ -119,7 +122,7 @@ The **Agent Executor** handles task execution and event publishing for an agent.
 - **Execute a request**  
   - Calls the `astream` method of the **AgentGraph**.
   - Processes each chunk individually, converting `AgentTaskResult` objects into **A2A events** for the event queue.
-  - Collects usage metadata from the graph at each step and includes them in the stream chunks.
+  - When telemetry is enabled, wraps the streaming loop in a root OpenTelemetry span (`invoke_agent`). Token usage and tool calls are captured through OpenTelemetry rather than collected by hand into the stream — see [TELEMETRY.md](TELEMETRY.md).
 
 - **Cancel a request**  
   - Currently **not implemented**
@@ -183,15 +186,12 @@ A **Chat Model Client** is a wrapper around an LLM that combines:
 ### What It Does
 
 - Provides `invoke` for single requests and `batch` for parallel requests  
-- Tracks usage metadata:
-  - Input, output, and total tokens
-  - LLM inference time
 
-When a `ChatModelClient` is created as part of an **AgentGraph**, the graph automatically collects this usage data after each node execution and includes it in the streamed results.
+Token usage (input/output/total tokens) and LLM timing are captured through **OpenTelemetry**: when telemetry is enabled, OpenInference auto-instrumentation records them on the underlying model's spans, so the client no longer collects them by hand. See [TELEMETRY.md](TELEMETRY.md) for how the data is exported and read back.
 
 ### Configuration
 
-A **ChatModelClient** is configured using a **ChatModelClientConfig**, typically loaded from environment variables via `from_env`.  
+A **ChatModelClient** is configured using a **ChatModelClientConfig**. Its defaults (provider, model name, base URL) come from `config.yaml`'s `model` section, while the `MODEL` / `MODEL_PROVIDER` / `BASE_URL` environment variables still override them.  
 The configuration includes:
 
 - Model provider and model name  
@@ -270,4 +270,4 @@ To instantiate a Call Agent Node, you must provide:
   - Where to store the remote agent's status and content
   - Where to flag if the remote agent needs human input
 
-This node also automatically captures **token usage** from the remote agent and merges it into your local metrics.
+When telemetry is enabled, this node propagates the trace context (W3C `traceparent`) to the remote agent so its spans join the **same trace**; the remote agent's token usage is then recomposed from those spans rather than merged into local metrics by the node. See [TELEMETRY.md](TELEMETRY.md).

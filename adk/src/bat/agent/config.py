@@ -1,5 +1,6 @@
 import asyncio
-from typing import Dict, List, Literal, Tuple
+import os
+from typing import Dict, List, Literal, Optional, Tuple
 
 import yaml
 from a2a.client import A2ACardResolver
@@ -79,12 +80,100 @@ class A2AConnection(BaseModel):
     timeout: int
 
 
+class EndpointConfig(BaseModel):
+    """Where the agent is served (base URL and ports).
+
+    Read directly by ``AgentApplication`` (not via environment variables).
+
+    Attributes:
+        url (Optional[str]): Base URL the agent is hosted at (used to build the
+            agent card interface URL).
+        port (Optional[int]): A2A server port. Defaults to 9900.
+        mcp_port (Optional[int]): MCP server port. Defaults to 9800.
+    """
+
+    url: Optional[str] = None
+    port: Optional[int] = None
+    mcp_port: Optional[int] = None
+
+
+class ModelConfig(BaseModel):
+    """Chat model selection.
+
+    These three values are the only ones an environment variable may override:
+    ``MODEL`` / ``MODEL_PROVIDER`` / ``BASE_URL`` take precedence when set (see
+    :meth:`bat.chat_model_client.ChatModelClientConfig.load`).
+
+    Attributes:
+        provider (Optional[str]): Model provider, e.g. ``openai``.
+        name (Optional[str]): Model name, e.g. ``gpt-4.1-mini``.
+        base_url (Optional[str]): Optional base URL for the provider; needed by
+            local providers such as ollama.
+    """
+
+    provider: Optional[str] = None
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+class OutputConfig(BaseModel):
+    """A single telemetry export destination.
+
+    Attributes:
+        type (str): ``local`` (JSONL file), ``remote`` (OTLP/Phoenix) or
+            ``console`` (stdout).
+        file_path (Optional[str]): Target file for ``local`` (defaults to
+            ``spans.jsonl``).
+        endpoint (Optional[str]): OTLP collector base URL for ``remote``
+            (defaults to ``http://localhost:6006``).
+    """
+
+    type: Literal["local", "remote", "console"]
+    file_path: Optional[str] = None
+    endpoint: Optional[str] = None
+
+
+class TelemetrySettings(BaseModel):
+    """OpenTelemetry settings (the enabling switch and exporter list).
+
+    Named ``TelemetrySettings`` to avoid colliding with
+    ``bat.telemetry.config.TelemetryConfig``. ``AgentApplication`` reads these
+    directly and feeds them to ``TelemetryConfig.from_settings``.
+
+    Spans are fanned out to **every** entry in ``output``, e.g.::
+
+        telemetry:
+          output:
+            - type: local
+              file_path: spans.jsonl
+            - type: remote
+              endpoint: http://localhost:6006
+
+    Attributes:
+        service_name (Optional[str]): ``service.name``; defaults to the agent
+            card name.
+        project_name (Optional[str]): OpenInference/Phoenix project to file
+            traces under (the ``openinference.project.name`` resource
+            attribute). When unset, Phoenix uses the ``default`` project. This
+            is distinct from ``service_name`` (which labels spans within a
+            project). Agents that share a distributed trace must use the same
+            project or the trace fragments across projects.
+        output (List[OutputConfig]): One entry per active destination.
+    """
+
+    service_name: Optional[str] = None
+    project_name: Optional[str] = None
+    output: List[OutputConfig] = Field(default=[])
+
+
 class AgentConfig(BaseModel):
     """
     Agent Configuration, including MCP servers and remote agents.
 
     Attributes
     -------
+        agent_card (Optional[str]): Path to the agent card JSON file. When
+            unset it defaults to ``./agent.json`` (see ``AgentApplication``).
         mcp_servers (List[MCPServerConfig]): List of MCP server
             configurations.
         remote_agents (List[RemoteAgentConfig]): List of remote agent
@@ -105,6 +194,10 @@ class AgentConfig(BaseModel):
     """
 
     checkpoints: bool = Field(default=False)
+    agent_card: Optional[str] = None
+    endpoint: Optional[EndpointConfig] = None
+    model: Optional[ModelConfig] = None
+    telemetry: Optional[TelemetrySettings] = None
     mcp_servers: List[MCPServerConfig] = Field(default=[], alias="mcp-servers")
     remote_agents: List[RemoteAgentConfig] = Field(
         default=[], alias="remote-agents"
@@ -183,6 +276,10 @@ class AgentConfig(BaseModel):
         """Load the agent configuration from a YAML file. If the YAML file is
         not found, an empty configuration is used.
 
+        Environment variables referenced as ``$VAR`` or ``${VAR}`` are expanded
+        in the file before parsing, so values can be templated from the
+        environment (e.g. ``port: ${PORT}``). Unset variables are left literal.
+
         Args:
             path (str): The path to the configuration YAML file.
 
@@ -195,7 +292,7 @@ class AgentConfig(BaseModel):
         """
         try:
             with open(path, "r") as f:
-                data = yaml.safe_load(f)
+                data = yaml.safe_load(os.path.expandvars(f.read()))
             cfg = cls.model_validate(data)
             cfg._mcp_server_connections = _build_mcp_server_connections(
                 mcp_servers=cfg.mcp_servers,

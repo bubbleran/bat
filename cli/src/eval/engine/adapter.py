@@ -13,9 +13,12 @@ from a2a.helpers import (
     new_text_message,
 )
 from a2a.types import Role, SendMessageRequest, StreamResponse, TaskState
+from bat.logging import create_logger
 from httpx import AsyncClient
 
 from .contracts import EpisodeResult, EpisodeTrace, TaskSpec, TraceEvent
+
+logger = create_logger(__name__, level="info")
 
 TERMINAL_STATUSES = {"completed", "error", "input-required"}
 
@@ -39,6 +42,7 @@ _ATTR_CONVERSATION_ID = "gen_ai.conversation.id"
 _ATTR_TOKEN_PROMPT = "llm.token_count.prompt"
 _ATTR_TOKEN_COMPLETION = "llm.token_count.completion"
 _ATTR_TOKEN_TOTAL = "llm.token_count.total"
+_ATTR_TOKEN_CACHE_READ = "llm.token_count.prompt_details.cache_read"
 _ATTR_SPAN_KIND = "openinference.span.kind"
 _ATTR_TOOL_NAME = "tool.name"
 _ATTR_INPUT_VALUE = "input.value"
@@ -114,6 +118,7 @@ def _aggregate_from_spans(
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
+        "cached_input_tokens": 0,
         "inference_time": 0.0,
     }
     tool_calls: list[dict[str, Any]] = []
@@ -137,6 +142,9 @@ def _aggregate_from_spans(
             usage["output_tokens"] += out_tok
             usage["total_tokens"] += int(
                 attributes.get(_ATTR_TOKEN_TOTAL) or (in_tok + out_tok)
+            )
+            usage["cached_input_tokens"] += int(
+                attributes.get(_ATTR_TOKEN_CACHE_READ) or 0
             )
             start, end = span.get("start_time"), span.get("end_time")
             if isinstance(start, (int, float)) and isinstance(
@@ -210,6 +218,15 @@ class BatA2AAdapter:
             if found:
                 return usage, tool_calls
             await asyncio.sleep(0.1)
+        # Fail-open, but make it visible: no span carried this conversation id,
+        # so usage/tool-calls stay empty. Most likely the agent has telemetry
+        # disabled, or a sub-agent did not inherit the caller's context_id.
+        logger.warning(
+            "No telemetry spans found for conversation '%s' in %s after "
+            "retries; usage and tool-calls will be empty for this episode.",
+            conversation_id,
+            self.spans_dir,
+        )
         return usage, tool_calls
 
     async def run_task(
