@@ -1,5 +1,5 @@
 import asyncio
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List
 
 import yaml
 from a2a.client import A2ACardResolver
@@ -10,8 +10,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import (
     StreamableHttpConnection as MCPConnection,
 )
-from pydantic import BaseModel, BeforeValidator, Field
-from typing_extensions import Annotated, Self
+from pydantic import BaseModel, Field
+from typing_extensions import Self
 
 from ..logging import create_logger
 
@@ -43,20 +43,12 @@ class MCPServerConfig(BaseModel):
     timeout: int = DEFAULT_TIMEOUT
 
 
-"""Type for inter-agent communication protocol ('A2A' or 'MCP')."""
-InteragentCommunicationProtocol = Annotated[
-    Literal["A2A", "MCP"], BeforeValidator(lambda v: v.upper())
-]
-
-
 class RemoteAgentConfig(BaseModel):
-    """Configuration for remote A2A or MCP agent connections.
+    """Configuration for a remote A2A agent connection.
 
     Attributes:
         name (str): The name of the remote agent.
         url (str): The URL of the remote agent.
-        protocol (InteragentCommunicationProtocol): The communication protocol
-            used by the remote agent ('A2A' or 'MCP').
         required (bool): Whether the remote agent is required to be reachable.
             Defaults to True.
             When set to False, connection failures will be treated by ignoring
@@ -69,7 +61,6 @@ class RemoteAgentConfig(BaseModel):
 
     name: str
     url: str
-    protocol: InteragentCommunicationProtocol
     required: bool = True
     timeout: int = DEFAULT_TIMEOUT
 
@@ -111,7 +102,6 @@ class AgentConfig(BaseModel):
     )
 
     _mcp_server_connections: dict[str, MCPConnection] = {}
-    _mcp_agent_connections: dict[str, MCPConnection] = {}
     _a2a_agent_connections: dict[str, A2AConnection] = {}
 
     _required_mcp_servers: Dict[str, bool] = {}
@@ -200,10 +190,8 @@ class AgentConfig(BaseModel):
             cfg._mcp_server_connections = _build_mcp_server_connections(
                 mcp_servers=cfg.mcp_servers,
             )
-            cfg._a2a_agent_connections, cfg._mcp_agent_connections = (
-                _build_remote_agent_connections(
-                    remote_agents=cfg.remote_agents,
-                )
+            cfg._a2a_agent_connections = _build_remote_agent_connections(
+                remote_agents=cfg.remote_agents,
             )
             for server in cfg.mcp_servers:
                 cfg._required_mcp_servers[server.name] = server.required
@@ -248,27 +236,6 @@ class AgentConfig(BaseModel):
         server_alias = self._mcp_servers_aliases.get(server_name, "")
         if server_alias in self._mcp_server_connections:
             return self._mcp_server_connections[server_alias]
-        return None
-
-    def get_mcp_agent_connection(
-        self,
-        agent_name: str,
-    ) -> MCPConnection | None:
-        """Get the MCP connection for a given remote agent, if it uses
-        MCP protocol.
-
-        Args:
-            agent_name (str): The name of the remote agent.
-
-        Returns:
-            MCPConnection | None: The MCP connection object if the agent is
-                found and uses MCP protocol, otherwise None.
-        """
-        if agent_name in self._mcp_agent_connections:
-            return self._mcp_agent_connections[agent_name]
-        agent_alias = self._remote_agents_aliases.get(agent_name, "")
-        if agent_alias in self._mcp_agent_connections:
-            return self._mcp_agent_connections[agent_name]
         return None
 
     def get_a2a_agent_connection(
@@ -352,12 +319,6 @@ class AgentConfig(BaseModel):
             ConnectionError: If a `required` remote agent cannot be
                 connected to.
         """
-        mcp_connections: dict[str, MCPConnection] = {}
-        for name in agent_names:
-            if conn := self.get_mcp_agent_connection(name):
-                mcp_connections[name] = conn
-
-        mcp_client = MultiServerMCPClient(connections=mcp_connections)
         client = None
         agent_cards = {}
         for name in agent_names:
@@ -370,20 +331,6 @@ class AgentConfig(BaseModel):
                         base_url=a2a_conn.url,
                     )
                     agent_card = await card_resolver.get_agent_card()
-                    agent_cards[name] = agent_card
-                elif name in mcp_connections:
-                    async with mcp_client.session(name) as session:
-                        call_tool_result = await session.call_tool(
-                            "get_agent_card"
-                        )
-                    if call_tool_result.isError:
-                        raise RuntimeError(
-                            "The MCP remote agent 'get_agent_card' tool "
-                            "returned an error."
-                        )
-                    agent_card = AgentCard.model_validate(
-                        call_tool_result.result
-                    )
                     agent_cards[name] = agent_card
                 else:
                     logger.warning(
@@ -448,18 +395,12 @@ class AgentConfig(BaseModel):
         Raises:
             Exception: if the connection to one of the `required` agents fails.
         """
-        mcp_client = MultiServerMCPClient(
-            connections=self._mcp_server_connections
-        )
         async_client = AsyncClient(timeout=DEFAULT_TIMEOUT)
         aliases: Dict[str, str] = {}
 
         for agent in self.remote_agents:
             try:
-                if agent.protocol == "A2A":
-                    alias = await _request_a2a_name(async_client, agent.url)
-                else:
-                    alias = await _request_mcp_name(mcp_client, agent.name)
+                alias = await _request_a2a_name(async_client, agent.url)
                 aliases[alias] = agent.name
             except Exception as e:
                 if agent.required:
@@ -547,33 +488,21 @@ def _build_mcp_server_connections(
 
 def _build_remote_agent_connections(
     remote_agents: List[RemoteAgentConfig],
-) -> Tuple[Dict[str, A2AConnection], Dict[str, MCPConnection]]:
-    """Build MCP and A2A agent connections from configuration.
+) -> Dict[str, A2AConnection]:
+    """Build A2A agent connections from configuration.
 
     Args:
         remote_agents (List[RemoteAgentConfig]): List of remote agent
             configurations.
 
     Returns:
-        Tuple[Dict[str, A2AConnection], Dict[str, MCPConnection]]:
-            Two dictionaries, one with A2A agent connections and one with MCP
-            agent connections.
+        Dict[str, A2AConnection]: Dictionary of A2A agent connections.
     """
-    mcp_connections = {
-        agent.name: MCPConnection(
-            url=agent.url,
-            timeout=agent.timeout,
-            transport="streamable_http",
-        )
-        for agent in remote_agents
-        if agent.protocol == "MCP"
-    }
     a2a_connections = {
         agent.name: A2AConnection(
             url=agent.url,
             timeout=agent.timeout,
         )
         for agent in remote_agents
-        if agent.protocol == "A2A"
     }
-    return a2a_connections, mcp_connections
+    return a2a_connections

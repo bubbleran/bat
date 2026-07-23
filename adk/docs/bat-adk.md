@@ -9,9 +9,8 @@
 
 ### Protocols at a Glance
 
-- [A2A](https://a2a-protocol.org/latest/) is the **default and recommended** protocol for agent-to-agent communication.
+- [A2A](https://a2a-protocol.org/latest/) is the protocol for agent-to-agent communication.
 - [MCP](https://modelcontextprotocol.io/docs/getting-started/intro) is used by agents to securely interact with external resources such as tools and prompts.
-- While MCP *can* be used for agent-to-agent communication, this is mainly intended for compatibility with other agent frameworks. Whenever possible, prefer **A2A** for agent interactions.
 
 ### Design Philosophy
 
@@ -53,20 +52,13 @@ When you create an `AgentApplication`, it automatically:
 
 ### Running the Agent Application
 
-After creation, call the `run()` method of the Agent Application to start the **A2A Server**.  
-
-- Use `run(expose_mcp=True)` to also start an **MCP Server**, which provides two tools:
-  - `get_agent_card()` – returns the **Agent Card** as a JSON string  
-  - `call_agent(query, context_id, message_id)` – sends a request to the A2A Server and returns the response  
-
-> **Note:** All MCP requests are internally forwarded to the A2A endpoint.
+After creation, call the `run()` method of the Agent Application to start the **A2A Server**.
 
 ### Ports
 
 - **A2A:** 9900 (default)  
-- **MCP:** 9800 (default)  
 
-You can override these using the `PORT` and `MCP_PORT` environment variables.
+You can override this using the `PORT` environment variable.
 
 
 
