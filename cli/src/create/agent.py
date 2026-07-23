@@ -315,7 +315,14 @@ def create_agent_scaffold(
     port: int = 9900,
     model: str = "gpt-4o-mini",
     model_provider: str = "openai",
+    class_name_source: str | None = None,
 ) -> list[Path]:
+    # The State/Graph class names keep the original (pre-lowercasing) casing,
+    # while every directory-derived name follows the lowercase folder name.
+    class_source = (
+        class_name_source if class_name_source is not None else target_dir.name
+    )
+
     if target_dir.exists() and any(target_dir.iterdir()) and not force:
         raise FileExistsError(
             f"Target directory '{target_dir}' already exists and is not empty. "
@@ -386,7 +393,7 @@ def create_agent_scaffold(
     graph_path = target_dir / "src" / "graph.py"
     if force or not graph_path.exists():
         graph_path.write_text(
-            _build_graph_content(target_dir.name, clients), encoding="utf-8"
+            _build_graph_content(class_source, clients), encoding="utf-8"
         )
         created.append(graph_path)
 
@@ -398,14 +405,14 @@ def create_agent_scaffold(
     ):
         src_init_path.parent.mkdir(parents=True, exist_ok=True)
         src_init_path.write_text(
-            _build_src_init_content(target_dir.name), encoding="utf-8"
+            _build_src_init_content(class_source), encoding="utf-8"
         )
         created.append(src_init_path)
 
     main_path = target_dir / "__main__.py"
     if force or not main_path.exists():
         main_path.write_text(
-            _build_main_content(target_dir.name), encoding="utf-8"
+            _build_main_content(class_source), encoding="utf-8"
         )
         created.append(main_path)
 

@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import click
@@ -95,6 +96,21 @@ eval_app.command(
 )(eval_plot)
 
 
+@app.command("version", help="Show the installed bat-cli version.")
+def show_version() -> None:
+    try:
+        installed_version = version("bat-cli")
+    except PackageNotFoundError:
+        typer.secho(
+            "bat-cli is not installed as a package; version unavailable.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+
+    typer.echo(f"bat-cli {installed_version}")
+
+
 def _parse_clients_option(raw_clients: str | None) -> list[str] | None:
     if raw_clients is None:
         return None
@@ -146,7 +162,7 @@ def create_new_agent(
         help="Model provider value written to .env.",
     ),
 ) -> None:
-    target_dir = output_dir / name
+    target_dir = output_dir / name.lower()
     parsed_clients = _parse_clients_option(clients)
 
     try:
@@ -157,6 +173,7 @@ def create_new_agent(
             port=port,
             model=model,
             model_provider=model_provider,
+            class_name_source=name,
         )
     except FileExistsError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
