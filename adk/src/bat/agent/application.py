@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 from google.protobuf.json_format import Parse
 from jsonschema import ValidationError
 from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 from ..logging import create_logger
 from ._executor import MinimalAgentExecutor
@@ -103,7 +106,20 @@ class AgentApplication:
             request_handler=self._request_handler,
             rpc_url="/",
         )
-        self._a2a_server = Starlette(routes=agent_card_routes + json_rpc_routes)
+        ping_routes = [
+            Route("/ping", self._ping, methods=["GET"]),
+        ]
+        self._a2a_server = Starlette(
+            routes=ping_routes + agent_card_routes + json_rpc_routes
+        )
+
+    async def _ping(self, _: Request) -> JSONResponse:
+        """Liveness endpoint.
+
+        Replies `"pong"` when the agent is up and its agent card endpoint is
+        exposed.
+        """
+        return JSONResponse("pong")
 
     def load_agent_card(
         self,
