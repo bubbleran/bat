@@ -197,10 +197,8 @@ If `BAT_DOCKER_REGISTRY` and `BAT_DOCKER_REPO` are already set in `.env` or the 
 
 ### 5. Run evaluation
 
-Run `eval` commands from the agent's eval directory. `bat eval init` and the
-`local` target require a full agent root (`agent.json`, `config.yaml`,
-`pyproject.toml` + `.venv`); the `docker` and `remote` targets only need
-`eval/eval.yaml` and the dataset (see [Execution target](#execution-target)):
+Run all `eval` commands from an existing agent root (must contain `agent.json`,
+`config.yaml`, and `pyproject.toml`):
 
 ```bash
 # scaffold evaluation files
@@ -230,7 +228,6 @@ evaluation:
   agent_shutdown_timeout_s: 10
   k: 1
   qualitative: false # set true to enable LLM judge scoring
-  target: local # local | docker | remote (default: local)
 
 models:
   - provider: openai
@@ -247,65 +244,11 @@ judge:
   # api_key_env: BAT_JUDGE_API_KEY      # env var name holding the judge's API key
 ```
 
-#### Execution target
-
-`evaluation.target` selects how the agent under test is launched/reached. The
-evaluation engine itself is identical across targets — only the agent's
-lifecycle differs.
-
-| Target | Who runs the agent | Model matrix | Requires |
-| --- | --- | --- | --- |
-| `local` (default) | CLI runs it from source via `uv run .`, restarting once per model | full `models:` list | agent root + `.venv` |
-| `docker` | CLI starts one container per model, injecting the model via `-e` | full `models:` list | a built agent image + Docker |
-| `remote` | Agent is already running at `agent_url`; CLI does not manage it | single model only (used as the result label) | only `eval.yaml` + dataset |
-
-**`docker`** — evaluates a packaged agent image, preserving the model matrix
-(the CLI restarts a container per model entry):
-
-```yaml
-evaluation:
-  target: docker
-  agent_url: http://127.0.0.1:9900
-  # image defaults to the same {registry}/{repo}:{version} reference as
-  # `bat build`/`bat push`; override explicitly if needed:
-  # image: hub.bubbleran.com/orama/labs/my-agent:latest
-  # image_version: latest      # used only when image is not set
-  # docker_network: host       # host networking (Linux) reaches localhost providers
-```
-
-- The runtime image has no baked model/secrets, so the CLI passes
-  `MODEL`/`MODEL_PROVIDER`/`BASE_URL`/`URL`/`PORT` (and any per-model `env:`) as
-  `-e` flags, and forwards the agent's `.env` via `--env-file` for API keys.
-  Explicit `-e` flags override the `.env`.
-- With `docker_network: host` (Linux default) a model `base_url` of
-  `http://localhost:11434` (e.g. Ollama on the host) is reachable from inside
-  the container. With bridge networking the CLI publishes the port instead.
-- Containers are named `bat-eval-<task_id>-<idx>` and removed on completion.
-
-**`remote`** — evaluates an agent that is already running (a published Docker
-container, a port-forward, an ingress). The CLI starts/stops nothing and
-validates the agent by connecting to `agent_url`:
-
-```yaml
-evaluation:
-  target: remote
-  agent_url: http://127.0.0.1:9900   # the running agent's reachable URL
-models:
-  - provider: openai                 # label only — the deployed model is fixed
-    model: gpt-4o-mini
-```
-
-The agent is evaluated **as-deployed**: its model is whatever it was started
-with, so `remote` accepts exactly one `models:` entry, used only to label the
-results. The judge (when `qualitative: true`) still runs locally in the CLI, so
-judge config and keys work unchanged.
-
 Notes:
 
-- For `local`, `bat eval run` starts the agent via `uv run .` from the agent
-  root and waits until `agent_url` accepts a TCP connection, so the agent
-  project must have its dependencies installed (its own `.venv`). `docker` and
-  `remote` only need `eval/eval.yaml` and the dataset.
+- `bat eval run` starts the agent via `uv run .` from the agent root and waits until
+  `agent_url` accepts a TCP connection, so the agent project must have its
+  dependencies installed (its own `.venv`).
 - `models` entries may also be written as `"<provider>:<model>"` strings.
 - For models that require an API key, set it in the agent's `.env` under
   `<PROVIDER>_API_KEY` (e.g. `OPENAI_API_KEY`).

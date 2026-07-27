@@ -244,24 +244,19 @@ def _parse_agent_url(agent_url: str) -> tuple[str, int, str]:
     return parsed.hostname, port, base_url
 
 
-def _wait_until_port_open(
+def _wait_for_agent_port(
     agent_url: str,
     timeout_s: int,
-    *,
-    liveness=None,
-    what: str = "Agent",
+    process: subprocess.Popen | None,
 ) -> None:
-    """Block until the agent's host:port accepts a TCP connection.
-
-    ``liveness`` is an optional callable invoked each iteration; it should raise
-    if the backing process/container died before the port opened.
-    """
     host, port, _ = _parse_agent_url(agent_url)
     deadline = time.time() + timeout_s
 
     while time.time() < deadline:
-        if liveness is not None:
-            liveness()
+        if process is not None and process.poll() is not None:
+            raise typer.BadParameter(
+                f"Agent process exited before becoming ready (exit code: {process.returncode})."
+            )
         try:
             with socket.create_connection((host, port), timeout=1.0):
                 return
@@ -269,26 +264,8 @@ def _wait_until_port_open(
             time.sleep(0.2)
 
     raise typer.BadParameter(
-        f"{what} did not become ready at {agent_url} within {timeout_s} seconds."
+        f"Agent did not become ready at {agent_url} within {timeout_s} seconds."
     )
-
-
-def _wait_for_agent_port(
-    agent_url: str,
-    timeout_s: int,
-    process: subprocess.Popen | None,
-) -> None:
-    def _liveness() -> None:
-        if process is not None and process.poll() is not None:
-            raise typer.BadParameter(
-                f"Agent process exited before becoming ready (exit code: {process.returncode})."
-            )
-
-    _wait_until_port_open(agent_url, timeout_s, liveness=_liveness)
-
-
-def _wait_for_remote_agent(agent_url: str, timeout_s: int) -> None:
-    _wait_until_port_open(agent_url, timeout_s, what="Remote agent")
 
 
 def _start_agent_process(
@@ -316,127 +293,6 @@ def _stop_agent_process(process: subprocess.Popen, timeout_s: int) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=timeout_s)
-
-
-# --- docker target -------------------------------------------------------
-
-# Env keys that select the agent's model; these are passed to the container
-# explicitly so they override anything coming from its baked-in --env-file.
-_AGENT_MODEL_ENV_KEYS = ("MODEL_PROVIDER", "MODEL", "PORT", "URL", "BASE_URL")
-
-
-def _resolve_eval_image(agent_root: Path, cfg) -> str:
-    if cfg.image:
-        return cfg.image
-    # Fall back to the same reference build/push produce.
-    from image_defaults import resolve_registry, resolve_repo_name
-
-    registry = resolve_registry(agent_root, None)
-    repo = resolve_repo_name(agent_root, None)
-    return f"{registry}/{repo}:{cfg.image_version}"
-
-
-def _container_name(task_id: str, idx: int) -> str:
-    return f"bat-eval-{task_id}-{idx}"
-
-
-def _container_explicit_env(
-    server_env: Mapping[str, str], model_cfg
-) -> dict[str, str]:
-    keys = list(_AGENT_MODEL_ENV_KEYS) + list(model_cfg.env.keys())
-    return {key: server_env[key] for key in keys if key in server_env}
-
-
-def _start_agent_container(
-    image: str,
-    *,
-    network: str,
-    agent_root: Path,
-    explicit_env: Mapping[str, str],
-    container_name: str,
-    port: int,
-) -> None:
-    # Clear any stale container left by a previous interrupted run.
-    subprocess.run(
-        ["docker", "rm", "-f", container_name],
-        capture_output=True,
-        text=True,
-    )
-
-    command = ["docker", "run", "-d", "--name", container_name]
-    if network:
-        command += ["--network", network]
-    if network != "host":
-        command += ["-p", f"{port}:{port}"]
-
-    # Forward the agent's own secrets (API keys, etc.) the same way the source
-    # mode does: from the agent root's .env. Explicit -e below overrides these.
-    env_file = agent_root / ".env"
-    if env_file.is_file():
-        command += ["--env-file", str(env_file)]
-    for key, value in explicit_env.items():
-        command += ["-e", f"{key}={value}"]
-
-    command.append(image)
-
-    try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
-    except FileNotFoundError as exc:
-        raise typer.BadParameter(
-            "Cannot execute 'docker run'. Ensure Docker is installed and on PATH."
-        ) from exc
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "").strip()
-        raise typer.BadParameter(
-            f"Failed to start agent container from image '{image}': {detail}"
-        ) from exc
-
-
-def _container_is_running(container_name: str) -> bool:
-    result = subprocess.run(
-        ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0 and result.stdout.strip() == "true"
-
-
-def _container_logs_tail(container_name: str, lines: int = 20) -> str:
-    result = subprocess.run(
-        ["docker", "logs", "--tail", str(lines), container_name],
-        capture_output=True,
-        text=True,
-    )
-    return ((result.stdout or "") + (result.stderr or "")).strip()
-
-
-def _wait_for_agent_container(
-    agent_url: str, timeout_s: int, container_name: str
-) -> None:
-    def _liveness() -> None:
-        if not _container_is_running(container_name):
-            logs = _container_logs_tail(container_name)
-            raise typer.BadParameter(
-                f"Agent container '{container_name}' exited before becoming "
-                f"ready.\n--- container logs ---\n{logs}"
-            )
-
-    _wait_until_port_open(
-        agent_url, timeout_s, liveness=_liveness, what="Agent container"
-    )
-
-
-def _stop_agent_container(container_name: str, timeout_s: int) -> None:
-    subprocess.run(
-        ["docker", "stop", "-t", str(timeout_s), container_name],
-        capture_output=True,
-        text=True,
-    )
-    subprocess.run(
-        ["docker", "rm", "-f", container_name],
-        capture_output=True,
-        text=True,
-    )
 
 
 def eval_init(
@@ -492,17 +348,6 @@ def _print_eval_show(cfg) -> None:
     typer.secho("  EVALUATION CONFIGURATION", fg=typer.colors.BLUE, bold=True)
     typer.secho("============================", fg=typer.colors.BLUE)
 
-    typer.secho("Target", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
-    typer.echo(f"      : {cfg.target}")
-
-    if cfg.target == "docker":
-        image_label = cfg.image or f"(resolved, tag {cfg.image_version})"
-        typer.secho("Image", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
-        typer.echo(f"       : {image_label}")
-
-    typer.secho("Agent URL", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
-    typer.echo(f"   : {cfg.agent_url}")
-
     typer.secho("Dataset", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
     typer.echo(f"     : {cfg.dataset}")
 
@@ -541,82 +386,9 @@ def eval_show() -> None:
     _print_eval_show(cfg)
 
 
-def _build_server_env(
-    cfg, model_cfg, parsed_port: int, base_url: str, idx: int
-) -> dict[str, str]:
-    """Assemble the environment that selects the agent's model for one run."""
-    server_env = os.environ.copy()
-    server_env["MODEL_PROVIDER"] = model_cfg.provider
-    server_env["MODEL"] = model_cfg.model
-    server_env["PORT"] = str(parsed_port)
-    server_env["URL"] = base_url
-
-    if model_cfg.base_url:
-        server_env["BASE_URL"] = model_cfg.base_url
-    else:
-        server_env.pop("BASE_URL", None)
-
-    _apply_env_overrides(
-        server_env,
-        model_cfg.env,
-        section_name=f"models[{idx}]",
-    )
-    return server_env
-
-
-def _build_runner_env(cfg, agent_root: Path, server_env) -> dict[str, str]:
-    """Derive the orchestrator env (judge config runs locally in the CLI)."""
-    runner_env = dict(server_env)
-    if cfg.qualitative:
-        if cfg.judge is None:
-            raise typer.BadParameter(
-                "When evaluation.qualitative is true, judge.provider and judge.model are required"
-            )
-
-        runner_env["JUDGE_PROVIDER"] = cfg.judge.provider
-        runner_env["JUDGE_MODEL"] = cfg.judge.model
-        if cfg.judge.base_url:
-            runner_env["JUDGE_BASE_URL"] = cfg.judge.base_url
-        else:
-            runner_env.pop("JUDGE_BASE_URL", None)
-
-        for prompt_key in (
-            "relevance",
-            "task_completion",
-            "hallucination",
-            "tool_call",
-        ):
-            env_name = f"JUDGE_PROMPT_{prompt_key.upper()}"
-            text = cfg.judge.prompts.get(prompt_key)
-            if text:
-                runner_env[env_name] = text
-            else:
-                runner_env.pop(env_name, None)
-
-        _inject_judge_api_key(cfg.judge, agent_root, runner_env)
-
-        _apply_env_overrides(
-            runner_env,
-            cfg.judge.env,
-            section_name="judge",
-        )
-    else:
-        runner_env.pop("JUDGE_PROVIDER", None)
-        runner_env.pop("JUDGE_MODEL", None)
-        runner_env.pop("JUDGE_BASE_URL", None)
-        for prompt_key in (
-            "relevance",
-            "task_completion",
-            "hallucination",
-            "tool_call",
-        ):
-            runner_env.pop(f"JUDGE_PROMPT_{prompt_key.upper()}", None)
-
-    return runner_env
-
-
 def eval_run() -> None:
     agent_root = Path.cwd()
+    _validate_agent_root(agent_root)
 
     eval_yaml_path = agent_root / "eval" / "eval.yaml"
     if not eval_yaml_path.exists():
@@ -629,36 +401,22 @@ def eval_run() -> None:
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    # Only the source-launched target needs the full agent project + venv.
-    # docker/remote targets just need eval.yaml + the dataset.
-    if cfg.target == "local":
-        _validate_agent_root(agent_root)
-        if _find_agent_python(agent_root) is None:
-            raise typer.BadParameter(
-                "No agent python found at .venv/bin/python. Create the agent virtual environment first."
-            )
-
     if not cfg.dataset.exists():
         raise typer.BadParameter(f"Dataset not found: {cfg.dataset}")
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
-    image = None
-    if cfg.target == "docker":
-        image = _resolve_eval_image(agent_root, cfg)
+    agent_python = _find_agent_python(agent_root)
+    if agent_python is None:
+        raise typer.BadParameter(
+            "No agent python found at .venv/bin/python. Create the agent virtual environment first."
+        )
 
     task_id = time.strftime("%Y%m%d_%H%M%S")
     typer.secho(
-        f"Running evaluation [{cfg.target}] with {len(cfg.models)} model(s). "
-        f"task_id={task_id}",
+        f"Running evaluation with {len(cfg.models)} model(s). task_id={task_id}",
         fg=typer.colors.CYAN,
     )
-    if cfg.target == "remote":
-        typer.secho(
-            "  remote target: the agent is evaluated as-deployed; the model "
-            "entry is used only as the result label.",
-            fg=typer.colors.YELLOW,
-        )
 
     _, parsed_port, base_url = _parse_agent_url(cfg.agent_url)
 
@@ -667,40 +425,77 @@ def eval_run() -> None:
             f"- {model_cfg.provider}:{model_cfg.model}", fg=typer.colors.CYAN
         )
 
-        server_env = _build_server_env(
-            cfg, model_cfg, parsed_port, base_url, idx
-        )
-        runner_env = _build_runner_env(cfg, agent_root, server_env)
+        server_env = os.environ.copy()
+        server_env["MODEL_PROVIDER"] = model_cfg.provider
+        server_env["MODEL"] = model_cfg.model
+        server_env["PORT"] = str(parsed_port)
+        server_env["URL"] = base_url
 
-        process: subprocess.Popen | None = None
-        container_name: str | None = None
+        if model_cfg.base_url:
+            server_env["BASE_URL"] = model_cfg.base_url
+        else:
+            server_env.pop("BASE_URL", None)
+
+        _apply_env_overrides(
+            server_env,
+            model_cfg.env,
+            section_name=f"models[{idx}]",
+        )
+
+        process = _start_agent_process(agent_root, server_env)
+
         try:
-            if cfg.target == "local":
-                process = _start_agent_process(agent_root, server_env)
-                _wait_for_agent_port(
-                    cfg.agent_url,
-                    timeout_s=cfg.agent_startup_timeout_s,
-                    process=process,
+            _wait_for_agent_port(
+                cfg.agent_url,
+                timeout_s=cfg.agent_startup_timeout_s,
+                process=process,
+            )
+
+            runner_env = server_env.copy()
+            if cfg.qualitative:
+                if cfg.judge is None:
+                    raise typer.BadParameter(
+                        "When evaluation.qualitative is true, judge.provider and judge.model are required"
+                    )
+
+                runner_env["JUDGE_PROVIDER"] = cfg.judge.provider
+                runner_env["JUDGE_MODEL"] = cfg.judge.model
+                if cfg.judge.base_url:
+                    runner_env["JUDGE_BASE_URL"] = cfg.judge.base_url
+                else:
+                    runner_env.pop("JUDGE_BASE_URL", None)
+
+                for prompt_key in (
+                    "relevance",
+                    "task_completion",
+                    "hallucination",
+                    "tool_call",
+                ):
+                    env_name = f"JUDGE_PROMPT_{prompt_key.upper()}"
+                    text = cfg.judge.prompts.get(prompt_key)
+                    if text:
+                        runner_env[env_name] = text
+                    else:
+                        runner_env.pop(env_name, None)
+
+                _inject_judge_api_key(cfg.judge, agent_root, runner_env)
+
+                _apply_env_overrides(
+                    runner_env,
+                    cfg.judge.env,
+                    section_name="judge",
                 )
-            elif cfg.target == "docker":
-                container_name = _container_name(task_id, idx)
-                _start_agent_container(
-                    image,
-                    network=cfg.docker_network,
-                    agent_root=agent_root,
-                    explicit_env=_container_explicit_env(server_env, model_cfg),
-                    container_name=container_name,
-                    port=parsed_port,
-                )
-                _wait_for_agent_container(
-                    cfg.agent_url,
-                    timeout_s=cfg.agent_startup_timeout_s,
-                    container_name=container_name,
-                )
-            else:  # remote
-                _wait_for_remote_agent(
-                    cfg.agent_url, timeout_s=cfg.agent_startup_timeout_s
-                )
+            else:
+                runner_env.pop("JUDGE_PROVIDER", None)
+                runner_env.pop("JUDGE_MODEL", None)
+                runner_env.pop("JUDGE_BASE_URL", None)
+                for prompt_key in (
+                    "relevance",
+                    "task_completion",
+                    "hallucination",
+                    "tool_call",
+                ):
+                    runner_env.pop(f"JUDGE_PROMPT_{prompt_key.upper()}", None)
 
             _run_eval_orchestrator(
                 agent_url=cfg.agent_url,
@@ -715,14 +510,7 @@ def eval_run() -> None:
                 env=runner_env,
             )
         finally:
-            if process is not None:
-                _stop_agent_process(
-                    process, timeout_s=cfg.agent_shutdown_timeout_s
-                )
-            elif container_name is not None:
-                _stop_agent_container(
-                    container_name, timeout_s=cfg.agent_shutdown_timeout_s
-                )
+            _stop_agent_process(process, timeout_s=cfg.agent_shutdown_timeout_s)
 
     typer.secho(
         f"Evaluation completed. Output: {cfg.output_dir / task_id}",

@@ -243,30 +243,6 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
         default=10,
     )
 
-    target_raw = (
-        _to_optional_str(evaluation_section.get("target")) or "local"
-    ).lower()
-    if target_raw not in ("local", "docker", "remote"):
-        raise ValueError(
-            "evaluation.target must be one of: local, docker, remote "
-            f"(got {target_raw!r})"
-        )
-
-    image = _to_optional_str(evaluation_section.get("image"))
-    image_version = (
-        _to_optional_str(evaluation_section.get("image_version")) or "latest"
-    )
-    docker_network = (
-        _to_optional_str(evaluation_section.get("docker_network")) or "host"
-    )
-
-    if target_raw == "remote" and len(models) > 1:
-        raise ValueError(
-            "evaluation.target 'remote' evaluates the agent as-deployed and "
-            "supports a single model entry (used only as the result label). "
-            f"Found {len(models)} models in eval/eval.yaml."
-        )
-
     k = int(evaluation_section.get("k", 1))
     if k < 1:
         raise ValueError("evaluation.k must be >= 1")
@@ -293,10 +269,6 @@ def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
         run_name=run_name,
         models=models,
         judge=judge,
-        target=target_raw,
-        image=image,
-        image_version=image_version,
-        docker_network=docker_network,
     )
 
 
@@ -310,15 +282,6 @@ def default_eval_yaml() -> str:
         "  agent_shutdown_timeout_s: 10\n"
         "  k: 1\n"
         "  qualitative: false\n"
-        "  # How the agent is launched/reached:\n"
-        "  #   local  -> CLI runs it from source via `uv run .` (default)\n"
-        "  #   docker -> CLI starts one container per model (model matrix)\n"
-        "  #   remote -> agent already running at agent_url (as-deployed)\n"
-        "  target: local\n"
-        "  # docker target only (image defaults to the build/push reference):\n"
-        "  # image: hub.bubbleran.com/orama/labs/my-agent:latest\n"
-        "  # image_version: latest\n"
-        "  # docker_network: host\n"
         "\n"
         "judge:\n"
         "  provider: ollama\n"
