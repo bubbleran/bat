@@ -290,22 +290,17 @@ class ChatModelClient:
             "Expected str or HumanMessageor List[ToolMessage]."
         )
 
-        # Build the messages for the chat model
         messages = self._build_messages_list(input, history)
 
-        # Invoke the chat model and extract the response. Token usage and
-        # latency are captured by the OpenInference span around this call.
         try:
             response = self._chat_model.invoke(messages)
         except Exception as e:
             raise e
         r_for_history, r_to_return = self._process_response(response)
 
-        # Update the history
         if history is not None:
             self._update_history(history, input, r_for_history)
 
-        # Return the response
         return r_to_return
 
     def batch(

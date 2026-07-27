@@ -1,11 +1,4 @@
 """Centralized OpenTelemetry attribute names and operation values.
-
-Keeping every span-attribute key in one place means that, if the (still
-partly experimental) GenAI semantic conventions change, only this module needs
-to be updated. The names follow the OpenTelemetry GenAI semantic conventions;
-the ``OPENINFERENCE_*`` constants mirror the attributes emitted by the
-OpenInference LangChain auto-instrumentation, which we read back when deriving
-usage metadata from spans.
 """
 
 # --- GenAI semantic conventions (write side: our manual spans) -------------

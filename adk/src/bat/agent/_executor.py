@@ -73,14 +73,9 @@ class MinimalAgentExecutor(AgentExecutor):
             task = new_task_from_user_message(context.message)
             await event_queue.enqueue_event(task)
         updater = TaskUpdater(event_queue, task.id, task.context_id)
-        # Continue the caller's distributed trace: the called agent's spans
-        # share the caller's trace_id (propagated via the W3C traceparent), so
-        # multi-agent token usage can be recomposed by trace_id downstream.
         parent_ctx = extract_context(_carrier_from_message(context.message))
 
-        # The agent name is derived from the graph class name (the "Graph"
-        # suffix dropped), so it travels with the graph instead of being
-        # propagated as a separate attribute.
+
         agent_name = type(self.agent_graph).__name__.removesuffix("Graph")
         try:
             with tracer.start_as_current_span(
@@ -96,13 +91,7 @@ class MinimalAgentExecutor(AgentExecutor):
                     span.set_attribute(
                         attrs.GEN_AI_CONVERSATION_ID, task.context_id
                     )
-                    # Group all turns/resumes of this conversation under one
-                    # Phoenix Session (each turn is its own trace).
                     span.set_attribute(attrs.SESSION_ID, task.context_id)
-                # Per-turn correlation key. Usage/tool-call metadata is no
-                # longer sent in the A2A message (clean output); consumers
-                # read it from the spans instead, keyed by conversation.id +
-                # this task id.
                 if task.id:
                     span.set_attribute(attrs.BAT_TASK_ID, task.id)
 

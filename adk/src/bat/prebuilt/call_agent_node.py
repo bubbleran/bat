@@ -594,13 +594,6 @@ class CallAgentNode(PrebuiltWorkflow):
                 error.
         """
         TIMEOUT = 120.0  # seconds
-        # NOTE: this is an async generator whose stream is driven from a
-        # separate task, so we must NOT use `start_as_current_span` as a
-        # context manager around the `yield`s: attaching/detaching the OTel
-        # context across a yield (and across tasks) raises
-        # "Token was created in a different Context". Instead we create the
-        # span manually, inject the context from it explicitly, and end it in
-        # a `finally`.
         span = tracer.start_span(
             f"{attrs.OP_INVOKE_AGENT} {agent_card.name}",
             kind=SpanKind.CLIENT,
