@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-adk"
-version = "2026.6"
+version = "2026.6.26a0"
 authors = [
   { name="Andrea LEONE", email="andrea.leone@bubbleran.com" },
   { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },
@@ -37,12 +37,20 @@ nvidia = ["langchain-nvidia-ai-endpoints"]
 ollama = ["langchain-ollama"]
 openai = ["langchain-openai"]
 
+telemetry = [
+  "opentelemetry-api>=1.27.0",
+  "opentelemetry-sdk>=1.27.0",
+  "opentelemetry-exporter-otlp>=1.27.0",
+  "openinference-instrumentation-langchain>=0.1.29",
+]
+
 all = [
   "bat-adk[anthropic]",
   "bat-adk[deepseek]",
   "bat-adk[nvidia]",
   "bat-adk[ollama]",
   "bat-adk[openai]",
+  "bat-adk[telemetry]",
 ]
 
 [dependency-groups]

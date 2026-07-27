@@ -1,4 +1,3 @@
-import time
 from typing import Dict
 
 from a2a.helpers import (
@@ -15,13 +14,32 @@ from a2a.utils.errors import (
     InvalidRequestError,
     UnsupportedOperationError,
 )
+from google.protobuf.json_format import MessageToDict
 from typing_extensions import Any, override
 
 from ..logging import create_logger
+from ..telemetry import SpanKind, extract_context, get_tracer
+from ..telemetry import attributes as attrs
 from .graph import AgentGraph
 from .state import AgentTaskResult
 
 logger = create_logger(__name__, "debug")
+tracer = get_tracer(__name__)
+
+
+def _carrier_from_message(message: Any) -> Dict[str, str]:
+    """Extract a propagation carrier from an A2A message.
+
+    Returns the message metadata as a flat ``{str: str}`` dict (which may
+    contain a W3C ``traceparent``). Never raises: telemetry must not affect
+    request handling.
+    """
+    try:
+        metadata = message.metadata
+        as_dict = MessageToDict(metadata)
+    except Exception:
+        return {}
+    return {k: v for k, v in as_dict.items() if isinstance(v, str)}
 
 
 class MinimalAgentExecutor(AgentExecutor):
@@ -55,32 +73,44 @@ class MinimalAgentExecutor(AgentExecutor):
             task = new_task_from_user_message(context.message)
             await event_queue.enqueue_event(task)
         updater = TaskUpdater(event_queue, task.id, task.context_id)
+        parent_ctx = extract_context(_carrier_from_message(context.message))
+
+
+        agent_name = type(self.agent_graph).__name__.removesuffix("Graph")
         try:
-            config = {"configurable": {"thread_id": task.context_id}}
-            ts = time.time()
-            keep_streaming = True
-            prev_item = None
-            async for item in self.agent_graph.astream(query, config):
-                if item != prev_item:
-                    if keep_streaming:
-                        usage_meta = self.agent_graph._get_usage_metadata(ts)
-                        trace_meta = self.agent_graph._get_trace_metadata(ts)
-                        metadata: Dict[str, Any] = {
-                            "usage": usage_meta.model_dump(),
-                            "trace": trace_meta.model_dump(),
-                        }
-                        ts = time.time()
-                        keep_streaming = await self._process_task_result(
-                            task=task,
-                            task_result=item,
-                            updater=updater,
-                            metadata=metadata,
-                        )
-                    else:
-                        logger.warning(
-                            "Artifact has been updated: ignoring item."
-                        )
-                prev_item = item
+            with tracer.start_as_current_span(
+                f"{attrs.OP_INVOKE_AGENT} {agent_name}",
+                context=parent_ctx,
+                kind=SpanKind.INTERNAL,
+            ) as span:
+                span.set_attribute(
+                    attrs.GEN_AI_OPERATION_NAME, attrs.OP_INVOKE_AGENT
+                )
+                span.set_attribute(attrs.GEN_AI_AGENT_NAME, agent_name)
+                if task.context_id:
+                    span.set_attribute(
+                        attrs.GEN_AI_CONVERSATION_ID, task.context_id
+                    )
+                    span.set_attribute(attrs.SESSION_ID, task.context_id)
+                if task.id:
+                    span.set_attribute(attrs.BAT_TASK_ID, task.id)
+
+                config = {"configurable": {"thread_id": task.context_id}}
+                keep_streaming = True
+                prev_item = None
+                async for item in self.agent_graph.astream(query, config):
+                    if item != prev_item:
+                        if keep_streaming:
+                            keep_streaming = await self._process_task_result(
+                                task=task,
+                                task_result=item,
+                                updater=updater,
+                            )
+                        else:
+                            logger.warning(
+                                "Artifact has been updated: ignoring item."
+                            )
+                    prev_item = item
         except Exception as e:
             logger.error(f"An error occurred while streaming the response: {e}")
             raise InternalError(
@@ -95,7 +125,6 @@ class MinimalAgentExecutor(AgentExecutor):
         task: Task,
         task_result: AgentTaskResult,
         updater: TaskUpdater,
-        metadata: Dict[str, Any],
     ) -> bool:
         match task_result.task_status:
             case (
@@ -110,12 +139,10 @@ class MinimalAgentExecutor(AgentExecutor):
                 await updater.update_status(
                     state=state,
                     message=message,
-                    metadata=metadata,
                 )
             case TaskState.TASK_STATE_COMPLETED:
                 await updater.add_artifact(
                     [new_text_part(task_result.content)],
-                    metadata=metadata,
                 )
                 await updater.update_status(
                     state=TaskState.TASK_STATE_COMPLETED,

@@ -1,5 +1,3 @@
-import time
-from functools import reduce
 from typing import (
     Any,
     Callable,
@@ -25,7 +23,6 @@ from pydantic import BaseModel, ValidationError
 
 from ..logging import create_logger
 from .config import ChatModelClientConfig
-from .metadata import MetadataCollector, UsageMetadata
 
 logger = create_logger(__name__, "debug")
 
@@ -38,9 +35,9 @@ class ChatModelClient:
     It supports both single and batch invocations, and can handle tool calls
     if tools are provided.
 
-    If stored as a property of an object deriving the `AgentGraph` class,
-    `UsageMetadata` will be automatically collected and returned as metadata of
-    the streaming response.
+    Token usage and timing are captured through OpenTelemetry spans (the
+    OpenInference auto-instrumentation of the underlying chat model), not by
+    this client; see ``bat.telemetry``.
 
     Args:
         chat_model_config (ChatModelClientConfig, optional):
@@ -52,7 +49,7 @@ class ChatModelClient:
 
     Examples:
     ```python
-    config = ChatModelClientConfig.from_env(
+    config = ChatModelClientConfig.load(
         client_name="SampleClient",
     )
     client = ChatModelClient(
@@ -99,7 +96,7 @@ class ChatModelClient:
             )
 
         self.config = (
-            ChatModelClientConfig.from_env()
+            ChatModelClientConfig.load()
             if chat_model_config is None
             else chat_model_config
         )
@@ -136,8 +133,6 @@ class ChatModelClient:
             )
         else:
             self.output_schema = AIMessage
-
-        self._metadata_collector = MetadataCollector()
 
     @property
     def chat_model(self) -> BaseChatModel:
@@ -295,31 +290,17 @@ class ChatModelClient:
             "Expected str or HumanMessageor List[ToolMessage]."
         )
 
-        # Build the messages for the chat model
         messages = self._build_messages_list(input, history)
 
-        # Invoke the chat model and extract the response
-        t_start = time.time()
         try:
             response = self._chat_model.invoke(messages)
         except Exception as e:
             raise e
-        t_end = time.time()
         r_for_history, r_to_return = self._process_response(response)
 
-        if not r_for_history.usage_metadata:
-            logger.warning("Chat model did not return usage metadata.")
-        usage_metadata = {
-            **(r_for_history.usage_metadata or {})
-            | {"inference_time": t_end - t_start}
-        }
-        self._metadata_collector.add_usage(usage_metadata, timestamp=t_start)
-
-        # Update the history
         if history is not None:
             self._update_history(history, input, r_for_history)
 
-        # Return the response
         return r_to_return
 
     def batch(
@@ -355,47 +336,10 @@ class ChatModelClient:
             else [self.system_instructions]
         )
         messages = [full_history + [input] for input in inputs]
-        t_start = time.time()
         responses = self._chat_model.batch(messages)
-        t_end = time.time()
         if not all(isinstance(response, AIMessage) for response in responses):
             raise ValueError(
                 "Expected all responses to be AIMessage instances after batch "
                 "invocation of chat model."
             )
-
-        usage_metadatas = [
-            response.usage_metadata or {} for response in responses
-        ]
-        if None in usage_metadatas:
-            logger.warning(
-                "Some responses from chat model did not return usage metadata."
-            )
-        aggregated_metadata = reduce(
-            lambda acc, metadata: acc + metadata,
-            usage_metadatas,
-            UsageMetadata(inference_time=t_end - t_start),
-        )
-        self._metadata_collector.add_usage(
-            aggregated_metadata, timestamp=t_start
-        )
         return responses
-
-    def get_usage_metadata(
-        self,
-        from_timestamp: Optional[float] = None,
-    ) -> UsageMetadata:
-        """
-        Get the aggregated usage metadata from the chat model client.
-
-        Args:
-            from_timestamp (Optional[float]): If provided, only usage metadata
-                after this timestamp will be considered.
-                If None, all usage metadata will be considered.
-
-        Returns:
-            UsageMetadata: The aggregated usage metadata.
-        """
-        return self._metadata_collector.get_usage_metadata(
-            from_timestamp=from_timestamp
-        )
