@@ -11,3 +11,5 @@ __pycache__/
 .ruff_cache/
 
 CLAUDE.md
+
+adk/docs/archive
