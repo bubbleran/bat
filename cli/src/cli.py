@@ -181,7 +181,10 @@ def create_new_agent(
         help="Model provider written to config.yaml (model.provider).",
     ),
 ) -> None:
-    target_dir = output_dir / _validate_agent_name(name)
+    agent_name = _validate_agent_name(name)
+    # The directory (and every name derived from it) is lowercased, while the
+    # State/Graph class names keep the casing the user typed.
+    target_dir = output_dir / agent_name.lower()
     parsed_clients = _parse_clients_option(clients)
 
     try:
@@ -192,7 +195,7 @@ def create_new_agent(
             port=port,
             model=model,
             model_provider=model_provider,
-            class_name_source=name,
+            class_name_source=agent_name,
         )
     except FileExistsError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
