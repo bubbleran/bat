@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-cli"
-version = "2026.6.25a1"
+version = "2026.06"
 authors = [
   { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },
 ]
@@ -18,8 +18,8 @@ classifiers = [
 
 dependencies = [
   "typer>=0.12.3",
-  "bat-adk>=2026.06rc1",
-  "bat-adk[openai]",
+  "bat-adk>=2026.06",
+  "bat-adk[all]",
   "a2a-sdk>=1.0.0",
   "python-dotenv>=1.0.1",
   "typing-extensions>=4.12.0",
