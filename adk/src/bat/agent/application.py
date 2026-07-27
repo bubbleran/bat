@@ -102,9 +102,9 @@ class AgentApplication:
         )
         self._url = endpoint.url if endpoint is not None else None
 
-        self._agent_card_display = os.getenv(
-            "AGENT_CARD_DISPLAY", "1"
-        ).strip().lower() in {"1", "true", "yes", "on"}
+        self._agent_card_display = (
+            os.getenv("AGENT_CARD_DISPLAY", "true").strip().lower() == "true"
+        )
 
 
         agent_card_path = (
