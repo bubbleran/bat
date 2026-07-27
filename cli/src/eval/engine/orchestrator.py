@@ -92,7 +92,6 @@ async def run_evaluation(
     enable_qualitative_eval: bool = False,
     k: int = 1,
     out_dir: str = "output",
-    spans_dir: str | None = None,
 ) -> None:
     tasks = load_tasks(input_path)
     tasks_by_id = {task.id: task for task in tasks}
@@ -100,7 +99,6 @@ async def run_evaluation(
     bench_runner = BenchRunner(
         adapter=BatA2AAdapter(
             agent_url=agent_url,
-            spans_dir=spans_dir,
         ),
         config=RunConfig(
             run_name=run_name,

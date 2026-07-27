@@ -102,9 +102,13 @@ class JudgeSpec(BaseModel):
     prompts: dict[str, str] = Field(default_factory=dict)
 
 
+EvalTarget = Literal["local", "docker", "remote"]
+
+
 class EvalConfig(BaseModel):
     dataset: Path
     output_dir: Path
+    agent_url: str
     agent_startup_timeout_s: int = 45
     agent_shutdown_timeout_s: int = 10
     k: int
@@ -112,3 +116,12 @@ class EvalConfig(BaseModel):
     run_name: str
     models: list[ModelSpec]
     judge: JudgeSpec | None
+    # How the agent under test is launched/reached:
+    #   local  -> CLI starts it from source via `uv run .` (default)
+    #   docker -> CLI starts a container per model (full model matrix)
+    #   remote -> agent already running at agent_url, evaluated as-deployed
+    target: EvalTarget = "local"
+    # docker target only:
+    image: str | None = None
+    image_version: str = "latest"
+    docker_network: str = "host"

@@ -92,20 +92,6 @@ def _get_per_episode_averages(metrics_data: dict) -> List[dict]:
     return [_average_episodes(episodes) for episodes in grouped.values()]
 
 
-def _qual_score(episode: dict, key: str) -> float:
-    """Read a qualitative score from an episode, coalescing missing/null to 0.
-
-    An episode can carry an explicit ``None`` for a qualitative metric (a judge
-    that failed or was not run), and with ``k == 1`` ``_average_episodes`` hands
-    the raw episode through unchanged. ``dict.get(key, 0)`` does NOT substitute
-    the default when the key is present with value ``None`` -- that ``None``
-    would then flow into a matplotlib bar list and raise ``TypeError``, killing
-    ``bat eval plot`` and leaking every open figure.
-    """
-    value = episode.get("qualitative", {}).get(key)
-    return value if value is not None else 0
-
-
 def _plot_comparison(metrics: Dict[str, dict]) -> List[Tuple[str, plt.Figure]]:
     """Build summary comparison charts across runs. Returns (name, figure) pairs."""
     if not metrics:
@@ -481,14 +467,16 @@ def _plot_per_episode_comparison(
             width = 0.25
             x_pos = range(len(display_names))
             relevance = [
-                _qual_score(ep, "response_relevance") for ep in task_data
+                ep.get("qualitative", {}).get("response_relevance", 0)
+                for ep in task_data
             ]
             completion_q = [
-                _qual_score(ep, "task_completion_quality")
+                ep.get("qualitative", {}).get("task_completion_quality", 0)
                 for ep in task_data
             ]
             hallucination = [
-                _qual_score(ep, "hallucination_score") for ep in task_data
+                ep.get("qualitative", {}).get("hallucination_score", 0)
+                for ep in task_data
             ]
             axes[2].bar(
                 [i - width for i in x_pos],

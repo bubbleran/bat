@@ -12,7 +12,7 @@ from build.build import build_image
 from create.agent import create_agent_scaffold
 from eval.commands import eval_init, eval_plot, eval_run, eval_show
 from push.push import push_image
-from set.env import set_agent_settings
+from set.env import set_env_values
 
 _BANNER_COLORS = (51, 45, 39, 63, 99, 135)
 
@@ -111,25 +111,6 @@ def show_version() -> None:
     typer.echo(f"bat-cli {installed_version}")
 
 
-def _validate_agent_name(name: str) -> str:
-    candidate = name.strip()
-    if not candidate:
-        raise typer.BadParameter("Agent name must not be empty.")
-    if (
-        candidate in {".", ".."}
-        or "/" in candidate
-        or "\\" in candidate
-        or "\x00" in candidate
-        or Path(candidate).is_absolute()
-    ):
-        raise typer.BadParameter(
-            "Agent name must be a single directory name, not a path "
-            "(no '/', '\\', '..', or absolute paths). Use --output-dir to "
-            "choose where the agent folder is created."
-        )
-    return candidate
-
-
 def _parse_clients_option(raw_clients: str | None) -> list[str] | None:
     if raw_clients is None:
         return None
@@ -167,24 +148,21 @@ def create_new_agent(
     port: int = typer.Option(
         9900,
         "--port",
-        help="Port value written to config.yaml (endpoint.port).",
+        help="Port value written to .env.",
     ),
     model: str = typer.Option(
         "gpt-4o-mini",
         "--model",
-        help="Model value written to config.yaml (model.name).",
+        help="Model value written to .env.",
     ),
     model_provider: str = typer.Option(
         "openai",
         "--model-provider",
         "--model_provider",
-        help="Model provider written to config.yaml (model.provider).",
+        help="Model provider value written to .env.",
     ),
 ) -> None:
-    agent_name = _validate_agent_name(name)
-    # The directory (and every name derived from it) is lowercased, while the
-    # State/Graph class names keep the casing the user typed.
-    target_dir = output_dir / agent_name.lower()
+    target_dir = output_dir / name.lower()
     parsed_clients = _parse_clients_option(clients)
 
     try:
@@ -195,7 +173,7 @@ def create_new_agent(
             port=port,
             model=model,
             model_provider=model_provider,
-            class_name_source=agent_name,
+            class_name_source=name,
         )
     except FileExistsError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
@@ -253,18 +231,18 @@ def set_agent_env(
     port: int | None = typer.Option(
         None,
         "--port",
-        help="Set endpoint.port in config.yaml.",
+        help="Set PORT in .env.",
     ),
     model: str | None = typer.Option(
         None,
         "--model",
-        help="Set model.name in config.yaml.",
+        help="Set MODEL in .env.",
     ),
     model_provider: str | None = typer.Option(
         None,
         "--model-provider",
         "--model_provider",
-        help="Set model.provider in config.yaml.",
+        help="Set MODEL_PROVIDER in .env.",
     ),
     docker_registry: str | None = typer.Option(
         None,
@@ -278,10 +256,10 @@ def set_agent_env(
     ),
 ) -> None:
     current_dir = Path.cwd()
-    config = current_dir / "config.yaml"
-    if not config.is_file():
+    env = current_dir / ".env"
+    if not env.is_file():
         typer.secho(
-            "Current directory must contain config.yaml. Run this command from the root of an existing agent.",
+            "Current directory must contain .env. Run this command from the root of an existing agent.",
             fg=typer.colors.RED,
             err=True,
         )
@@ -298,7 +276,7 @@ def set_agent_env(
         )
         raise typer.Exit(code=1)
 
-    written, updated_keys = set_agent_settings(
+    env_path, updated_keys = set_env_values(
         current_dir,
         port=port,
         model=model,
@@ -308,8 +286,7 @@ def set_agent_env(
     )
 
     typer.secho(
-        f"Updated: {', '.join(str(p.resolve()) for p in written)}",
-        fg=typer.colors.GREEN,
+        f"Updated env file: {env_path.resolve()}", fg=typer.colors.GREEN
     )
     typer.echo(f"Keys updated: {', '.join(updated_keys)}")
 

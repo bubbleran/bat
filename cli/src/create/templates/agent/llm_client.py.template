@@ -15,7 +15,7 @@ class __CLASS_NAME__(ChatModelClient):
     ):
         super().__init__(
             system_instructions=self.SYSTEM_INSTRUCTIONS,
-            chat_model_config=ChatModelClientConfig.load(client_name="__CLASS_NAME__"),
+            chat_model_config=ChatModelClientConfig.from_env(client_name="__CLASS_NAME__"),
             tools=tools,
             # output_schema: YourCustomOutputSchema
         )

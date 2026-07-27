@@ -39,19 +39,9 @@ def _extract_tokens_from_usage(usage: dict[str, Any]) -> tuple[int, int, int]:
     return 0, 0, 0
 
 
-def _cached_pct(cached: int, prompt: int) -> float:
-    """Percentage of prompt tokens served from the prompt cache."""
-    return round(100.0 * cached / prompt, 1) if prompt else 0.0
-
-
 def episode_metrics(ep: EpisodeResult) -> dict[str, Any]:
     wall_ms = _extract_wall_ms(ep)
     prompt, completion, total = _extract_tokens_from_usage(ep.trace.usage)
-    cached = (
-        int(ep.trace.usage.get("cached_input_tokens") or 0)
-        if isinstance(ep.trace.usage, dict)
-        else 0
-    )
 
     metrics: dict[str, Any] = {
         "task_id": ep.task_id,
@@ -63,7 +53,6 @@ def episode_metrics(ep: EpisodeResult) -> dict[str, Any]:
             "prompt_tokens": prompt,
             "completion_tokens": completion,
             "total_tokens": total,
-            "cached_prompt_pct": _cached_pct(cached, prompt),
         },
     }
 
@@ -102,12 +91,6 @@ def summarize_episode_metrics(
         metric["tokens"]["completion_tokens"] for metric in per_episode
     ]
     total_tokens = [metric["tokens"]["total_tokens"] for metric in per_episode]
-    cached_prompt_total = sum(
-        int(result.trace.usage.get("cached_input_tokens") or 0)
-        if isinstance(result.trace.usage, dict)
-        else 0
-        for result in results
-    )
 
     passed = sum(1 for metric in per_episode if metric["success"])
     failed = n - passed
@@ -129,9 +112,6 @@ def summarize_episode_metrics(
             "prompt_tokens_total": sum(prompt_tokens),
             "completion_tokens_total": sum(completion_tokens),
             "total_tokens_total": sum(total_tokens),
-            "cached_prompt_pct": _cached_pct(
-                cached_prompt_total, sum(prompt_tokens)
-            ),
             "avg_total_tokens": (sum(total_tokens) / n) if n else 0.0,
             "min_total_tokens": min(total_tokens) if total_tokens else 0.0,
             "max_total_tokens": max(total_tokens) if total_tokens else 0.0,

@@ -88,7 +88,7 @@ The **scaffolding commands** generate the conventional structure of a BAT agent 
 The command parameterizes the generated files so the new agent is ready to run:
 
 - `--clients` pre-generates one **ChatModelClient** scaffold per name you provide.
-- `--port`, `--model`, and `--model-provider` are written directly into `config.yaml` (`endpoint.port`, `model.name`, `model.provider`).
+- `--port`, `--model`, and `--model-provider` are written directly into the `.env`.
 
 ### Adding Clients Later
 
@@ -98,9 +98,9 @@ This keeps the "one client per LLM role" pattern (e.g. `reformulator`, `planner`
 
 ## Configuration (`set env`)
 
-`bat set env` performs **in-place updates** to an existing agent's configuration, without regenerating any other file. The runtime values (`--port`, `--model`, `--model-provider`) are written into `config.yaml` (`endpoint.port`, `model.name`, `model.provider`), preserving its comments and structure; the Docker defaults (`--docker-registry`, `--repo`) are written into `.env` as `BAT_DOCKER_REGISTRY` / `BAT_DOCKER_REPO`, consumed by `build` and `push`.
+`bat set env` performs **in-place updates** to an existing agent's `.env`, without regenerating any other file. It can set the runtime values (`PORT`, `MODEL`, `MODEL_PROVIDER`) as well as the Docker defaults (`BAT_DOCKER_REGISTRY`, `BAT_DOCKER_REPO`) consumed by `build` and `push`.
 
-It is intentionally strict: it must be run from an agent root (a directory containing `config.yaml`), and it requires at least one value to set, so it never silently does nothing.
+It is intentionally strict: it must be run from a directory containing a `.env`, and it requires at least one value to set, so it never silently does nothing.
 
 ## Containerization (`build` / `push`)
 
@@ -131,9 +131,7 @@ This means that once an agent's `.env` carries the Docker defaults, `bat build` 
 
 The **evaluation engine** is the most substantial part of BAT-CLI. It runs a dataset of tasks against a live agent, judges the outcomes, and produces machine-readable artifacts and charts. It is exposed through four subcommands — `init`, `show`, `run`, and `plot` — and is implemented as a pipeline of cooperating components.
 
-<p align="center">
-  <img src="images/eval-pipeline.png" alt="The BAT-CLI evaluation pipeline: from dataset to evaluation result" width="600">
-</p>
+![The BAT-CLI evaluation pipeline: from dataset to evaluation result](images/eval-pipeline.png)
 
 ### Pipeline Overview
 
