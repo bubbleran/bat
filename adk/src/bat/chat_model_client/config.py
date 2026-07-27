@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Optional
+from typing import ClassVar, Dict, Optional
 
 from pydantic import BaseModel, Field
 from typing_extensions import Literal
@@ -43,7 +43,7 @@ class ChatModelClientConfig(BaseModel):
         client_name (str, optional): Name for the client.
 
     The class can be instantiated directly or created from environment variables
-    using the `from_env` class method (usually preferred).
+    using the `load` class method (usually preferred).
 
     Examples
     -------
@@ -59,7 +59,7 @@ class ChatModelClientConfig(BaseModel):
 
     From environment variables:
     ```python
-    config = ChatModelClientConfig.from_env(
+    config = ChatModelClientConfig.load(
         client_name="SampleClient",
     )
     ```
@@ -67,6 +67,7 @@ class ChatModelClientConfig(BaseModel):
 
     class ConfigDict:
         arbitrary_types_allowed = True
+    _config_defaults: ClassVar[Dict[str, Optional[str]]] = {}
 
     model: str
     model_provider: ModelProvider
@@ -81,6 +82,31 @@ class ChatModelClientConfig(BaseModel):
         default=None,
         description="Name for the client.",
     )
+
+    @classmethod
+    def _set_defaults(
+        cls,
+        *,
+        provider: Optional[str] = None,
+        name: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> None:
+        """Install fallback model settings (typically from config.yaml).
+
+        ``load`` uses these only when the corresponding environment variable
+        is absent, implementing the precedence ``env > config.yaml`` for the
+        model, provider and base URL.
+        """
+        cls._config_defaults = {
+            "provider": provider,
+            "name": name,
+            "base_url": base_url,
+        }
+
+    @classmethod
+    def _clear_defaults(cls) -> None:
+        """Drop any installed fallback model settings."""
+        cls._config_defaults = {}
 
     def __init__(
         self,
@@ -107,50 +133,61 @@ class ChatModelClientConfig(BaseModel):
         )
 
     @classmethod
-    def from_env(
+    def load(
         cls,
         client_name: Optional[str] = None,
     ) -> "ChatModelClientConfig":
-        """Create a `ChatModelClientConfig` instance from environment
-        variables.
+        """Create a `ChatModelClientConfig` from environment variables, falling
+        back to the config.yaml.
 
-        This method reads the following environment variables:
-        - `MODEL`: The model name, which can be in the format
-            `<provider>:<model>`.
-        - `MODEL_PROVIDER` (optional): The provider of the model
-            (e.g., openai, nvidia, ollama, etc.).
+        Resolution follows the precedence ``env > config.yaml``:
+        - `MODEL`: model name (or `<provider>:<model>`); falls back to
+            `model.name` from config.yaml.
+        - `MODEL_PROVIDER`: provider (e.g. openai, ollama); falls back to the
+            provider in `MODEL` or `model.provider` from config.yaml.
+        - `BASE_URL`: optional base URL; falls back to `model.base_url`.
 
         Args:
             client_name (Optional[str]): Name for the client.
 
         Returns:
-            An instance of `ChatModelClientConfig` configured with values from
-                environment variables.
+            An instance of `ChatModelClientConfig`.
 
         Raises:
-            EnvironmentError: If the required environment variables are not set
-                or if the format is incorrect.
+            EnvironmentError: If neither the environment nor config.yaml provide
+                the model name or the provider.
         """
+        defaults = cls._config_defaults
 
-        model = os.getenv("MODEL")
-        if not model:
-            raise EnvironmentError("MODEL environment variable not set.")
-
+        raw_model = os.getenv("MODEL")
         model_provider = os.getenv("MODEL_PROVIDER")
-        if not model_provider:
-            model_parts = model.split(":", 1)
-            if len(model_parts) == 2:
-                model_provider, model_name = model_parts
-            else:
-                raise EnvironmentError(
-                    "MODEL_PROVIDER environment variable not set. "
-                    "Either set it or use the format <provider>:<model> for "
-                    "the MODEL variable."
-                )
-        else:
-            model_name = model
-
         base_url = os.getenv("BASE_URL")
+
+        model_name: Optional[str]
+        if raw_model:
+            if not model_provider and ":" in raw_model:
+                model_provider, model_name = raw_model.split(":", 1)
+            else:
+                model_name = raw_model
+        else:
+            model_name = defaults.get("name")
+
+        if not model_provider:
+            model_provider = defaults.get("provider")
+        if base_url is None:
+            base_url = defaults.get("base_url")
+
+        if not model_name:
+            raise EnvironmentError(
+                "Model name not configured: set the MODEL environment variable "
+                "or the 'model.name' field in config.yaml."
+            )
+        if not model_provider:
+            raise EnvironmentError(
+                "Model provider not configured: set MODEL_PROVIDER (or use the "
+                "'<provider>:<model>' format in MODEL), or 'model.provider' in "
+                "config.yaml."
+            )
 
         return cls(
             model=model_name,
@@ -158,6 +195,26 @@ class ChatModelClientConfig(BaseModel):
             base_url=base_url,
             client_name=client_name,
         )
+
+    @classmethod
+    def from_env(
+        cls,
+        client_name: Optional[str] = None,
+    ) -> "ChatModelClientConfig":
+        """Backward-compatible alias for :meth:`load`.
+
+        ``from_env`` was the original name of this constructor; it is retained
+        so existing callers keep working. New code should call :meth:`load`,
+        which this delegates to verbatim (same environment/config.yaml
+        precedence and the same raised errors).
+
+        Args:
+            client_name (Optional[str]): Name for the client.
+
+        Returns:
+            An instance of `ChatModelClientConfig`.
+        """
+        return cls.load(client_name=client_name)
 
     def build_default_headers(
         self,

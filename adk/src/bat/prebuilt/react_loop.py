@@ -10,7 +10,6 @@ from typing_extensions import AsyncIterable, override
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState
 from ..chat_model_client import ChatModelClient
-from ..chat_model_client.metadata import MetadataCollector, TraceMetadata
 from ..logging import create_logger
 from .prebuilt_workflow import PrebuiltWorkflow
 
@@ -179,7 +178,6 @@ class ReActLoop(PrebuiltWorkflow):
         self._internal_messages_key = messages_key or f"{loop_name}.messages"
         self._internal_final_response_key = f"{loop_name}.final_response"
         self._internal_trace_key = f"{loop_name}.trace.tool_calls"
-        self._metadata_collector = MetadataCollector()
 
         def _tools_or_cleanup(state) -> Literal["tools", "cleanup"]:
             if state.bat_buffer:
@@ -330,7 +328,6 @@ class ReActLoop(PrebuiltWorkflow):
         if response.tool_calls:
             tool_calls = list(response.tool_calls)
             state.bat_extra[self._internal_trace_key].extend(tool_calls)
-            self._metadata_collector.add_tool_calls(tool_calls)
             tool_names = [
                 tool_call.get("name", "") for tool_call in response.tool_calls
             ]
@@ -370,22 +367,3 @@ class ReActLoop(PrebuiltWorkflow):
         del state.bat_extra[self._internal_final_response_key]
         logger.debug(f"Node `{self.loop_name}.cleanup`: completed")
         return state
-
-    def get_trace_metadata(
-        self,
-        from_timestamp: Optional[float] = None,
-    ) -> TraceMetadata:
-        """Get aggregated trace metadata (tool calls) collected during this
-        loop.
-
-        Args:
-            from_timestamp (Optional[float]): If provided, only tool calls after
-                this timestamp are returned.
-
-        Returns:
-            TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
-                empty when no tool calls have been recorded.
-        """
-        return self._metadata_collector.get_trace_metadata(
-            from_timestamp=from_timestamp
-        )
