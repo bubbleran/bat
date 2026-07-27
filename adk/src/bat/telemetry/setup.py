@@ -8,11 +8,6 @@ from .config import TelemetryConfig
 
 logger = create_logger(__name__, "debug")
 
-# --- Optional OpenTelemetry import -----------------------------------------
-# Imported defensively so this module stays import-safe when the ``telemetry``
-# extra is absent. ``trace``/``propagate`` are only ever dereferenced after a
-# successful ``setup_telemetry`` (which requires the extra), and ``SpanKind``
-# falls back to a stand-in so call sites can reference it unconditionally.
 try:
     from opentelemetry import propagate, trace
     from opentelemetry.trace import SpanKind
@@ -94,7 +89,7 @@ def _patch_openinference_langgraph_callbacks() -> None:
                     hook,
                     lambda self, *args, **kwargs: None,
                 )
-    except Exception:  # pragma: no cover - defensive, version-dependent
+    except Exception:  
         pass
 
 
@@ -121,7 +116,6 @@ def setup_telemetry(
     """
     global _initialized, _provider
 
-    # Idempotent check
     if _initialized:
         return True
 
@@ -141,22 +135,16 @@ def setup_telemetry(
         )
         return False
 
-    # Necessary imports (OTel SDK and exporters) are deferred until this point
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     resource_attributes = {"service.name": cfg.service_name}
-    # Phoenix files a trace under the project named by this resource attribute
-    # (omitted -> Phoenix's "default" project). Set only when configured so we
-    # don't pin every deployment to a single project.
     if cfg.project_name:
         resource_attributes[OPENINFERENCE_PROJECT_NAME] = cfg.project_name
     resource = Resource.create(resource_attributes)
     provider = TracerProvider(resource=resource)
 
-    # Fan out to every configured destination: one span processor per exporter,
-    # so the same spans reach a local file and a remote collector together.
     for exporter in cfg.exporters:
         if exporter.kind == "console":
             provider.add_span_processor(
@@ -165,8 +153,6 @@ def setup_telemetry(
             logger.info("Telemetry: console exporter active.")
         elif exporter.kind == "file":
             path = exporter.file_path or "spans.jsonl"
-            # SimpleSpanProcessor: synchronous write on span end, so a reader
-            # (e.g. the eval engine) sees spans without a flush/batch delay.
             try:
                 provider.add_span_processor(
                     SimpleSpanProcessor(JsonFileSpanExporter(path))
@@ -195,14 +181,8 @@ def setup_telemetry(
 
     trace.set_tracer_provider(provider)
     _provider = provider
-    # Flush and close exporters on interpreter exit. The OTLP/console paths use
-    # a BatchSpanProcessor whose buffered spans would otherwise be dropped when
-    # the process ends; shutdown() forces a final flush. (The file exporter is a
-    # synchronous SimpleSpanProcessor, but shutdown() still closes its handle.)
     atexit.register(shutdown_telemetry)
 
-    # Auto-instrument LangChain / LangGraph via OpenInference. This captures
-    # LLM calls, graph nodes and tool executions without touching call sites.
     try:
         from openinference.instrumentation.langchain import LangChainInstrumentor
 

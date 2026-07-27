@@ -1,19 +1,3 @@
-"""A minimal file-based span exporter (JSON Lines).
-
-Each finished span is written as one JSON object per line. It is synchronous by
-design (pair it with a ``SimpleSpanProcessor``) so spans are on disk the moment
-they end, with no batch/flush delay.
-
-Primary use case: the eval engine launches the agent as a subprocess with a
-``local`` telemetry output and reads this file back to reconstruct per-turn
-token usage and tool calls — replacing the metadata that used to be carried in
-the A2A messages. A separate process means an in-memory exporter cannot reach
-the agent's spans; a file is the cross-process equivalent.
-
-This module imports the OpenTelemetry SDK at import time, so it must only be
-imported when the ``telemetry`` extra is installed (setup.py imports it lazily).
-"""
-
 import contextlib
 import json
 import os
@@ -53,14 +37,10 @@ class JsonFileSpanExporter(SpanExporter):
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
-        # Create the parent directory when the configured path points into one
-        # that does not exist yet, so a nested file_path "just works".
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        # Long-lived append handle (kept open across exports); the eval passes
-        # a fresh path per run.
-        self._file = open(path, "a", encoding="utf-8")  # noqa: SIM115
+        self._file = open(path, "a", encoding="utf-8")  
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         try:

@@ -67,11 +67,6 @@ class ChatModelClientConfig(BaseModel):
 
     class ConfigDict:
         arbitrary_types_allowed = True
-
-    # Fallback model settings sourced from config.yaml's ``model`` section,
-    # installed by ``AgentApplication`` before the graph is built. Environment
-    # variables take precedence over these (see :meth:`load`). Never holds
-    # secrets (API keys stay in the environment).
     _config_defaults: ClassVar[Dict[str, Optional[str]]] = {}
 
     model: str
