@@ -360,6 +360,12 @@ def create_agent_scaffold(
     model_provider: str = "openai",
     class_name_source: str | None = None,
 ) -> list[Path]:
+    # The State/Graph class names keep the original (pre-lowercasing) casing,
+    # while every directory-derived name follows the lowercase folder name.
+    class_source = (
+        class_name_source if class_name_source is not None else target_dir.name
+    )
+
     if target_dir.exists() and not target_dir.is_dir():
         raise FileExistsError(
             f"Target path '{target_dir}' already exists and is not a "

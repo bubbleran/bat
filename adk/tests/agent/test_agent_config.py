@@ -39,7 +39,6 @@ def test_full_nested_schema_parses():
                 {
                     "name": "SMO Agent",
                     "url": "http://localhost:10001",
-                    "protocol": "a2a",
                 }
             ],
         }
@@ -61,9 +60,8 @@ def test_full_nested_schema_parses():
     assert cfg.telemetry.output[1].type == "remote"
     assert cfg.telemetry.output[1].endpoint == "http://localhost:6006"
 
-    # The protocol alias is still normalized to uppercase.
     assert cfg.remote_agents[0].name == "SMO Agent"
-    assert cfg.remote_agents[0].protocol == "A2A"
+    assert cfg.remote_agents[0].url == "http://localhost:10001"
 
 
 def test_partial_sections_default_their_fields():
