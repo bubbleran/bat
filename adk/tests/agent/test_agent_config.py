@@ -20,7 +20,6 @@ def test_full_nested_schema_parses():
             "endpoint": {
                 "url": "http://0.0.0.0/",
                 "port": 9900,
-                "mcp_port": 9800,
             },
             "model": {
                 "provider": "openai",
@@ -48,7 +47,6 @@ def test_full_nested_schema_parses():
 
     assert cfg.endpoint.url == "http://0.0.0.0/"
     assert cfg.endpoint.port == 9900
-    assert cfg.endpoint.mcp_port == 9800
 
     assert cfg.model.provider == "openai"
     assert cfg.model.name == "gpt-4.1-mini"

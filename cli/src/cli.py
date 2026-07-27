@@ -192,6 +192,7 @@ def create_new_agent(
             port=port,
             model=model,
             model_provider=model_provider,
+            class_name_source=name,
         )
     except FileExistsError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
