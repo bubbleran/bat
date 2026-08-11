@@ -414,19 +414,19 @@ class AgentConfig(BaseModel):
             ConnectionError: If a `required` remote agent cannot be
                 connected to.
         """
-        client = None
         agent_cards = {}
         for name in agent_names:
             try:
                 if a2a_conn := self.get_a2a_agent_connection(name):
-                    if client is None or client.timeout != a2a_conn.timeout:
-                        client = AsyncClient(timeout=a2a_conn.timeout)
-                    card_resolver = A2ACardResolver(
-                        httpx_client=client,
-                        base_url=a2a_conn.url,
-                    )
-                    agent_card = await card_resolver.get_agent_card()
-                    agent_cards[name] = agent_card
+                    async with AsyncClient(
+                        timeout=a2a_conn.timeout
+                    ) as client:
+                        card_resolver = A2ACardResolver(
+                            httpx_client=client,
+                            base_url=a2a_conn.url,
+                        )
+                        agent_card = await card_resolver.get_agent_card()
+                        agent_cards[name] = agent_card
                 else:
                     logger.warning(
                         f"Remote Agent {name} not found in configuration."
@@ -490,25 +490,25 @@ class AgentConfig(BaseModel):
         Raises:
             Exception: if the connection to one of the `required` agents fails.
         """
-        async_client = AsyncClient(timeout=DEFAULT_TIMEOUT)
         aliases: Dict[str, str] = {}
 
-        for agent in self.remote_agents:
-            try:
-                alias = await _request_a2a_name(async_client, agent.url)
-                aliases[alias] = agent.name
-            except Exception as e:
-                if agent.required:
-                    logger.error(
-                        "Failed to get name from required Agent"
-                        f"'{agent.name}': {e}"
-                    )
-                    raise e
-                else:
-                    logger.warning(
-                        "Failed to get name from Agent "
-                        f"'{agent.name}': {e}"
-                    )
+        async with AsyncClient(timeout=DEFAULT_TIMEOUT) as async_client:
+            for agent in self.remote_agents:
+                try:
+                    alias = await _request_a2a_name(async_client, agent.url)
+                    aliases[alias] = agent.name
+                except Exception as e:
+                    if agent.required:
+                        logger.error(
+                            "Failed to get name from required Agent"
+                            f"'{agent.name}': {e}"
+                        )
+                        raise e
+                    else:
+                        logger.warning(
+                            "Failed to get name from Agent "
+                            f"'{agent.name}': {e}"
+                        )
 
         logger.debug(
             "Retrieved alias for "
