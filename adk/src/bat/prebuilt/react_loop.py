@@ -138,7 +138,7 @@ class ReActLoop(PrebuiltWorkflow):
             messages_key,
         ]
         for key in keys:
-            if key not in StateType.model_fields:
+            if key is not None and key not in StateType.model_fields:
                 logger.error(
                     f"key '{key}' not available in the provided AgentState type"
                     f"'{StateType.__name__}'"
