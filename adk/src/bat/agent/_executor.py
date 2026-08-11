@@ -148,7 +148,16 @@ class MinimalAgentExecutor(AgentExecutor):
                     state=TaskState.TASK_STATE_COMPLETED,
                 )
             case TaskState.TASK_STATE_FAILED:
-                raise InternalError(message=task_result.content)
+                logger.error(f"Agent task failed: {task_result.content}")
+                message = new_text_message(
+                    text=task_result.content,
+                    context_id=task.context_id,
+                    task_id=task.id,
+                )
+                await updater.update_status(
+                    state=TaskState.TASK_STATE_FAILED,
+                    message=message,
+                )
             case _:
                 logger.error(f"Unknown task status: {task_result.task_status}")
         return task_result.task_status == TaskState.TASK_STATE_WORKING
