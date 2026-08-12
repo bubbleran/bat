@@ -1,6 +1,7 @@
 import asyncio
 import os
 from typing import Dict, List, Literal, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 from a2a.client import A2ACardResolver
@@ -11,7 +12,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import (
     StreamableHttpConnection as MCPConnection,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing_extensions import Self
 
 from ..logging import create_logger
@@ -76,14 +77,55 @@ class EndpointConfig(BaseModel):
 
     Read directly by ``AgentApplication`` (not via environment variables).
 
+    A port embedded directly in ``url`` (e.g. ``http://host:8080``) is lifted
+    out into ``port`` so a single value is authoritative for both binding the
+    server and advertising the agent card. Specifying the port in both places
+    is allowed only if they agree; a mismatch is a configuration error.
+
     Attributes:
         url (Optional[str]): Base URL the agent is hosted at (used to build the
-            agent card interface URL).
+            agent card interface URL). Stored without a port.
         port (Optional[int]): A2A server port. Defaults to 9900.
     """
 
     url: Optional[str] = None
     port: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _split_port_from_url(self) -> Self:
+        """Move a port embedded in ``url`` into the ``port`` field.
+
+        Ensures the port is defined in exactly one canonical place, so the
+        uvicorn bind port and the advertised agent-card URL cannot disagree.
+
+        Raises:
+            ValueError: If ``url`` carries a port that conflicts with an
+                explicitly set ``port``.
+        """
+        if self.url is None:
+            return self
+        # urlsplit needs a scheme to recognise the ``host:port`` authority.
+        raw = self.url if "://" in self.url else f"http://{self.url}"
+        parts = urlsplit(raw)
+        if parts.port is not None:
+            if self.port is not None and self.port != parts.port:
+                raise ValueError(
+                    f"Conflicting ports: url has ':{parts.port}' but "
+                    f"endpoint.port is {self.port}. Set the port in only "
+                    "one place."
+                )
+            self.port = parts.port
+            netloc = parts.hostname or ""
+            self.url = urlunsplit(
+                (
+                    parts.scheme,
+                    netloc,
+                    parts.path,
+                    parts.query,
+                    parts.fragment,
+                )
+            ).rstrip("/")
+        return self
 
 
 class ModelConfig(BaseModel):
