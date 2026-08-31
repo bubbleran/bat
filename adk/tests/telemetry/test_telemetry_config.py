@@ -96,3 +96,15 @@ def test_project_name_passthrough():
         enabled=True, outputs=[{"type": "console"}]
     )
     assert cfg.project_name is None
+
+
+def test_hide_content_passthrough_and_default():
+    # hide_content flows through; absent -> False (content exported as-is).
+    cfg = TelemetryConfig.from_settings(
+        enabled=True, hide_content=True, outputs=[{"type": "console"}]
+    )
+    assert cfg.hide_content is True
+    cfg = TelemetryConfig.from_settings(
+        enabled=True, outputs=[{"type": "console"}]
+    )
+    assert cfg.hide_content is False

@@ -189,11 +189,19 @@ class TelemetrySettings(BaseModel):
             is distinct from ``service_name`` (which labels spans within a
             project). Agents that share a distributed trace must use the same
             project or the trace fragments across projects.
+        hide_content (bool): When ``True``, spans are exported without their
+            content: prompts, messages, completions, tool definitions and
+            invocation parameters are replaced with ``__REDACTED__`` before
+            leaving the process. Token counts, span names and timing are
+            kept, so usage/cost tracking still works. Use for agents whose
+            internals (graph and prompts) must not be visible to whoever
+            operates the telemetry backend. Default ``False``.
         output (List[OutputConfig]): One entry per active destination.
     """
 
     service_name: Optional[str] = None
     project_name: Optional[str] = None
+    hide_content: bool = False
     output: List[OutputConfig] = Field(default=[])
 
 

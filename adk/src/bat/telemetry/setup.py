@@ -184,12 +184,33 @@ def setup_telemetry(
     atexit.register(shutdown_telemetry)
 
     try:
-        from openinference.instrumentation.langchain import LangChainInstrumentor
+        from openinference.instrumentation import TraceConfig
+        from openinference.instrumentation.langchain import (
+            LangChainInstrumentor,
+        )
 
-        LangChainInstrumentor().instrument(tracer_provider=provider)
+        instrument_kwargs: Dict[str, Any] = {"tracer_provider": provider}
+        if cfg.hide_content:
+            # Redaction happens inside the instrumentation (before any
+            # exporter sees the span), so every destination receives
+            # "__REDACTED__" in place of prompts, messages, completions,
+            # tool definitions and invocation parameters. Usage attributes
+            # (token counts), span names and timing are untouched, so cost
+            # accounting and the eval engine keep working.
+            instrument_kwargs["config"] = TraceConfig(
+                hide_inputs=True,
+                hide_outputs=True,
+                hide_prompts=True,
+                hide_llm_invocation_parameters=True,
+                hide_llm_tools=True,
+            )
+            logger.info(
+                "Telemetry: span content redaction active (hide_content)."
+            )
+        LangChainInstrumentor().instrument(**instrument_kwargs)
         _patch_openinference_langgraph_callbacks()
         logger.debug("OpenInference LangChain instrumentation active.")
-        
+
     except ImportError:
         logger.warning(
             "openinference-instrumentation-langchain not installed: "

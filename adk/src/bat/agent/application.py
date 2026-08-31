@@ -17,7 +17,11 @@ from starlette.routing import Route
 
 from ..chat_model_client import ChatModelClientConfig
 from ..logging import create_logger
-from ..telemetry import TelemetryConfig, setup_telemetry
+from ..telemetry import (
+    TelemetryConfig,
+    resolve_hide_content,
+    setup_telemetry,
+)
 from ._executor import MinimalAgentExecutor
 from .config import AgentConfig, TelemetrySettings
 from .graph import AgentGraph
@@ -128,10 +132,20 @@ class AgentApplication:
                 "disabled by default. To enable, add a `telemetry` section "
                 "with a valid output to config.yaml."
             )
+        # A `bat build --hide-telemetry-content` floor (baked into the frozen
+        # binary, immune to a runtime-replaced config.yaml) can only push
+        # this to True; config.yaml alone decides when no floor was baked in.
+        hide_content = resolve_hide_content(telemetry.hide_content)
+        if hide_content and not telemetry.hide_content:
+            logger.info(
+                "Telemetry: content redaction enforced by the build-time "
+                "policy (config.yaml did not request it)."
+            )
         telemetry_config = TelemetryConfig.from_settings(
             enabled=enabled,
             service_name=telemetry.service_name,
             project_name=telemetry.project_name,
+            hide_content=hide_content,
             outputs=[o.model_dump() for o in telemetry.output],
             default_service_name=self._agent_card.name,
         )

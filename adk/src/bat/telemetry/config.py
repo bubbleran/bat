@@ -12,7 +12,6 @@ DEFAULT_FILE_PATH = "spans.jsonl"
 _TRACES_PATH = "/v1/traces"
 
 
-
 @dataclass
 class ExporterSpec:
     """A single resolved telemetry destination.
@@ -56,9 +55,8 @@ def _spec_from_type(
         return ExporterSpec(kind="console")
 
     logger.warning(
-        "Unknown telemetry output type %r; skipping (expected one of "
-        "local, remote, console).",
-        type_value,
+        f"Unknown telemetry output type {type_value!r}; skipping "
+        f"(expected one of local, remote, console)."
     )
     return None
 
@@ -73,6 +71,11 @@ class TelemetryConfig:
         project_name (Optional[str]): OpenInference/Phoenix project name, set as
             the ``openinference.project.name`` resource attribute. ``None``
             leaves Phoenix's ``default`` project.
+        hide_content (bool): Redact span *content* (prompts, messages,
+            completions, tool definitions, invocation parameters) from every
+            exported span, keeping usage attributes (token counts), span
+            names and timing. For agents whose internals (graph and prompts)
+            must not be exposed to whoever reads the spans.
         exporters (List[ExporterSpec]): One entry per active destination; the
             spans are fanned out to all of them.
     """
@@ -80,8 +83,9 @@ class TelemetryConfig:
     enabled: bool
     service_name: str
     project_name: Optional[str] = None
+    hide_content: bool = False
     exporters: List[ExporterSpec] = field(default_factory=list)
-    
+
     @classmethod
     def from_settings(
         cls,
@@ -89,6 +93,7 @@ class TelemetryConfig:
         enabled: bool = False,
         service_name: Optional[str] = None,
         project_name: Optional[str] = None,
+        hide_content: bool = False,
         outputs: Optional[List[Any]] = None,
         default_service_name: Optional[str] = None,
     ) -> "TelemetryConfig":
@@ -102,8 +107,9 @@ class TelemetryConfig:
             service_name (Optional[str]): ``service.name``; falls back to
                 ``default_service_name`` then ``DEFAULT_SERVICE_NAME``.
             project_name (Optional[str]): OpenInference/Phoenix project name
-                (the ``openinference.project.name`` resource attribute); ``None``
-                leaves Phoenix's ``default`` project.
+                (the ``openinference.project.name`` resource attribute);
+                ``None`` leaves Phoenix's ``default`` project.
+            hide_content (bool): Redact span content (see the class attribute).
             outputs (Optional[List[Any]]): One entry per destination, each a
                 dict (or object) with ``type`` (``local``/``remote``/
                 ``console``) plus ``file_path`` / ``endpoint`` as relevant.
@@ -127,5 +133,6 @@ class TelemetryConfig:
             enabled=enabled,
             service_name=resolved_service_name,
             project_name=project_name,
+            hide_content=hide_content,
             exporters=specs,
         )

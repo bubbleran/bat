@@ -30,6 +30,7 @@ def test_full_nested_schema_parses():
             "agent_card": "./cards/agent.json",
             "telemetry": {
                 "service_name": "my-agent",
+                "hide_content": True,
                 "output": [
                     {"type": "local", "file_path": "spans.jsonl"},
                     {"type": "remote", "endpoint": "http://localhost:6006"},
@@ -55,6 +56,7 @@ def test_full_nested_schema_parses():
     assert cfg.agent_card == "./cards/agent.json"
 
     assert cfg.telemetry.service_name == "my-agent"
+    assert cfg.telemetry.hide_content is True
     assert cfg.telemetry.output[0].type == "local"
     assert cfg.telemetry.output[0].file_path == "spans.jsonl"
     assert cfg.telemetry.output[1].type == "remote"
@@ -76,4 +78,5 @@ def test_partial_sections_default_their_fields():
         {"telemetry": {"output": [{"type": "console"}]}}
     )
     assert cfg2.telemetry.service_name is None
+    assert cfg2.telemetry.hide_content is False
     assert cfg2.telemetry.output[0].type == "console"
