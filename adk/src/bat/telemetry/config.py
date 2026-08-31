@@ -75,7 +75,13 @@ class TelemetryConfig:
             completions, tool definitions, invocation parameters) from every
             exported span, keeping usage attributes (token counts), span
             names and timing. For agents whose internals (graph and prompts)
-            must not be exposed to whoever reads the spans.
+            must not be exposed to whoever reads the spans. Also redacts
+            tool descriptions, parameter schemas and tool-call arguments at
+            the exporter (``TraceConfig`` cannot reach those); tool *names*
+            are kept so the eval engine's tool-call metrics keep working.
+        hide_span_names (bool): Replace span names with the OpenInference
+            span kind, so LangGraph node names stop leaking. Independent of
+            ``hide_content`` because it costs trace readability.
         exporters (List[ExporterSpec]): One entry per active destination; the
             spans are fanned out to all of them.
     """
@@ -84,6 +90,7 @@ class TelemetryConfig:
     service_name: str
     project_name: Optional[str] = None
     hide_content: bool = False
+    hide_span_names: bool = False
     exporters: List[ExporterSpec] = field(default_factory=list)
 
     @classmethod
@@ -94,6 +101,7 @@ class TelemetryConfig:
         service_name: Optional[str] = None,
         project_name: Optional[str] = None,
         hide_content: bool = False,
+        hide_span_names: bool = False,
         outputs: Optional[List[Any]] = None,
         default_service_name: Optional[str] = None,
     ) -> "TelemetryConfig":
@@ -109,7 +117,10 @@ class TelemetryConfig:
             project_name (Optional[str]): OpenInference/Phoenix project name
                 (the ``openinference.project.name`` resource attribute);
                 ``None`` leaves Phoenix's ``default`` project.
-            hide_content (bool): Redact span content (see the class attribute).
+            hide_content (bool): Redact span content (see the class
+                attribute).
+            hide_span_names (bool): Redact span/node names (see the class
+                attribute).
             outputs (Optional[List[Any]]): One entry per destination, each a
                 dict (or object) with ``type`` (``local``/``remote``/
                 ``console``) plus ``file_path`` / ``endpoint`` as relevant.
@@ -134,5 +145,6 @@ class TelemetryConfig:
             service_name=resolved_service_name,
             project_name=project_name,
             hide_content=hide_content,
+            hide_span_names=hide_span_names,
             exporters=specs,
         )

@@ -202,6 +202,7 @@ class TelemetrySettings(BaseModel):
     service_name: Optional[str] = None
     project_name: Optional[str] = None
     hide_content: bool = False
+    hide_span_names: bool = False
     output: List[OutputConfig] = Field(default=[])
 
 

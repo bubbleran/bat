@@ -28,6 +28,14 @@ try:
 except ImportError:
     TELEMETRY_HIDE_CONTENT_FLOOR = False
 
+try:
+    from _telemetry_build_policy import (  # type: ignore[import-not-found]
+        TELEMETRY_HIDE_SPAN_NAMES_FLOOR,
+    )
+except ImportError:
+    # Older baked policy modules only carry the content floor.
+    TELEMETRY_HIDE_SPAN_NAMES_FLOOR = False
+
 
 def resolve_hide_content(configured: bool) -> bool:
     """Combine the build-time floor with ``config.yaml``'s request.
@@ -37,3 +45,12 @@ def resolve_hide_content(configured: bool) -> bool:
     absent a floor, ``configured`` alone decides.
     """
     return TELEMETRY_HIDE_CONTENT_FLOOR or configured
+
+
+def resolve_hide_span_names(configured: bool) -> bool:
+    """Combine the build-time span-name floor with ``config.yaml``'s request.
+
+    Same monotonic OR as :func:`resolve_hide_content`: a baked floor can only
+    make telemetry more private, never less.
+    """
+    return TELEMETRY_HIDE_SPAN_NAMES_FLOOR or configured

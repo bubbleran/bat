@@ -117,3 +117,65 @@ def test_policy_file_removed_even_when_docker_build_fails(
 
     assert result.exit_code != 0
     assert not policy_path.exists()
+
+
+def test_hide_telemetry_span_names_bakes_span_name_floor(
+    tmp_path, monkeypatch
+):
+    """--hide-telemetry-span-names bakes its own floor, independently."""
+    _write_minimal_build_context(tmp_path)
+    policy_path = tmp_path / TELEMETRY_BUILD_POLICY_FILENAME
+    seen_during_build: dict[str, str] = {}
+
+    def fake_run(command, check, cwd):
+        seen_during_build["content"] = policy_path.read_text(encoding="utf-8")
+
+        class FakeResult:
+            returncode = 0
+
+        return FakeResult()
+
+    monkeypatch.setattr("build.build.subprocess.run", fake_run)
+
+    result = runner.invoke(
+        app,
+        ["build", "--context", str(tmp_path), "--hide-telemetry-span-names"],
+    )
+
+    assert result.exit_code == 0, result.output
+    content = seen_during_build["content"]
+    assert "TELEMETRY_HIDE_SPAN_NAMES_FLOOR = True" in content
+    # Asking for one floor must not silently raise the other.
+    assert "TELEMETRY_HIDE_CONTENT_FLOOR = False" in content
+    assert not policy_path.exists()
+
+
+def test_both_telemetry_floors_can_be_baked_together(tmp_path, monkeypatch):
+    _write_minimal_build_context(tmp_path)
+    policy_path = tmp_path / TELEMETRY_BUILD_POLICY_FILENAME
+    seen: dict[str, str] = {}
+
+    def fake_run(command, check, cwd):
+        seen["content"] = policy_path.read_text(encoding="utf-8")
+
+        class FakeResult:
+            returncode = 0
+
+        return FakeResult()
+
+    monkeypatch.setattr("build.build.subprocess.run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "build",
+            "--context",
+            str(tmp_path),
+            "--hide-telemetry-content",
+            "--hide-telemetry-span-names",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "TELEMETRY_HIDE_CONTENT_FLOOR = True" in seen["content"]
+    assert "TELEMETRY_HIDE_SPAN_NAMES_FLOOR = True" in seen["content"]

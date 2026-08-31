@@ -31,3 +31,20 @@ def test_floor_forces_hide_content_even_when_config_says_no(monkeypatch):
 def test_floor_and_config_both_true_stays_true(monkeypatch):
     monkeypatch.setattr(build_policy, "TELEMETRY_HIDE_CONTENT_FLOOR", True)
     assert resolve_hide_content(True) is True
+
+
+def test_span_names_floor_defaults_off_in_source_checkout():
+    """No baked policy module -> config.yaml alone decides."""
+    from bat.telemetry.build_policy import resolve_hide_span_names
+
+    assert resolve_hide_span_names(False) is False
+    assert resolve_hide_span_names(True) is True
+
+
+def test_span_names_floor_is_monotonic(monkeypatch):
+    """A baked floor cannot be lowered by config.yaml."""
+    import bat.telemetry.build_policy as bp
+
+    monkeypatch.setattr(bp, "TELEMETRY_HIDE_SPAN_NAMES_FLOOR", True)
+    assert bp.resolve_hide_span_names(False) is True
+    assert bp.resolve_hide_span_names(True) is True

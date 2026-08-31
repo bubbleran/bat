@@ -3,6 +3,7 @@ import contextlib
 from typing import Any, Dict, Optional
 from .attributes import OPENINFERENCE_PROJECT_NAME
 from .file_exporter import JsonFileSpanExporter
+from .redaction import RedactingSpanExporter
 from ..logging import create_logger
 from .config import TelemetryConfig
 
@@ -145,17 +146,29 @@ def setup_telemetry(
     resource = Resource.create(resource_attributes)
     provider = TracerProvider(resource=resource)
 
+    # Attributes TraceConfig cannot reach (tool descriptions, parameter
+    # schemas, tool-call arguments) and span names are redacted here instead,
+    # on the way out, so every destination sees the same redacted span.
+    def _wrap(exp):
+        if not (cfg.hide_content or cfg.hide_span_names):
+            return exp
+        return RedactingSpanExporter(
+            exp,
+            hide_tool_content=cfg.hide_content,
+            hide_span_names=cfg.hide_span_names,
+        )
+
     for exporter in cfg.exporters:
         if exporter.kind == "console":
             provider.add_span_processor(
-                BatchSpanProcessor(ConsoleSpanExporter())
+                BatchSpanProcessor(_wrap(ConsoleSpanExporter()))
             )
             logger.info("Telemetry: console exporter active.")
         elif exporter.kind == "file":
             path = exporter.file_path or "spans.jsonl"
             try:
                 provider.add_span_processor(
-                    SimpleSpanProcessor(JsonFileSpanExporter(path))
+                    SimpleSpanProcessor(_wrap(JsonFileSpanExporter(path)))
                 )
             except OSError as e:
                 logger.error(
@@ -168,7 +181,7 @@ def setup_telemetry(
             logger.info("Telemetry: file exporter -> %s.", path)
         elif exporter.kind == "otlp":
             otlp_exp = OTLPSpanExporter(endpoint=exporter.traces_endpoint)
-            provider.add_span_processor(BatchSpanProcessor(otlp_exp))
+            provider.add_span_processor(BatchSpanProcessor(_wrap(otlp_exp)))
             logger.info(
                 "Telemetry: OTLP exporter -> %s.", exporter.traces_endpoint
             )
@@ -195,8 +208,10 @@ def setup_telemetry(
             # exporter sees the span), so every destination receives
             # "__REDACTED__" in place of prompts, messages, completions,
             # tool definitions and invocation parameters. Usage attributes
-            # (token counts), span names and timing are untouched, so cost
-            # accounting and the eval engine keep working.
+            # (token counts) and timing are untouched, so cost accounting
+            # and the eval engine keep working. Tool descriptions/schemas and
+            # tool-call arguments are out of TraceConfig's reach and are
+            # handled by RedactingSpanExporter above.
             instrument_kwargs["config"] = TraceConfig(
                 hide_inputs=True,
                 hide_outputs=True,
@@ -206,6 +221,11 @@ def setup_telemetry(
             )
             logger.info(
                 "Telemetry: span content redaction active (hide_content)."
+            )
+        if cfg.hide_span_names:
+            logger.info(
+                "Telemetry: span/node name redaction active "
+                "(hide_span_names)."
             )
         LangChainInstrumentor().instrument(**instrument_kwargs)
         _patch_openinference_langgraph_callbacks()

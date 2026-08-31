@@ -20,6 +20,7 @@ from ..logging import create_logger
 from ..telemetry import (
     TelemetryConfig,
     resolve_hide_content,
+    resolve_hide_span_names,
     setup_telemetry,
 )
 from ._executor import MinimalAgentExecutor
@@ -141,11 +142,18 @@ class AgentApplication:
                 "Telemetry: content redaction enforced by the build-time "
                 "policy (config.yaml did not request it)."
             )
+        hide_span_names = resolve_hide_span_names(telemetry.hide_span_names)
+        if hide_span_names and not telemetry.hide_span_names:
+            logger.info(
+                "Telemetry: span-name redaction enforced by the build-time "
+                "policy (config.yaml did not request it)."
+            )
         telemetry_config = TelemetryConfig.from_settings(
             enabled=enabled,
             service_name=telemetry.service_name,
             project_name=telemetry.project_name,
             hide_content=hide_content,
+            hide_span_names=hide_span_names,
             outputs=[o.model_dump() for o in telemetry.output],
             default_service_name=self._agent_card.name,
         )
