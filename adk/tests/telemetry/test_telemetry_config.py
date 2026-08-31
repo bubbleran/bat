@@ -10,6 +10,7 @@ from bat.telemetry.config import (
     DEFAULT_SERVICE_NAME,
     TelemetryConfig,
 )
+from bat.telemetry.privacy import TelemetryPrivacy
 
 _OTLP_ENDPOINT = DEFAULT_COLLECTOR_ENDPOINT + "/v1/traces"
 
@@ -98,13 +99,24 @@ def test_project_name_passthrough():
     assert cfg.project_name is None
 
 
-def test_hide_content_passthrough_and_default():
-    # hide_content flows through; absent -> False (content exported as-is).
+def test_privacy_passthrough_and_default():
+    # privacy flows through; absent -> none (content exported as-is).
     cfg = TelemetryConfig.from_settings(
-        enabled=True, hide_content=True, outputs=[{"type": "console"}]
+        enabled=True, privacy="content", outputs=[{"type": "console"}]
     )
-    assert cfg.hide_content is True
+    assert cfg.privacy is TelemetryPrivacy.CONTENT
     cfg = TelemetryConfig.from_settings(
         enabled=True, outputs=[{"type": "console"}]
     )
-    assert cfg.hide_content is False
+    assert cfg.privacy is TelemetryPrivacy.NONE
+
+
+def test_privacy_accepts_name_or_ordinal():
+    for value, expected in [
+        ("full", TelemetryPrivacy.FULL),
+        ("NAMES", TelemetryPrivacy.NAMES),
+        (1, TelemetryPrivacy.CONTENT),
+        (0, TelemetryPrivacy.NONE),
+    ]:
+        cfg = TelemetryConfig.from_settings(enabled=True, privacy=value)
+        assert cfg.privacy is expected, value

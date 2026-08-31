@@ -1,50 +1,47 @@
-"""Tests for the build-time telemetry redaction floor.
+"""Tests for the build-time telemetry privacy floor.
 
-``resolve_hide_content`` ORs ``config.yaml``'s ``telemetry.hide_content``
-with ``TELEMETRY_HIDE_CONTENT_FLOOR`` -- a module-level constant that only
-exists (as ``True``) inside a binary built with
-``bat build --hide-telemetry-content``. In a source checkout the import in
-``bat.telemetry.build_policy`` fails and the floor is ``False``, so these
+``resolve_privacy`` takes the ``max`` of ``config.yaml``'s
+``telemetry.privacy`` and ``TELEMETRY_PRIVACY_FLOOR`` -- a module-level
+constant that only exists inside a binary built with
+``bat build --telemetry-privacy LEVEL``. In a source checkout the import in
+``bat.telemetry.build_policy`` fails and the floor is ``none``, so these
 tests monkeypatch the resolved constant directly to simulate a "baked" build.
 """
 
 from bat.telemetry import build_policy
-from bat.telemetry.build_policy import resolve_hide_content
+from bat.telemetry.build_policy import resolve_privacy
+from bat.telemetry.privacy import TelemetryPrivacy
 
 
-def test_no_floor_defaults_to_false():
+def test_no_floor_defaults_to_none():
     """Source checkouts (no build policy module) import nothing extra."""
-    assert build_policy.TELEMETRY_HIDE_CONTENT_FLOOR is False
+    assert build_policy.TELEMETRY_PRIVACY_FLOOR is TelemetryPrivacy.NONE
 
 
 def test_no_floor_config_decides_alone():
-    assert resolve_hide_content(False) is False
-    assert resolve_hide_content(True) is True
+    assert resolve_privacy("none") is TelemetryPrivacy.NONE
+    assert resolve_privacy("content") is TelemetryPrivacy.CONTENT
+    assert resolve_privacy("full") is TelemetryPrivacy.FULL
 
 
-def test_floor_forces_hide_content_even_when_config_says_no(monkeypatch):
-    """A baked floor cannot be turned off by config.yaml."""
-    monkeypatch.setattr(build_policy, "TELEMETRY_HIDE_CONTENT_FLOOR", True)
-    assert resolve_hide_content(False) is True
-
-
-def test_floor_and_config_both_true_stays_true(monkeypatch):
-    monkeypatch.setattr(build_policy, "TELEMETRY_HIDE_CONTENT_FLOOR", True)
-    assert resolve_hide_content(True) is True
-
-
-def test_span_names_floor_defaults_off_in_source_checkout():
-    """No baked policy module -> config.yaml alone decides."""
-    from bat.telemetry.build_policy import resolve_hide_span_names
-
-    assert resolve_hide_span_names(False) is False
-    assert resolve_hide_span_names(True) is True
-
-
-def test_span_names_floor_is_monotonic(monkeypatch):
+def test_floor_raises_level_when_config_asks_for_less(monkeypatch):
     """A baked floor cannot be lowered by config.yaml."""
-    import bat.telemetry.build_policy as bp
+    monkeypatch.setattr(
+        build_policy, "TELEMETRY_PRIVACY_FLOOR", TelemetryPrivacy.NAMES
+    )
+    assert resolve_privacy("none") is TelemetryPrivacy.NAMES
+    assert resolve_privacy("content") is TelemetryPrivacy.NAMES
 
-    monkeypatch.setattr(bp, "TELEMETRY_HIDE_SPAN_NAMES_FLOOR", True)
-    assert bp.resolve_hide_span_names(False) is True
-    assert bp.resolve_hide_span_names(True) is True
+
+def test_config_may_raise_above_the_floor(monkeypatch):
+    """The floor is a minimum, not a ceiling."""
+    monkeypatch.setattr(
+        build_policy, "TELEMETRY_PRIVACY_FLOOR", TelemetryPrivacy.CONTENT
+    )
+    assert resolve_privacy("full") is TelemetryPrivacy.FULL
+
+
+def test_floor_accepts_a_baked_level_name(monkeypatch):
+    """The baked constant is written as a string literal by the CLI."""
+    monkeypatch.setattr(build_policy, "TELEMETRY_PRIVACY_FLOOR", "names")
+    assert resolve_privacy("none") is TelemetryPrivacy.NAMES

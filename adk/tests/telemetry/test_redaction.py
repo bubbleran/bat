@@ -9,6 +9,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.trace import SpanContext, SpanKind, TraceFlags
 
+from bat.telemetry.privacy import TelemetryPrivacy
 from bat.telemetry.redaction import (
     REDACTED,
     RedactingSpanExporter,
@@ -90,7 +91,7 @@ def test_usage_attributes_survive_redaction():
 
 def test_exporter_redacts_tool_content_but_keeps_span_name():
     cap = _CapturingExporter()
-    exp = RedactingSpanExporter(cap, hide_tool_content=True)
+    exp = RedactingSpanExporter(cap, privacy=TelemetryPrivacy.CONTENT)
     exp.export([_span("call_tool", {"tool.description": "secret"})])
 
     (got,) = cap.spans
@@ -100,9 +101,7 @@ def test_exporter_redacts_tool_content_but_keeps_span_name():
 
 def test_span_names_replaced_by_openinference_kind():
     cap = _CapturingExporter()
-    exp = RedactingSpanExporter(
-        cap, hide_tool_content=False, hide_span_names=True
-    )
+    exp = RedactingSpanExporter(cap, privacy=TelemetryPrivacy.NAMES)
     exp.export(
         [_span("classify_intent", {"openinference.span.kind": "CHAIN"})]
     )
@@ -117,7 +116,7 @@ def test_span_names_replaced_by_openinference_kind():
 
 def test_span_name_falls_back_to_redacted_without_kind():
     cap = _CapturingExporter()
-    exp = RedactingSpanExporter(cap, hide_span_names=True)
+    exp = RedactingSpanExporter(cap, privacy=TelemetryPrivacy.NAMES)
     exp.export([_span("my_private_node", {})])
     assert cap.spans[0].name == REDACTED
 
@@ -128,3 +127,23 @@ def test_flush_and_shutdown_delegate():
     assert exp.force_flush() is True
     exp.shutdown()
     assert cap.flushed and cap.shut_down
+
+
+def test_full_level_also_redacts_tool_names():
+    """`full` trades the eval engine's tool-call metrics for a hidden
+    tool inventory."""
+    out = redact_attributes(
+        {"tool.name": "reboot_ran", "llm.token_count.total": 7},
+        hide_tool_names=True,
+    )
+    assert out["tool.name"] == REDACTED
+    assert out["llm.token_count.total"] == 7
+
+
+def test_levels_are_cumulative():
+    assert TelemetryPrivacy.NONE.hides_content is False
+    assert TelemetryPrivacy.CONTENT.hides_content is True
+    assert TelemetryPrivacy.CONTENT.hides_span_names is False
+    assert TelemetryPrivacy.NAMES.hides_span_names is True
+    assert TelemetryPrivacy.NAMES.hides_tool_names is False
+    assert TelemetryPrivacy.FULL.hides_tool_names is True

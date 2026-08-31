@@ -3,6 +3,7 @@ import contextlib
 from typing import Any, Dict, Optional
 from .attributes import OPENINFERENCE_PROJECT_NAME
 from .file_exporter import JsonFileSpanExporter
+from .privacy import TelemetryPrivacy
 from .redaction import RedactingSpanExporter
 from ..logging import create_logger
 from .config import TelemetryConfig
@@ -150,13 +151,9 @@ def setup_telemetry(
     # schemas, tool-call arguments) and span names are redacted here instead,
     # on the way out, so every destination sees the same redacted span.
     def _wrap(exp):
-        if not (cfg.hide_content or cfg.hide_span_names):
+        if cfg.privacy is TelemetryPrivacy.NONE:
             return exp
-        return RedactingSpanExporter(
-            exp,
-            hide_tool_content=cfg.hide_content,
-            hide_span_names=cfg.hide_span_names,
-        )
+        return RedactingSpanExporter(exp, privacy=cfg.privacy)
 
     for exporter in cfg.exporters:
         if exporter.kind == "console":
@@ -203,7 +200,7 @@ def setup_telemetry(
         )
 
         instrument_kwargs: Dict[str, Any] = {"tracer_provider": provider}
-        if cfg.hide_content:
+        if cfg.privacy.hides_content:
             # Redaction happens inside the instrumentation (before any
             # exporter sees the span), so every destination receives
             # "__REDACTED__" in place of prompts, messages, completions,
@@ -219,14 +216,14 @@ def setup_telemetry(
                 hide_llm_invocation_parameters=True,
                 hide_llm_tools=True,
             )
-            logger.info(
-                "Telemetry: span content redaction active (hide_content)."
-            )
-        if cfg.hide_span_names:
-            logger.info(
-                "Telemetry: span/node name redaction active "
-                "(hide_span_names)."
-            )
+        logger.info(
+            "Telemetry: privacy level %s (content=%s, span_names=%s, "
+            "tool_names=%s).",
+            cfg.privacy.name.lower(),
+            cfg.privacy.hides_content,
+            cfg.privacy.hides_span_names,
+            cfg.privacy.hides_tool_names,
+        )
         LangChainInstrumentor().instrument(**instrument_kwargs)
         _patch_openinference_langgraph_callbacks()
         logger.debug("OpenInference LangChain instrumentation active.")

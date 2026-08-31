@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from ..logging import create_logger
+from .privacy import TelemetryPrivacy, parse_privacy
 
 logger = create_logger(__name__, "debug")
 
@@ -71,17 +72,11 @@ class TelemetryConfig:
         project_name (Optional[str]): OpenInference/Phoenix project name, set as
             the ``openinference.project.name`` resource attribute. ``None``
             leaves Phoenix's ``default`` project.
-        hide_content (bool): Redact span *content* (prompts, messages,
-            completions, tool definitions, invocation parameters) from every
-            exported span, keeping usage attributes (token counts), span
-            names and timing. For agents whose internals (graph and prompts)
-            must not be exposed to whoever reads the spans. Also redacts
-            tool descriptions, parameter schemas and tool-call arguments at
-            the exporter (``TraceConfig`` cannot reach those); tool *names*
-            are kept so the eval engine's tool-call metrics keep working.
-        hide_span_names (bool): Replace span names with the OpenInference
-            span kind, so LangGraph node names stop leaking. Independent of
-            ``hide_content`` because it costs trace readability.
+        privacy (TelemetryPrivacy): How much of the agent's internals may
+            leave the process -- ``none``/``content``/``names``/``full``, each
+            level a superset of the one below. Token counts, span kinds,
+            hierarchy and timing survive at every level, so cost accounting
+            keeps working. See :mod:`bat.telemetry.privacy`.
         exporters (List[ExporterSpec]): One entry per active destination; the
             spans are fanned out to all of them.
     """
@@ -89,9 +84,18 @@ class TelemetryConfig:
     enabled: bool
     service_name: str
     project_name: Optional[str] = None
-    hide_content: bool = False
-    hide_span_names: bool = False
+    privacy: TelemetryPrivacy = TelemetryPrivacy.NONE
     exporters: List[ExporterSpec] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Coerce ``privacy`` however this dataclass was constructed.
+
+        ``from_settings`` already parses it, but this is a public dataclass:
+        code that builds one directly (tests, embedders) would otherwise hold
+        a plain string and fail later, inside ``setup_telemetry``, with an
+        ``AttributeError`` far from the mistake.
+        """
+        self.privacy = parse_privacy(self.privacy)
 
     @classmethod
     def from_settings(
@@ -100,8 +104,7 @@ class TelemetryConfig:
         enabled: bool = False,
         service_name: Optional[str] = None,
         project_name: Optional[str] = None,
-        hide_content: bool = False,
-        hide_span_names: bool = False,
+        privacy: object = None,
         outputs: Optional[List[Any]] = None,
         default_service_name: Optional[str] = None,
     ) -> "TelemetryConfig":
@@ -117,10 +120,9 @@ class TelemetryConfig:
             project_name (Optional[str]): OpenInference/Phoenix project name
                 (the ``openinference.project.name`` resource attribute);
                 ``None`` leaves Phoenix's ``default`` project.
-            hide_content (bool): Redact span content (see the class
-                attribute).
-            hide_span_names (bool): Redact span/node names (see the class
-                attribute).
+            privacy (object): Privacy level as written in ``config.yaml``
+                (level name or ordinal); coerced via
+                :func:`bat.telemetry.privacy.parse_privacy`.
             outputs (Optional[List[Any]]): One entry per destination, each a
                 dict (or object) with ``type`` (``local``/``remote``/
                 ``console``) plus ``file_path`` / ``endpoint`` as relevant.
@@ -144,7 +146,6 @@ class TelemetryConfig:
             enabled=enabled,
             service_name=resolved_service_name,
             project_name=project_name,
-            hide_content=hide_content,
-            hide_span_names=hide_span_names,
+            privacy=parse_privacy(privacy),
             exporters=specs,
         )

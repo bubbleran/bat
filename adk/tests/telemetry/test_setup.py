@@ -89,8 +89,8 @@ def _capture_instrument_kwargs(monkeypatch) -> dict:
     return captured
 
 
-def test_hide_content_passes_redaction_config_to_instrumentor(monkeypatch):
-    """hide_content=True hands the instrumentor a TraceConfig that masks all
+def test_content_level_passes_redaction_config_to_instrumentor(monkeypatch):
+    """privacy>=content hands the instrumentor a TraceConfig that masks all
     content-bearing attributes (prompts, messages, tools, invocation params)
     while leaving usage attributes -- token counts -- untouched."""
     from openinference.instrumentation import TraceConfig
@@ -99,7 +99,7 @@ def test_hide_content_passes_redaction_config_to_instrumentor(monkeypatch):
     cfg = TelemetryConfig(
         enabled=True,
         service_name="svc",
-        hide_content=True,
+        privacy="content",
         exporters=[ExporterSpec(kind="console")],
     )
     try:
@@ -120,8 +120,8 @@ def test_hide_content_passes_redaction_config_to_instrumentor(monkeypatch):
         setup_mod.shutdown_telemetry()
 
 
-def test_without_hide_content_no_redaction_config(monkeypatch):
-    """Default (hide_content=False) must not pass a config, preserving
+def test_privacy_none_passes_no_redaction_config(monkeypatch):
+    """Default (privacy=none) must not pass a config, preserving
     OpenInference's own env-var driven defaults (OPENINFERENCE_HIDE_*)."""
     captured = _capture_instrument_kwargs(monkeypatch)
     cfg = TelemetryConfig(

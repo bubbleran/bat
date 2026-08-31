@@ -13,23 +13,27 @@ This module closes that gap by wrapping each exporter: spans are rewritten
 on the way out, so every destination (file, OTLP, console) sees the same
 redacted span.
 
-What is deliberately **kept**:
+What is kept at the ``content`` level:
 
 - ``tool.name`` / ``tool_call.function.name``: the eval engine reconstructs
   per-episode tool calls from spans, and its tool-call metrics key off the
-  name. Redacting names would silently empty those metrics.
+  name. Redacting names silently empties those metrics, so it is deferred to
+  the ``full`` level where that trade is made explicitly.
 - token counts, span kind, hierarchy and timing: cost accounting and the
-  eval engine depend on them.
+  eval engine depend on them. These survive at *every* level.
 
-Span (graph node) names are handled separately behind ``hide_span_names``:
-they are structural rather than content, and blanking them costs a lot of
-trace readability, so it is its own opt-in.
+Span (graph node) names and tool names sit at higher privacy levels because
+they are identity rather than content, and blanking them costs trace
+readability (and, for tool names, the eval engine's tool-call metrics). See
+:mod:`bat.telemetry.privacy` for the ladder.
 """
 
 from typing import Dict, Optional, Sequence
 
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+
+from .privacy import TelemetryPrivacy
 
 # Same sentinel OpenInference's TraceConfig writes, so a consumer sees one
 # consistent marker regardless of which layer did the redaction.
@@ -49,26 +53,50 @@ _CONTENT_MARKERS = (
 # Reused as the replacement span name so redacted traces keep their shape.
 _SPAN_KIND_KEY = "openinference.span.kind"
 
+# Tool identity, redacted only at the `full` level.
+_NAME_MARKERS = (
+    "tool.name",
+    "tool_call.function.name",
+    "gen_ai.tool.name",
+)
+
 
 def _is_tool_content(key: str) -> bool:
     """True when ``key`` names tool content rather than tool identity."""
     return any(marker in key for marker in _CONTENT_MARKERS)
 
 
+def _is_tool_name(key: str) -> bool:
+    """True when ``key`` names a tool's identity."""
+    return any(marker in key for marker in _NAME_MARKERS)
+
+
 def redact_attributes(
     attributes: Optional[Dict[str, object]],
+    *,
+    hide_tool_names: bool = False,
 ) -> Dict[str, object]:
-    """Replace tool-content attribute values with :data:`REDACTED`.
+    """Replace tool attribute values with :data:`REDACTED`.
 
     Keys are preserved so consumers can still tell *that* a tool span carried
     a description or arguments, only not what they said.
+
+    Args:
+        attributes (Optional[Dict[str, object]]): The span's attributes.
+        hide_tool_names (bool): Also redact tool identity (the ``full``
+            privacy level).
     """
     if not attributes:
         return {}
-    return {
-        key: (REDACTED if _is_tool_content(key) else value)
-        for key, value in attributes.items()
-    }
+
+    def _redact(key: str, value: object) -> object:
+        if _is_tool_content(key):
+            return REDACTED
+        if hide_tool_names and _is_tool_name(key):
+            return REDACTED
+        return value
+
+    return {key: _redact(key, value) for key, value in attributes.items()}
 
 
 class RedactingSpanExporter(SpanExporter):
@@ -76,33 +104,29 @@ class RedactingSpanExporter(SpanExporter):
 
     Args:
         delegate (SpanExporter): The exporter that performs the real export.
-        hide_tool_content (bool): Redact tool descriptions, parameter schemas
-            and tool-call arguments (tool *names* are kept -- see the module
-            docstring).
-        hide_span_names (bool): Replace span names with the span's
-            OpenInference kind (``LLM``/``CHAIN``/``TOOL``/...), falling back
-            to :data:`REDACTED`, so graph node names stop leaking while the
-            trace keeps its shape.
+        privacy (TelemetryPrivacy): The effective privacy level; decides
+            which of tool content, span names and tool names are redacted.
     """
 
     def __init__(
         self,
         delegate: SpanExporter,
         *,
-        hide_tool_content: bool = True,
-        hide_span_names: bool = False,
+        privacy: TelemetryPrivacy = TelemetryPrivacy.CONTENT,
     ) -> None:
         self._delegate = delegate
-        self._hide_tool_content = hide_tool_content
-        self._hide_span_names = hide_span_names
+        self._privacy = privacy
 
     def _redact(self, span: ReadableSpan) -> ReadableSpan:
         attributes = dict(span.attributes or {})
-        if self._hide_tool_content:
-            attributes = redact_attributes(attributes)
+        if self._privacy.hides_content:
+            attributes = redact_attributes(
+                attributes,
+                hide_tool_names=self._privacy.hides_tool_names,
+            )
 
         name = span.name
-        if self._hide_span_names:
+        if self._privacy.hides_span_names:
             kind = attributes.get(_SPAN_KIND_KEY)
             name = str(kind) if kind else REDACTED
 
