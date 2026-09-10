@@ -414,9 +414,7 @@ class ReActLoop(PrebuiltWorkflow):
                 status_msg = f"Calling tools: {', '.join(tool_names)}"
                 state = state.model_copy(update={self.status_key: status_msg})
         else:
-            state.bat_extra[self._internal_final_response_key] = (
-                response.content
-            )
+            state.bat_extra[self._internal_final_response_key] = response.text
         logger.debug(f"Node `{self.loop_name}.llm`: completed")
         yield state
 
