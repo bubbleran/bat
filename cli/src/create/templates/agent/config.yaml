@@ -14,6 +14,8 @@ checkpoints: false
 telemetry:
   # service_name: my-agent             # optional (defaults to the agent name)
   # project_name: my-agent             # optional; Phoenix project for the traces (default: "default")
+  # privacy: none                      # none (default) | content | names | full -- how much may leave
+                                       # the process; each level redacts everything the one below does
   output: []                           # telemetry is ON when output has >=1 entry; spans fan out to every entry
     # Replace [] above with one entry per destination, e.g.:
     # - type: remote                   # remote | local | console

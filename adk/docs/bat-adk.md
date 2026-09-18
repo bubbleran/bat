@@ -68,7 +68,7 @@ The **AgentConfig** defines how an agent behaves and what external resources it 
 
 ### Loading and Validation
 
-- Automatically loaded from `config.yaml` or the path set in the `CONFIG` environment variable when the **AgentApplication** starts
+- Automatically loaded from `config.yaml` or the path set in the `CONFIG_PATH` environment variable when the **AgentApplication** starts
 - Validated by checking connectivity to all `required` MCP Servers and Agents
   - If any required resource is unreachable, the application crashes and must be restarted (handled automatically in Kubernetes)
 

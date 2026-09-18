@@ -64,7 +64,8 @@ bat
 │   ├── --docker-registry
 │   ├── --repo
 │   ├── --version
-│   └── --no-cache
+│   ├── --no-cache
+│   └── --telemetry-privacy
 ├── push
 │   ├── --context, -C
 │   ├── --docker-registry
@@ -126,6 +127,14 @@ The registry and repository can come from several sources. The CLI resolves them
 4. A hardcoded fallback default
 
 This means that once an agent's `.env` carries the Docker defaults, `bat build` and `bat push` can be run with no arguments at all.
+
+### Telemetry Privacy Floor
+
+An agent's `telemetry.privacy` in `config.yaml` says how much of its internals may leave the process — `none` (the default) | `content` | `names` | `full`, each level redacting everything the one below it does. See the ADK's [TELEMETRY.md](../../adk/docs/TELEMETRY.md) for what each level covers.
+
+That file is editable wherever the agent runs, so for an agent shipped as a packaged artifact it is a default, not a guarantee. `bat build --telemetry-privacy LEVEL` closes the gap by baking a **minimum** level into the frozen binary: the effective level is `max(floor, config.yaml)`, so a replaced `config.yaml` can raise privacy but never lower it.
+
+The flag writes a generated module into the Docker build context just long enough for PyInstaller to compile it in, then removes it — it never lands in the agent's source tree. Without the flag no floor is baked and `config.yaml` remains the sole authority. An unknown level is rejected outright, since a typo silently degrading to `none` would ship an artifact exporting in the clear precisely when someone meant to lock it down.
 
 ## Evaluation Engine (`eval`)
 

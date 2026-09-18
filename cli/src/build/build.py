@@ -23,7 +23,7 @@ TELEMETRY_BUILD_POLICY_FILENAME = "_telemetry_build_policy.py"
 def _telemetry_build_policy_file(context_dir: Path, privacy: str):
     """Temporarily write the build-time telemetry redaction floor.
 
-    Yields with the file in place (only when ``hide_content`` is set) so
+    Yields with the file in place (only above the ``none`` level) so
     ``docker build`` picks it up as build context, then always removes it --
     it is a generated artifact, not something that belongs in the agent's
     source tree or its git history.
