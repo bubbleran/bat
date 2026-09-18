@@ -1,3 +1,3 @@
-from .env import set_env_values
+from .env import set_agent_settings
 
-__all__ = ["set_env_values"]
+__all__ = ["set_agent_settings"]
