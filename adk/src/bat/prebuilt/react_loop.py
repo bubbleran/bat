@@ -149,7 +149,7 @@ class ReActLoop(PrebuiltWorkflow):
             messages_key,
         ]
         for key in keys:
-            if key not in StateType.model_fields:
+            if key is not None and key not in StateType.model_fields:
                 logger.error(
                     f"key '{key}' not available in the provided AgentState type"
                     f"'{StateType.__name__}'"
@@ -221,16 +221,11 @@ class ReActLoop(PrebuiltWorkflow):
             extra = state.bat_extra
             pending = extra.get(self._pending_key)
             if pending is None:
-                # First pass: take the calls off the assistant turn.
                 pending = list(
                     getattr(state.bat_buffer[-1], "tool_calls", None) or []
                 )
                 extra[self._results_key] = []
             else:
-                # A tools pass just finished; keep what it produced. Every
-                # declared call must be answered in the SAME turn the
-                # assistant asked, or the provider rejects the history — so
-                # the results are handed back together at the end.
                 extra[self._results_key] = list(
                     extra.get(self._results_key) or []
                 ) + list(state.bat_buffer)
@@ -270,10 +265,6 @@ class ReActLoop(PrebuiltWorkflow):
             self.graph_builder.add_conditional_edges(
                 "serialize", _run_or_return, {"tools": "tools", "llm": "llm"}
             )
-            # Every tools pass comes back here: the one that just ran hands
-            # over its result and the next call is peeled off. Without this
-            # edge the tools node has no successor and the loop ends after
-            # the first call of the batch.
             self.graph_builder.add_edge("tools", "serialize")
         else:
             self.graph_builder.add_edge("tools", "llm")
@@ -388,8 +379,6 @@ class ReActLoop(PrebuiltWorkflow):
             )
             yield state
         try:
-            # If there are tool messages, use them as input
-            # otherwise, use the input key from state
             input = tool_messages or (
                 HumanMessage(state_input)
                 if isinstance(
