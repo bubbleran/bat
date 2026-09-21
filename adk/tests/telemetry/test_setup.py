@@ -74,3 +74,64 @@ def test_no_project_name_omits_resource_attribute():
         assert OPENINFERENCE_PROJECT_NAME not in setup_mod._provider.resource.attributes
     finally:
         setup_mod.shutdown_telemetry()
+
+
+def _capture_instrument_kwargs(monkeypatch) -> dict:
+    """Stub LangChainInstrumentor.instrument and capture its kwargs."""
+    from openinference.instrumentation.langchain import LangChainInstrumentor
+
+    captured: dict = {}
+
+    def fake_instrument(self, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(LangChainInstrumentor, "instrument", fake_instrument)
+    return captured
+
+
+def test_content_level_passes_redaction_config_to_instrumentor(monkeypatch):
+    """privacy>=content hands the instrumentor a TraceConfig that masks all
+    content-bearing attributes (prompts, messages, tools, invocation params)
+    while leaving usage attributes -- token counts -- untouched."""
+    from openinference.instrumentation import TraceConfig
+
+    captured = _capture_instrument_kwargs(monkeypatch)
+    cfg = TelemetryConfig(
+        enabled=True,
+        service_name="svc",
+        privacy="content",
+        exporters=[ExporterSpec(kind="console")],
+    )
+    try:
+        assert setup_telemetry(config=cfg) is True
+        trace_config = captured.get("config")
+        assert isinstance(trace_config, TraceConfig)
+        assert trace_config.hide_inputs is True
+        assert trace_config.hide_outputs is True
+        assert trace_config.hide_prompts is True
+        assert trace_config.hide_llm_invocation_parameters is True
+        assert trace_config.hide_llm_tools is True
+        # Sanity-check the masking semantics this feature relies on:
+        # content is redacted/dropped, usage attributes pass through.
+        assert trace_config.mask("input.value", "secret") == "__REDACTED__"
+        assert trace_config.mask("llm.tools.0.tool.json_schema", "{}") is None
+        assert trace_config.mask("llm.token_count.total", 42) == 42
+    finally:
+        setup_mod.shutdown_telemetry()
+
+
+def test_privacy_none_passes_no_redaction_config(monkeypatch):
+    """Default (privacy=none) must not pass a config, preserving
+    OpenInference's own env-var driven defaults (OPENINFERENCE_HIDE_*)."""
+    captured = _capture_instrument_kwargs(monkeypatch)
+    cfg = TelemetryConfig(
+        enabled=True,
+        service_name="svc",
+        exporters=[ExporterSpec(kind="console")],
+    )
+    try:
+        assert setup_telemetry(config=cfg) is True
+        assert "config" not in captured
+        assert captured.get("tracer_provider") is setup_mod._provider
+    finally:
+        setup_mod.shutdown_telemetry()

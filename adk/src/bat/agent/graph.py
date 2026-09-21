@@ -217,7 +217,7 @@ class AgentGraph(ABC):
             current_state = self._graph.get_state(config=config)
             intr = (
                 current_state.tasks[0].interrupts[0]
-                if current_state.tasks
+                if current_state.tasks and current_state.tasks[0].interrupts
                 else None
             )
             if intr:

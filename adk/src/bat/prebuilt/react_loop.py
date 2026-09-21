@@ -1,6 +1,6 @@
 from typing import List, Literal, Optional, Type
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START
 from langgraph.prebuilt import ToolNode
@@ -50,6 +50,16 @@ class ReActLoop(PrebuiltWorkflow):
             If provided, the value at this key is updated with the current
             status of the loop.
             Useful to beautify the streamed output of the loop.
+        tool_call_policy ("parallel" | "sequential", optional): How a turn
+            asking for several tools is executed. Defaults to "parallel",
+            which is the behaviour of every earlier release: the ToolNode runs
+            them together on one snapshot of the state.
+            "sequential" executes them one at a time, each on the state the
+            previous one left. Required by any loop whose tools write state
+            through ``Command``: siblings in one step cannot see each other,
+            and LangGraph rejects two writes to the same key in a single step.
+            It costs no extra model call — the request is not split, only its
+            execution.
 
     Example
     -------
@@ -101,6 +111,7 @@ class ReActLoop(PrebuiltWorkflow):
         output_key: str = "output",
         messages_key: Optional[str] = None,
         status_key: Optional[str] = None,
+        tool_call_policy: Literal["parallel", "sequential"] = "parallel",
     ) -> None:
         """Initialize the ReActLoop with the given configuration and
         parameters.
@@ -157,6 +168,7 @@ class ReActLoop(PrebuiltWorkflow):
             output_key=output_key,
             messages_key=messages_key,
             status_key=status_key,
+            tool_call_policy=tool_call_policy,
         )
 
     @override
@@ -168,6 +180,7 @@ class ReActLoop(PrebuiltWorkflow):
         output_key: str = "output",
         messages_key: Optional[str] = None,
         status_key: Optional[str] = None,
+        tool_call_policy: Literal["parallel", "sequential"] = "parallel",
     ) -> None:
         self.loop_name = loop_name
         self.chat_model_client = chat_model_client
@@ -178,11 +191,56 @@ class ReActLoop(PrebuiltWorkflow):
         self._internal_messages_key = messages_key or f"{loop_name}.messages"
         self._internal_final_response_key = f"{loop_name}.final_response"
         self._internal_trace_key = f"{loop_name}.trace.tool_calls"
+        self.tool_call_policy = tool_call_policy
+        self._pending_key = f"{loop_name}.pending_tool_calls"
+        self._results_key = f"{loop_name}.tool_results"
 
-        def _tools_or_cleanup(state) -> Literal["tools", "cleanup"]:
+        sequential = tool_call_policy == "sequential"
+        first_stop = "serialize" if sequential else "tools"
+
+        def _tools_or_cleanup(state) -> str:
             if state.bat_buffer:
-                return "tools"
+                return first_stop
             return "cleanup"
+
+        def _serialize(state):
+            """Hand the ToolNode ONE call, and keep the rest for later.
+
+            A model may ask for several tools in one turn, and a ToolNode runs
+            them together on a single snapshot of the state. A tool that writes
+            state through ``Command`` therefore cannot see what its sibling
+            did, and LangGraph refuses two writes to one key in one step
+            outright.
+
+            Splitting the EXECUTION rather than asking the model to split the
+            REQUEST needs no provider flag and no cooperation from the model:
+            each pass through the tools node is its own LangGraph step, so an
+            update lands before the next call starts.
+            """
+
+            extra = state.bat_extra
+            pending = extra.get(self._pending_key)
+            if pending is None:
+                pending = list(
+                    getattr(state.bat_buffer[-1], "tool_calls", None) or []
+                )
+                extra[self._results_key] = []
+            else:
+                extra[self._results_key] = list(
+                    extra.get(self._results_key) or []
+                ) + list(state.bat_buffer)
+            if pending:
+                call, rest = pending[0], pending[1:]
+                extra[self._pending_key] = rest
+                state.bat_buffer = [AIMessage(content="", tool_calls=[call])]
+            else:
+                extra.pop(self._pending_key, None)
+                state.bat_buffer = extra.pop(self._results_key, [])
+            return state
+
+        def _run_or_return(state) -> str:
+            pending = state.bat_extra.get(self._pending_key)
+            return "tools" if pending is not None else "llm"
 
         self.graph_builder.add_node("prepare", self._prepare_for_loop)
         self.graph_builder.add_node("llm", self._llm)
@@ -197,8 +255,19 @@ class ReActLoop(PrebuiltWorkflow):
 
         self.graph_builder.add_edge(START, "prepare")
         self.graph_builder.add_edge("prepare", "llm")
-        self.graph_builder.add_conditional_edges("llm", _tools_or_cleanup)
-        self.graph_builder.add_edge("tools", "llm")
+        self.graph_builder.add_conditional_edges(
+            "llm",
+            _tools_or_cleanup,
+            {first_stop: first_stop, "cleanup": "cleanup"},
+        )
+        if sequential:
+            self.graph_builder.add_node("serialize", _serialize)
+            self.graph_builder.add_conditional_edges(
+                "serialize", _run_or_return, {"tools": "tools", "llm": "llm"}
+            )
+            self.graph_builder.add_edge("tools", "serialize")
+        else:
+            self.graph_builder.add_edge("tools", "llm")
         self.graph_builder.add_edge("cleanup", END)
 
     @override
@@ -310,8 +379,6 @@ class ReActLoop(PrebuiltWorkflow):
             )
             yield state
         try:
-            # If there are tool messages, use them as input
-            # otherwise, use the input key from state
             input = tool_messages or (
                 HumanMessage(state_input)
                 if isinstance(
@@ -336,9 +403,7 @@ class ReActLoop(PrebuiltWorkflow):
                 status_msg = f"Calling tools: {', '.join(tool_names)}"
                 state = state.model_copy(update={self.status_key: status_msg})
         else:
-            state.bat_extra[self._internal_final_response_key] = (
-                response.content
-            )
+            state.bat_extra[self._internal_final_response_key] = response.text
         logger.debug(f"Node `{self.loop_name}.llm`: completed")
         yield state
 

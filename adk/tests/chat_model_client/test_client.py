@@ -155,3 +155,63 @@ def test_batch_invocation(client):
     responses = client.batch(msgs)
     assert len(responses) == 2
     assert all(isinstance(r, AIMessage) for r in responses)
+
+
+# ------------------ Responses API selection Tests ------------------
+
+
+@pytest.fixture
+def captured_init_kwargs(monkeypatch):
+    captured = {}
+
+    def fake_init_chat_model(**kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(
+        "bat.chat_model_client.client.init_chat_model",
+        fake_init_chat_model,
+    )
+    return captured
+
+
+def test_openai_without_base_url_uses_responses_api(captured_init_kwargs):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="gpt-5.2",
+            model_provider="openai",
+        ),
+    )
+    assert captured_init_kwargs["use_responses_api"] is True
+
+
+def test_openai_with_base_url_keeps_chat_completions(captured_init_kwargs):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="gpt-oss:20b",
+            model_provider="openai",
+            base_url="http://localhost:8000/v1",
+        ),
+    )
+    assert "use_responses_api" not in captured_init_kwargs
+
+
+def test_non_openai_provider_never_gets_responses_api(captured_init_kwargs):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="claude-opus-5",
+            model_provider="anthropic",
+        ),
+    )
+    assert "use_responses_api" not in captured_init_kwargs
+
+
+def test_output_version_is_left_to_the_provider(captured_init_kwargs):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="gpt-5.2",
+            model_provider="openai",
+        ),
+    )
+    assert "output_version" not in captured_init_kwargs

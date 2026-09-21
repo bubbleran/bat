@@ -3,6 +3,8 @@ import contextlib
 from typing import Any, Dict, Optional
 from .attributes import OPENINFERENCE_PROJECT_NAME
 from .file_exporter import JsonFileSpanExporter
+from .privacy import TelemetryPrivacy
+from .redaction import RedactingSpanExporter
 from ..logging import create_logger
 from .config import TelemetryConfig
 
@@ -145,17 +147,25 @@ def setup_telemetry(
     resource = Resource.create(resource_attributes)
     provider = TracerProvider(resource=resource)
 
+    # Attributes TraceConfig cannot reach (tool descriptions, parameter
+    # schemas, tool-call arguments) and span names are redacted here instead,
+    # on the way out, so every destination sees the same redacted span.
+    def _wrap(exp):
+        if cfg.privacy is TelemetryPrivacy.NONE:
+            return exp
+        return RedactingSpanExporter(exp, privacy=cfg.privacy)
+
     for exporter in cfg.exporters:
         if exporter.kind == "console":
             provider.add_span_processor(
-                BatchSpanProcessor(ConsoleSpanExporter())
+                BatchSpanProcessor(_wrap(ConsoleSpanExporter()))
             )
             logger.info("Telemetry: console exporter active.")
         elif exporter.kind == "file":
             path = exporter.file_path or "spans.jsonl"
             try:
                 provider.add_span_processor(
-                    SimpleSpanProcessor(JsonFileSpanExporter(path))
+                    SimpleSpanProcessor(_wrap(JsonFileSpanExporter(path)))
                 )
             except OSError as e:
                 logger.error(
@@ -168,7 +178,7 @@ def setup_telemetry(
             logger.info("Telemetry: file exporter -> %s.", path)
         elif exporter.kind == "otlp":
             otlp_exp = OTLPSpanExporter(endpoint=exporter.traces_endpoint)
-            provider.add_span_processor(BatchSpanProcessor(otlp_exp))
+            provider.add_span_processor(BatchSpanProcessor(_wrap(otlp_exp)))
             logger.info(
                 "Telemetry: OTLP exporter -> %s.", exporter.traces_endpoint
             )
@@ -184,12 +194,40 @@ def setup_telemetry(
     atexit.register(shutdown_telemetry)
 
     try:
-        from openinference.instrumentation.langchain import LangChainInstrumentor
+        from openinference.instrumentation import TraceConfig
+        from openinference.instrumentation.langchain import (
+            LangChainInstrumentor,
+        )
 
-        LangChainInstrumentor().instrument(tracer_provider=provider)
+        instrument_kwargs: Dict[str, Any] = {"tracer_provider": provider}
+        if cfg.privacy.hides_content:
+            # Redaction happens inside the instrumentation (before any
+            # exporter sees the span), so every destination receives
+            # "__REDACTED__" in place of prompts, messages, completions,
+            # tool definitions and invocation parameters. Usage attributes
+            # (token counts) and timing are untouched, so cost accounting
+            # and the eval engine keep working. Tool descriptions/schemas and
+            # tool-call arguments are out of TraceConfig's reach and are
+            # handled by RedactingSpanExporter above.
+            instrument_kwargs["config"] = TraceConfig(
+                hide_inputs=True,
+                hide_outputs=True,
+                hide_prompts=True,
+                hide_llm_invocation_parameters=True,
+                hide_llm_tools=True,
+            )
+        logger.info(
+            "Telemetry: privacy level %s (content=%s, span_names=%s, "
+            "tool_names=%s).",
+            cfg.privacy.name.lower(),
+            cfg.privacy.hides_content,
+            cfg.privacy.hides_span_names,
+            cfg.privacy.hides_tool_names,
+        )
+        LangChainInstrumentor().instrument(**instrument_kwargs)
         _patch_openinference_langgraph_callbacks()
         logger.debug("OpenInference LangChain instrumentation active.")
-        
+
     except ImportError:
         logger.warning(
             "openinference-instrumentation-langchain not installed: "

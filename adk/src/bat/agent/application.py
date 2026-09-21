@@ -17,7 +17,7 @@ from starlette.routing import Route
 
 from ..chat_model_client import ChatModelClientConfig
 from ..logging import create_logger
-from ..telemetry import TelemetryConfig, setup_telemetry
+from ..telemetry import TelemetryConfig, resolve_privacy, setup_telemetry
 from ._executor import MinimalAgentExecutor
 from .config import AgentConfig, TelemetrySettings
 from .graph import AgentGraph
@@ -102,9 +102,9 @@ class AgentApplication:
         )
         self._url = endpoint.url if endpoint is not None else None
 
-        self._agent_card_display = (
-            os.getenv("AGENT_CARD_DISPLAY", "true").strip().lower() == "true"
-        )
+        self._agent_card_display = os.getenv(
+            "AGENT_CARD_DISPLAY", "1"
+        ).strip().lower() in {"1", "true", "yes", "on"}
 
 
         agent_card_path = (
@@ -128,10 +128,22 @@ class AgentApplication:
                 "disabled by default. To enable, add a `telemetry` section "
                 "with a valid output to config.yaml."
             )
+        # A `bat build --telemetry-privacy` floor (baked into the frozen
+        # binary, immune to a runtime-replaced config.yaml) can only raise
+        # the level; config.yaml alone decides when no floor was baked in.
+        privacy = resolve_privacy(telemetry.privacy)
+        if privacy > telemetry.privacy:
+            logger.info(
+                "Telemetry: privacy level raised to %s by the build-time "
+                "policy (config.yaml asked for %s).",
+                privacy.name.lower(),
+                telemetry.privacy.name.lower(),
+            )
         telemetry_config = TelemetryConfig.from_settings(
             enabled=enabled,
             service_name=telemetry.service_name,
             project_name=telemetry.project_name,
+            privacy=privacy,
             outputs=[o.model_dump() for o in telemetry.output],
             default_service_name=self._agent_card.name,
         )

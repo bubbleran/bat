@@ -12,10 +12,11 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import (
     StreamableHttpConnection as MCPConnection,
 )
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing_extensions import Self
 
 from ..logging import create_logger
+from ..telemetry.privacy import TelemetryPrivacy, parse_privacy
 
 logger = create_logger(__name__, "debug")
 
@@ -189,12 +190,41 @@ class TelemetrySettings(BaseModel):
             is distinct from ``service_name`` (which labels spans within a
             project). Agents that share a distributed trace must use the same
             project or the trace fragments across projects.
+        privacy (TelemetryPrivacy): How much of the agent's internals may
+            leave the process. An ordered ladder, each level a superset of
+            the one below::
+
+                none     # export everything (default)
+                content  # redact prompts, messages, completions,
+                         # invocation parameters, and every tool's
+                         # description, parameter schema and call arguments
+                names    # also redact span (LangGraph node) names
+                full     # also redact tool names
+
+            Values replaced with ``__REDACTED__`` never leave the process.
+            Token counts, span kinds, hierarchy and timing survive at every
+            level, so usage/cost tracking keeps working. ``full`` empties the
+            eval engine's tool-call metrics, which key off the tool name.
+            Written as the level name or its ordinal; an unknown value is a
+            validation error rather than a silent fallback to ``none``.
         output (List[OutputConfig]): One entry per active destination.
     """
 
     service_name: Optional[str] = None
     project_name: Optional[str] = None
+    privacy: TelemetryPrivacy = TelemetryPrivacy.NONE
     output: List[OutputConfig] = Field(default=[])
+
+    @field_validator("privacy", mode="before")
+    @classmethod
+    def _coerce_privacy(cls, value: object) -> object:
+        """Accept the level name or ordinal, and reject anything else.
+
+        A typo'd level must not silently fall back to ``none``: that would
+        export in the clear exactly when someone was trying to lock the agent
+        down, which is the one failure mode this setting exists to prevent.
+        """
+        return parse_privacy(value)
 
 
 class AgentConfig(BaseModel):

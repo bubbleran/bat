@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from ..logging import create_logger
+from .privacy import TelemetryPrivacy, parse_privacy
 
 logger = create_logger(__name__, "debug")
 
@@ -10,7 +11,6 @@ DEFAULT_SERVICE_NAME = "bat-agent"
 DEFAULT_COLLECTOR_ENDPOINT = "http://localhost:6006"
 DEFAULT_FILE_PATH = "spans.jsonl"
 _TRACES_PATH = "/v1/traces"
-
 
 
 @dataclass
@@ -56,9 +56,8 @@ def _spec_from_type(
         return ExporterSpec(kind="console")
 
     logger.warning(
-        "Unknown telemetry output type %r; skipping (expected one of "
-        "local, remote, console).",
-        type_value,
+        f"Unknown telemetry output type {type_value!r}; skipping "
+        f"(expected one of local, remote, console)."
     )
     return None
 
@@ -73,6 +72,11 @@ class TelemetryConfig:
         project_name (Optional[str]): OpenInference/Phoenix project name, set as
             the ``openinference.project.name`` resource attribute. ``None``
             leaves Phoenix's ``default`` project.
+        privacy (TelemetryPrivacy): How much of the agent's internals may
+            leave the process -- ``none``/``content``/``names``/``full``, each
+            level a superset of the one below. Token counts, span kinds,
+            hierarchy and timing survive at every level, so cost accounting
+            keeps working. See :mod:`bat.telemetry.privacy`.
         exporters (List[ExporterSpec]): One entry per active destination; the
             spans are fanned out to all of them.
     """
@@ -80,8 +84,19 @@ class TelemetryConfig:
     enabled: bool
     service_name: str
     project_name: Optional[str] = None
+    privacy: TelemetryPrivacy = TelemetryPrivacy.NONE
     exporters: List[ExporterSpec] = field(default_factory=list)
-    
+
+    def __post_init__(self) -> None:
+        """Coerce ``privacy`` however this dataclass was constructed.
+
+        ``from_settings`` already parses it, but this is a public dataclass:
+        code that builds one directly (tests, embedders) would otherwise hold
+        a plain string and fail later, inside ``setup_telemetry``, with an
+        ``AttributeError`` far from the mistake.
+        """
+        self.privacy = parse_privacy(self.privacy)
+
     @classmethod
     def from_settings(
         cls,
@@ -89,6 +104,7 @@ class TelemetryConfig:
         enabled: bool = False,
         service_name: Optional[str] = None,
         project_name: Optional[str] = None,
+        privacy: object = None,
         outputs: Optional[List[Any]] = None,
         default_service_name: Optional[str] = None,
     ) -> "TelemetryConfig":
@@ -102,8 +118,11 @@ class TelemetryConfig:
             service_name (Optional[str]): ``service.name``; falls back to
                 ``default_service_name`` then ``DEFAULT_SERVICE_NAME``.
             project_name (Optional[str]): OpenInference/Phoenix project name
-                (the ``openinference.project.name`` resource attribute); ``None``
-                leaves Phoenix's ``default`` project.
+                (the ``openinference.project.name`` resource attribute);
+                ``None`` leaves Phoenix's ``default`` project.
+            privacy (object): Privacy level as written in ``config.yaml``
+                (level name or ordinal); coerced via
+                :func:`bat.telemetry.privacy.parse_privacy`.
             outputs (Optional[List[Any]]): One entry per destination, each a
                 dict (or object) with ``type`` (``local``/``remote``/
                 ``console``) plus ``file_path`` / ``endpoint`` as relevant.
@@ -127,5 +146,6 @@ class TelemetryConfig:
             enabled=enabled,
             service_name=resolved_service_name,
             project_name=project_name,
+            privacy=parse_privacy(privacy),
             exporters=specs,
         )
