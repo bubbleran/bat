@@ -32,17 +32,31 @@ The CLI is a tree of subcommands, each mapping to one lifecycle stage:
 ```
 bat
 ├── init
+│   ├── agent
+│   │   ├── <name>
+│   │   ├── --clients, -c
+│   │   ├── --output-dir, -o
+│   │   ├── --force, -f
+│   │   ├── --port
+│   │   ├── --model
+│   │   └── --model-provider
+│   └── blueprint
+│       ├── <name>
+│       ├── --output-dir, -o
+│       ├── --force, -f
+│       ├── --model-provider
+│       ├── --namespace
+│       └── --provider
+├── add
+│   ├── client
+│   │   ├── <clients>
+│   │   └── --force, -f
 │   └── agent
 │       ├── <name>
 │       ├── --clients, -c
-│       ├── --output-dir, -o
-│       ├── --force, -f
 │       ├── --port
 │       ├── --model
-│       └── --model-provider
-├── add
-│   └── client
-│       ├── <clients>
+│       ├── --model-provider
 │       └── --force, -f
 ├── set
 │   └── env
@@ -53,9 +67,12 @@ bat
 │       └── --repo
 ├── eval
 │   ├── init
+│   │   ├── [AGENT]
 │   │   └── --force, -f
 │   ├── run
+│   │   └── [AGENT]
 │   ├── show
+│   │   └── [AGENT]
 │   └── plot
 │       ├── --folder, -f
 │       └── --filter, -F
@@ -77,6 +94,42 @@ bat
 Each top-level branch maps to one lifecycle stage: **create** (`init`), **extend** (`add`), **configure** (`set`), **evaluate** (`eval`), and **containerize/distribute** (`build`, `push`). The standalone `version` command reports the installed toolkit version.
 
 Built-in help is available at every level (`bat --help`, `bat eval --help`, ...). For exact flags and examples, see the [README](../README.md); this document focuses on the concepts behind each stage.
+
+## Two project shapes: agent and blueprint
+
+`bat init agent` scaffolds a **standalone agent** — `config.yaml`, `agent.json` and `pyproject.toml` in one directory, started with `uv run .`. That shape is unchanged and still the right one for a single agent.
+
+`bat init blueprint` scaffolds a **blueprint**: one uv project holding several agents. The pyproject, the virtualenv, the PyInstaller spec and the packaging live once at the root; each agent is a package inside it with its own `config.yaml` and `agent.json`. One binary serves them all, and `bat add agent <name>` adds one:
+
+```
+my-blueprint/
+├── blueprint.yaml          # identity, and the agents this blueprint ships
+├── pyproject.toml          # one project: one venv, one uv.lock
+├── __main__.py             # shared entrypoint; selects the agent
+├── my-blueprint.spec       # one frozen binary for every agent
+├── config.yaml             # the blueprint's own config
+├── Dockerfile · docker-compose.yaml · Makefile · .env
+├── netops/     agent.json · app.py · config.yaml · src/
+└── hermes/     agent.json · app.py · config.yaml · src/
+```
+
+**Starting a blueprint agent takes two things, not one.** The entrypoint picks the agent from `argv[1]`, or from `AGENT_MODE` when there is none — a Deployment rendered without command or args has only the env var. And `CONFIG_PATH` must name the agent's config, because `./config.yaml` at the blueprint root is the *blueprint's*, not the agent's:
+
+```bash
+make netops        # CONFIG_PATH=netops/config.yaml uv run . netops
+```
+
+An agent's name becomes a Python package the entrypoint imports, so it has to be a valid identifier: `cluster_view` is fine, `cluster-view` is rejected.
+
+### What `bat add agent` keeps in sync
+
+Three files carry a list of agents, and each has a region between `# bat:agents:begin` and `# bat:agents:end` that `bat add agent` rewrites — edit anything outside those markers freely:
+
+- **`blueprint.yaml`** — the `agents` map
+- **`__main__.py`** — the `APPS` set and the dispatch branches. The imports there are static and sit inside their branch on purpose: PyInstaller has to see them to freeze them, and importing lazily keeps one agent's dependencies off another's startup path.
+- **`docker-compose.yaml`** — one service per agent
+
+The `Makefile` is not in that list: it discovers agents from the filesystem (`wildcard */config.yaml`), so adding one never touches it.
 
 ## Scaffolding (`init` / `add`)
 
@@ -137,6 +190,17 @@ That file is editable wherever the agent runs, so for an agent shipped as a pack
 The flag writes a generated module into the Docker build context just long enough for PyInstaller to compile it in, then removes it — it never lands in the agent's source tree. Without the flag no floor is baked and `config.yaml` remains the sole authority. An unknown level is rejected outright, since a typo silently degrading to `none` would ship an artifact exporting in the clear precisely when someone meant to lock it down.
 
 ## Evaluation Engine (`eval`)
+
+`bat eval` works in both shapes. It has to know *which* agent it is acting on, and there are two ways to tell it:
+
+```bash
+cd netops && bat eval run      # the agent is the directory you are in
+bat eval run netops            # or name it, from the blueprint root
+```
+
+`init`, `run` and `show` all take that optional `AGENT` argument; it resolves against the enclosing blueprint and wins over the working directory, so it works from anywhere inside the blueprint. Naming an agent outside a blueprint is an error, since a standalone agent is just the directory you are in. Omit it at the blueprint root and the command says so, and lists the agents it found.
+
+Either way the eval reads that agent's `eval/` folder, and inside a blueprint it starts the agent exactly as the Makefile does, from the blueprint root: `CONFIG_PATH=<agent>/config.yaml uv run . <agent>`. The `config.yaml` it patches for the run (to turn on the local span exporter) is the agent's, never the blueprint's shared one.
 
 The **evaluation engine** is the most substantial part of BAT-CLI. It runs a dataset of tasks against a live agent, judges the outcomes, and produces machine-readable artifacts and charts. It is exposed through four subcommands — `init`, `show`, `run`, and `plot` — and is implemented as a pipeline of cooperating components.
 

@@ -17,6 +17,8 @@ import typer
 import yaml
 from dotenv import dotenv_values
 
+from project import AgentTarget, ProjectError, resolve_agent_target
+
 from .engine.contracts import JudgeSpec
 from .engine.eval_config import (
     default_eval_yaml,
@@ -92,23 +94,32 @@ _SIMPLE_ENV_REF = re.compile(r"^\$([A-Za-z_][A-Za-z0-9_]*)$")
 _BRACED_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def _validate_agent_root(agent_root: Path) -> None:
-    required = [
-        agent_root / "config.yaml",
-        agent_root / "agent.json",
-        agent_root / "pyproject.toml",
-    ]
-    missing = [path for path in required if not path.exists()]
-    if missing:
-        missing_text = ", ".join(
-            str(path.relative_to(agent_root)) for path in missing
-        )
-        raise typer.BadParameter(
-            f"Current directory does not look like an agent root. Missing: {missing_text}. Please add this files or run this command from the root of an existing agent.",
-        )
+#: Shared by the three eval commands that act on one agent.
+_AGENT_ARGUMENT = typer.Argument(
+    None,
+    metavar="[AGENT]",
+    help=(
+        "Which agent of the enclosing blueprint to act on, so the command "
+        "can be run from the blueprint root. Omit it to use the agent "
+        "directory you are in (the only form a standalone agent has)."
+    ),
+)
 
 
-def _agent_url_from_config(agent_root: Path) -> str:
+def _resolve_target(agent: str | None = None) -> AgentTarget:
+    """The agent this command acts on, standalone or inside a blueprint.
+
+    The two shapes disagree on where the project is, where the config lives
+    and how the agent is started; :mod:`project` owns that difference so the
+    commands below only have to ask.
+    """
+    try:
+        return resolve_agent_target(Path.cwd(), agent)
+    except ProjectError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _agent_url_from_config(config_path: Path) -> str:
     """Build the URL the eval connects to from the agent's own ``config.yaml``.
 
     The agent binds to ``endpoint.url`` + ``endpoint.port`` (see
@@ -117,7 +128,6 @@ def _agent_url_from_config(agent_root: Path) -> str:
     values fall back to the same defaults the agent uses
     (``http://localhost`` / ``9900``).
     """
-    config_path = agent_root / "config.yaml"
     data: dict[str, Any] = {}
     if config_path.exists():
         loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -132,7 +142,7 @@ def _agent_url_from_config(agent_root: Path) -> str:
 
 
 def _patch_agent_config(
-    agent_root: Path, overrides: Mapping[str, Any]
+    config_path: Path, overrides: Mapping[str, Any]
 ) -> str | None:
     """Merge ``overrides`` into the agent's ``./config.yaml`` for one run.
 
@@ -142,7 +152,6 @@ def _patch_agent_config(
     (or ``None`` if absent) so the caller can restore it via
     :func:`_restore_agent_config`.
     """
-    config_path = agent_root / "config.yaml"
     original = (
         config_path.read_text(encoding="utf-8")
         if config_path.exists()
@@ -161,9 +170,8 @@ def _patch_agent_config(
     return original
 
 
-def _restore_agent_config(agent_root: Path, original: str | None) -> None:
+def _restore_agent_config(config_path: Path, original: str | None) -> None:
     """Restore ``config.yaml`` to the contents captured by ``_patch_agent_config``."""
-    config_path = agent_root / "config.yaml"
     if original is None:
         config_path.unlink(missing_ok=True)
     else:
@@ -336,13 +344,19 @@ def _wait_for_agent_port(
 
 
 def _start_agent_process(
-    agent_root: Path, env: dict[str, str]
+    target: AgentTarget, env: dict[str, str]
 ) -> subprocess.Popen:
+    """Start the agent from wherever ``uv run .`` works for its shape.
+
+    Inside a blueprint that is the blueprint root, the agent is named as an
+    argument, and CONFIG_PATH has to point at the agent's own config -- the
+    SDK would otherwise read the blueprint's shared one.
+    """
     try:
         return subprocess.Popen(
-            ["uv", "run", "."],
-            cwd=agent_root,
-            env=env,
+            target.run_command,
+            cwd=target.project_root,
+            env={**env, **target.run_env},
             # Own session/process group so teardown can signal the whole tree:
             # `uv run .` forks the actual agent server as a child, and signaling
             # only `uv` would orphan that server (leaking its port).
@@ -350,7 +364,7 @@ def _start_agent_process(
         )
     except FileNotFoundError as exc:
         raise typer.BadParameter(
-            "Cannot execute 'uv run .'. Ensure uv is installed and available in PATH."
+            "Cannot execute 'uv run'. Ensure uv is installed and available in PATH."
         ) from exc
 
 
@@ -381,6 +395,7 @@ def _stop_agent_process(process: subprocess.Popen, timeout_s: int) -> None:
 
 
 def eval_init(
+    agent: str | None = _AGENT_ARGUMENT,
     force: bool = typer.Option(
         False,
         "--force",
@@ -388,8 +403,8 @@ def eval_init(
         help="Overwrite eval/eval.yaml and eval/input/tasks.json if they already exist.",
     ),
 ) -> None:
-    agent_root = Path.cwd()
-    _validate_agent_root(agent_root)
+    target = _resolve_target(agent)
+    agent_root = target.agent_dir
 
     eval_dir = agent_root / "eval"
     input_dir = eval_dir / "input"
@@ -419,7 +434,9 @@ def eval_init(
         tasks_path.write_text(default_tasks_json(), encoding="utf-8")
         typer.secho(f"Created {tasks_path}", fg=typer.colors.GREEN)
 
-    typer.secho("Evaluation scaffold ready in eval/", fg=typer.colors.GREEN)
+    typer.secho(
+        f"Evaluation scaffold ready in {eval_dir}", fg=typer.colors.GREEN
+    )
 
 
 def _print_eval_show(cfg) -> None:
@@ -453,9 +470,9 @@ def _print_eval_show(cfg) -> None:
     typer.secho("============================", fg=typer.colors.BLUE)
 
 
-def eval_show() -> None:
-    agent_root = Path.cwd()
-    _validate_agent_root(agent_root)
+def eval_show(agent: str | None = _AGENT_ARGUMENT) -> None:
+    target = _resolve_target(agent)
+    agent_root = target.agent_dir
 
     eval_yaml_path = agent_root / "eval" / "eval.yaml"
     if not eval_yaml_path.exists():
@@ -471,9 +488,9 @@ def eval_show() -> None:
     _print_eval_show(cfg)
 
 
-def eval_run() -> None:
-    agent_root = Path.cwd()
-    _validate_agent_root(agent_root)
+def eval_run(agent: str | None = _AGENT_ARGUMENT) -> None:
+    target = _resolve_target(agent)
+    agent_root = target.agent_dir
 
     eval_yaml_path = agent_root / "eval" / "eval.yaml"
     if not eval_yaml_path.exists():
@@ -491,7 +508,7 @@ def eval_run() -> None:
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
-    agent_python = _find_agent_python(agent_root)
+    agent_python = _find_agent_python(target.project_root)
     if agent_python is None:
         raise typer.BadParameter(
             "No agent python found at .venv/bin/python. Create the agent virtual environment first."
@@ -505,7 +522,7 @@ def eval_run() -> None:
 
     # The agent's endpoint is its own config.yaml's responsibility; the eval
     # reads it (rather than patching it) and connects there.
-    agent_url = _agent_url_from_config(agent_root)
+    agent_url = _agent_url_from_config(target.config_path)
 
     failed_models: list[tuple[str, str]] = []
 
@@ -549,7 +566,7 @@ def eval_run() -> None:
         # binds to its own config.yaml and the eval reads it. Always restored
         # in the `finally` below, even if the agent fails to start.
         original_config = _patch_agent_config(
-            agent_root,
+            target.config_path,
             {
                 "telemetry": {
                     "output": [
@@ -564,7 +581,7 @@ def eval_run() -> None:
 
         process: subprocess.Popen | None = None
         try:
-            process = _start_agent_process(agent_root, server_env)
+            process = _start_agent_process(target, server_env)
             _wait_for_agent_port(
                 agent_url,
                 timeout_s=cfg.agent_startup_timeout_s,
@@ -598,7 +615,9 @@ def eval_run() -> None:
                     else:
                         runner_env.pop(env_name, None)
 
-                _inject_judge_api_key(cfg.judge, agent_root, runner_env)
+                _inject_judge_api_key(
+                    cfg.judge, target.project_root, runner_env
+                )
 
                 _apply_env_overrides(
                     runner_env,
@@ -647,7 +666,7 @@ def eval_run() -> None:
                 _stop_agent_process(
                     process, timeout_s=cfg.agent_shutdown_timeout_s
                 )
-            _restore_agent_config(agent_root, original_config)
+            _restore_agent_config(target.config_path, original_config)
 
     completed = len(cfg.models) - len(failed_models)
     output_path = cfg.output_dir / task_id

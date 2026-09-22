@@ -1,0 +1,44 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+# No `datas`: each agent's config.yaml and agent.json are read from the
+# filesystem at runtime (the Dockerfile copies them next to the binary), not
+# frozen in. The agents themselves are reached through the static imports in
+# __main__.py, which is what PyInstaller follows.
+datas = []
+
+a = Analysis(
+	['__main__.py'],
+	pathex=[],
+	binaries=[],
+	datas=datas,
+	hiddenimports=[],
+	hookspath=[],
+	hooksconfig={},
+	runtime_hooks=[],
+	excludes=[],
+	noarchive=False,
+	optimize=0,
+)
+
+pyz = PYZ(a.pure)
+
+exe = EXE(
+	pyz,
+	a.scripts,
+	a.binaries,
+	a.datas,
+	[],
+	name='__BLUEPRINT_NAME__',
+	debug=False,
+	bootloader_ignore_signals=False,
+	strip=False,
+	upx=True,
+	upx_exclude=[],
+	runtime_tmpdir=None,
+	console=True,
+	disable_windowed_traceback=False,
+	argv_emulation=False,
+	target_arch=None,
+	codesign_identity=None,
+	entitlements_file=None,
+)

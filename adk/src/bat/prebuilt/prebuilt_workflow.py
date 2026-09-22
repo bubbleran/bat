@@ -148,9 +148,6 @@ class PrebuiltWorkflow(ABC):
             else:
                 instance_found = True
                 async for _sub_item in self._astream(item, config):
-                    # sub-items are automatically available to the outer
-                    # generator thanks to `subgraphs=True` in the astream
-                    # method of AgentGraph
                     continue
                 yield _sub_item
 

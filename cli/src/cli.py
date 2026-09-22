@@ -10,7 +10,12 @@ from typer.core import TyperGroup
 from add.client import add_clients_to_existing_agent
 from build.build import build_image
 from create.agent import create_agent_scaffold
+from create.blueprint import (
+    add_agent_to_blueprint,
+    create_blueprint_scaffold,
+)
 from eval.commands import eval_init, eval_plot, eval_run, eval_show
+from project import find_blueprint_root
 from push.push import push_image
 from set.env import set_agent_settings
 
@@ -208,6 +213,62 @@ def create_new_agent(
     typer.echo(f"Files written: {len(created_files)}")
 
 
+@init_app.command("blueprint")
+def create_new_blueprint(
+    name: str = typer.Argument(
+        help="Name of the blueprint directory to create."
+    ),
+    output_dir: Path = typer.Option(
+        Path("."),
+        "--output-dir",
+        "-o",
+        help="Directory where the blueprint folder will be created.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite existing files when the target directory exists.",
+    ),
+    model_provider: str = typer.Option(
+        "openai",
+        "--model-provider",
+        "--model_provider",
+        help=(
+            "Model provider for every agent in this blueprint; selects "
+            "the bat-adk extra in pyproject.toml."
+        ),
+    ),
+    namespace: str = typer.Option(
+        "default", "--namespace", help="Value written to blueprint.yaml."
+    ),
+    provider: str = typer.Option(
+        "bubbleran", "--provider", help="Value written to blueprint.yaml."
+    ),
+) -> None:
+    blueprint_name = _validate_agent_name(name)
+    target_dir = output_dir / blueprint_name.lower()
+
+    try:
+        created_files = create_blueprint_scaffold(
+            target_dir,
+            force=force,
+            model_provider=model_provider,
+            namespace=namespace,
+            provider=provider,
+        )
+    except FileExistsError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.secho(
+        f"Created BAT blueprint in: {target_dir.resolve()}",
+        fg=typer.colors.GREEN,
+    )
+    typer.echo(f"Files written: {len(created_files)}")
+    typer.echo("Next: cd into it and run `bat add agent <name>`.")
+
+
 @add_app.command("client")
 def add_new_client(
     clients: str = typer.Argument(
@@ -246,6 +307,76 @@ def add_new_client(
         fg=typer.colors.GREEN,
     )
     typer.echo(f"Files written: {len(created_files)}")
+
+
+@add_app.command("agent")
+def add_new_agent(
+    name: str = typer.Argument(
+        help="Name of the agent to add to the blueprint."
+    ),
+    clients: str | None = typer.Option(
+        None,
+        "--clients",
+        "-c",
+        help="Optional comma-separated LLM client names to generate.",
+    ),
+    port: int | None = typer.Option(
+        None,
+        "--port",
+        help=(
+            "Port written to the agent's config.yaml. Defaults to one "
+            "past the highest already used in the blueprint."
+        ),
+    ),
+    model: str = typer.Option(
+        "gpt-4o-mini",
+        "--model",
+        help="Model written to the agent's config.yaml.",
+    ),
+    model_provider: str = typer.Option(
+        "openai",
+        "--model-provider",
+        "--model_provider",
+        help="Model provider written to the agent's config.yaml.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite existing files for this agent."
+    ),
+) -> None:
+    blueprint_root = find_blueprint_root(Path.cwd())
+    if blueprint_root is None:
+        typer.secho(
+            "No blueprint.yaml found here or in any parent directory. Run "
+            "this command inside a blueprint, or create one with "
+            "`bat init blueprint`.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    agent_name = _validate_agent_name(name)
+
+    try:
+        created_files = add_agent_to_blueprint(
+            blueprint_root,
+            agent_name,
+            port=port,
+            model=model,
+            model_provider=model_provider,
+            clients=_parse_clients_option(clients),
+            force=force,
+        )
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.secho(
+        f"Added agent '{agent_name.lower()}' to blueprint "
+        f"'{blueprint_root.name}'.",
+        fg=typer.colors.GREEN,
+    )
+    typer.echo(f"Files written: {len(created_files)}")
+    typer.echo(f"Run it with: make {agent_name.lower()}")
 
 
 @set_app.command("env")

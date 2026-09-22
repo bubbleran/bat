@@ -1,0 +1,30 @@
+# This agent's own config. The process runs from the blueprint root, so every
+# path here is relative to that root -- and CONFIG_PATH must name this file
+# (`make __AGENT_NAME__` does it) or the SDK reads the blueprint's instead.
+agent_card: __AGENT_NAME__/agent.json
+
+endpoint:                              # where this agent binds (the eval reads this too)
+  url: http://localhost
+  port: __PORT__
+
+model:
+  provider: __MODEL_PROVIDER__
+  name: __MODEL__
+  # base_url: http://localhost:11434   # optional (e.g. for ollama)
+
+checkpoints: false
+
+telemetry:
+  # service_name: __AGENT_NAME__       # optional (defaults to the agent name)
+  # project_name: __BLUEPRINT_NAME__   # Phoenix project; agents sharing a trace must share this
+  # privacy: none                      # none (default) | content | names | full
+  output: []                           # telemetry is ON when output has >=1 entry
+
+# remote-agents:
+#   - name: Other Agent
+#     url: http://localhost:9901
+#     protocol: a2a
+
+# mcp-servers:
+#   - name: my-mcp
+#     url: http://localhost:8000

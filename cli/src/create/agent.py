@@ -2,7 +2,15 @@ import re
 from pathlib import Path
 from typing import Literal
 
-BAT_ADK_VERSION = "2026.06"
+from .rendering import render_template
+
+# The `bat-adk` floor a scaffolded agent pins. Naming a pre-release is what
+# lets the resolver pick one at all (PEP 440 excludes pre-releases from a
+# specifier that does not mention one), and an agent meant to be evaluated
+# needs this one: it is the first ADK that emits the OpenTelemetry spans
+# `bat eval` reads token usage and tool calls back from. Keep in sync with the
+# `bat-adk` floor in cli/pyproject.toml.
+BAT_ADK_VERSION = "2026.9.10a0"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "agent"
 _DYNAMIC_TEMPLATE_FILES = {
@@ -18,6 +26,13 @@ _DYNAMIC_TEMPLATE_FILES = {
     "src/__init__.py",
     "__main__.py",
 }
+
+# Model providers the ADK ships an extra for (each extra is named after its
+# provider). `langchain` does not bundle the provider integrations, so without
+# the extra the agent cannot build its model at all.
+_PROVIDER_ADK_EXTRAS = frozenset(
+    {"anthropic", "deepseek", "nvidia", "ollama", "openai"}
+)
 
 # Provider -> the env var its SDK reads for the API key. The API key is the only
 # setting that stays in .env; everything else lives in config.yaml.
@@ -49,15 +64,7 @@ def _load_static_templates() -> dict[str, str]:
 
 
 def _render_template(template_file: str, replacements: dict[str, str]) -> str:
-    template_path = TEMPLATES_DIR / template_file
-    if not template_path.exists():
-        raise FileNotFoundError(f"Template file not found: {template_path}")
-
-    rendered = template_path.read_text(encoding="utf-8")
-    for key, value in replacements.items():
-        rendered = rendered.replace(f"__{key}__", value)
-
-    return rendered
+    return render_template(TEMPLATES_DIR, template_file, replacements)
 
 
 def _normalize_name(
@@ -90,11 +97,29 @@ def _normalize_name(
     return name.lower()
 
 
-def _build_pyproject_content(agent_dir_name: str) -> str:
+def _bat_adk_extras(model_provider: str) -> str:
+    """The `bat-adk` extras a scaffolded agent depends on.
+
+    ``telemetry`` is always there: it is what makes the SDK emit spans, and
+    without it ``bat eval`` silently reports zero tokens for every episode.
+    The provider's extra is added when the ADK ships one; an unrecognised
+    provider gets none and its integration has to be installed by hand.
+    """
+    extras = {"telemetry"}
+    provider = model_provider.lower()
+    if provider in _PROVIDER_ADK_EXTRAS:
+        extras.add(provider)
+    return ",".join(sorted(extras))
+
+
+def _build_pyproject_content(
+    agent_dir_name: str, *, model_provider: str
+) -> str:
     project_name = _normalize_name(agent_dir_name, "project")
     return _render_template(
         "pyproject.toml.template",
         {
+            "BAT_ADK_EXTRAS": _bat_adk_extras(model_provider),
             "BAT_ADK_VERSION": BAT_ADK_VERSION,
             "PROJECT_DESCRIPTION": f"{project_name.upper()} Agent",
             "PROJECT_NAME": project_name,
@@ -395,7 +420,10 @@ def create_agent_scaffold(
 
     if force or not pyproject_path.exists():
         pyproject_path.write_text(
-            _build_pyproject_content(target_dir.name), encoding="utf-8"
+            _build_pyproject_content(
+                target_dir.name, model_provider=model_provider
+            ),
+            encoding="utf-8",
         )
         created.append(pyproject_path)
 

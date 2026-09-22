@@ -1,0 +1,14 @@
+[project]
+name = "__BLUEPRINT_NAME__"
+version = "1.0.0"
+description = "__BLUEPRINT_DESCRIPTION__"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # One project for every agent in this blueprint: one venv, one lockfile,
+    # one frozen binary. `telemetry` pulls in OpenTelemetry/OpenInference --
+    # without it the SDK's tracers are no-ops, nothing is exported, and
+    # `bat eval` reports zero tokens for every episode. The other extra is the
+    # provider's LangChain integration, which `langchain` itself does not ship.
+    "bat-adk[__BAT_ADK_EXTRAS__]>=__BAT_ADK_VERSION__"
+]
