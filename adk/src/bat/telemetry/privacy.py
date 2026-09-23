@@ -4,10 +4,10 @@ Each level is a superset of the one below it, so the setting reads as "how
 much of the agent's internals may leave the process" rather than as a set of
 independent switches that can be combined into states nobody designed.
 
-Being ordered is also what makes the build-time floor simple: a packaged
-build bakes in a minimum level and the effective level is ``max(floor,
-configured)`` -- see :mod:`bat.telemetry.build_policy`. With booleans this
-was an OR per flag; with a ladder it is one comparison that cannot express a
+Being ordered is also what makes the privacy floor simple: an agent sets a
+minimum level in its own source and the effective level is ``max(floor,
+configured)`` -- see :func:`resolve_privacy`. With booleans this was an OR
+per flag; with a ladder it is one comparison that cannot express a
 contradiction.
 
 Levels
@@ -37,7 +37,12 @@ Levels
 """
 
 from enum import IntEnum
-from typing import Any, Union
+from typing import Literal
+
+from ..logging import create_logger
+
+logger = create_logger(__name__, "debug")
+TelemetryPrivacyLevel = Literal["none", "content", "names", "full"]
 
 
 class TelemetryPrivacy(IntEnum):
@@ -68,7 +73,7 @@ class TelemetryPrivacy(IntEnum):
         return self >= TelemetryPrivacy.FULL
 
 
-def parse_privacy(value: Union[str, int, None, Any]) -> TelemetryPrivacy:
+def parse_privacy(value: object) -> TelemetryPrivacy:
     """Coerce a ``config.yaml`` value into a :class:`TelemetryPrivacy`.
 
     Accepts the level name (case-insensitive, e.g. ``content``) or its
@@ -116,3 +121,32 @@ def parse_privacy(value: Union[str, int, None, Any]) -> TelemetryPrivacy:
 
 def _level_names() -> str:
     return ", ".join(level.name.lower() for level in TelemetryPrivacy)
+
+
+def resolve_privacy(
+    configured: object,
+    floor: object = TelemetryPrivacy.NONE,
+) -> TelemetryPrivacy:
+    """Combine what ``config.yaml`` asked for with the agent's own floor. 
+    Choose the more private of the two.
+
+    Args:
+        configured (object): The level ``config.yaml`` asked for, as a level
+            name, an ordinal, or a :class:`TelemetryPrivacy`.
+        floor (object): The minimum the agent allows. Defaults to
+            :attr:`TelemetryPrivacy.NONE`, which leaves ``configured`` to
+            decide alone.
+
+    Raises:
+        ValueError: If ``configured`` is not a known level.
+    """
+    try:
+        floor_level = parse_privacy(floor)
+    except ValueError:
+        logger.warning(
+            "Telemetry: unknown privacy floor %r; falling back to none. The "
+            "agent will export whatever config.yaml asks for.",
+            floor,
+        )
+        floor_level = TelemetryPrivacy.NONE
+    return max(floor_level, parse_privacy(configured))

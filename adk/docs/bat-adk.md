@@ -63,7 +63,7 @@ The **AgentConfig** defines how an agent behaves and what external resources it 
 - The **endpoint** (URL and ports) the agent binds to
 - The default **model** (provider, name, base URL) for the agent's clients
 - Whether to perform **checkpoints**
-- **Telemetry** (OpenTelemetry) settings — see [TELEMETRY.md](TELEMETRY.md)
+- **Telemetry** (OpenTelemetry) settings — see [Telemetry](#telemetry)
 - Which **MCP Servers** and other **Agents** it needs to communicate with
 
 ### Loading and Validation
@@ -108,7 +108,7 @@ The **Agent Executor** handles task execution and event publishing for an agent.
 - **Execute a request**
   - Calls the `astream` method of the **AgentGraph**.
   - Processes each chunk individually, converting `AgentTaskResult` objects into **A2A events** for the event queue.
-  - When telemetry is enabled, wraps the streaming loop in a root OpenTelemetry span (`invoke_agent`). Token usage and tool calls are captured through OpenTelemetry rather than collected by hand into the stream — see [TELEMETRY.md](TELEMETRY.md).
+  - When telemetry is enabled, wraps the streaming loop in a root OpenTelemetry span (`invoke_agent`). Token usage and tool calls are captured through OpenTelemetry rather than collected by hand into the stream — see [Telemetry](#telemetry).
 
 - **Cancel a request**
   - Currently **not implemented**
@@ -167,7 +167,7 @@ A **Chat Model Client** is a wrapper around an LLM that combines:
 
 - Provides `invoke` for single requests and `batch` for parallel requests
 
-Token usage (input/output/total tokens) and LLM timing are captured through **OpenTelemetry**: when telemetry is enabled, OpenInference auto-instrumentation records them on the underlying model's spans, so the client no longer collects them by hand. See [TELEMETRY.md](TELEMETRY.md) for how the data is exported and read back.
+Token usage (input/output/total tokens) and LLM timing are captured through **OpenTelemetry**: when telemetry is enabled, OpenInference auto-instrumentation records them on the underlying model's spans, so the client no longer collects them by hand. See [Telemetry](#telemetry) for how the data is exported and read back.
 
 ### Configuration
 
@@ -248,4 +248,79 @@ To instantiate a Call Agent Node, you must provide:
   - Where to store the remote agent's status and content
   - Where to flag if the remote agent needs human input
 
-When telemetry is enabled, this node propagates the trace context (W3C `traceparent`) to the remote agent so its spans join the **same trace**; the remote agent's token usage is then recomposed from those spans rather than merged into local metrics by the node. See [TELEMETRY.md](TELEMETRY.md).
+When telemetry is enabled, this node propagates the trace context (W3C `traceparent`) to the remote agent so its spans join the **same trace**; the remote agent's token usage is then recomposed from those spans rather than merged into local metrics by the node. See [Telemetry](#telemetry).
+
+## Telemetry
+
+**BAT-ADK** exports its internals as **OpenTelemetry** spans: token usage, tool calls, LLM timing and the shape of the graph. An agent calling another propagates the W3C `traceparent` through the A2A message, so **both agents' spans land in the same trace** despite running as separate processes.
+
+It lives behind an extra, so an agent that does not want it does not pay for it:
+
+```toml
+dependencies = ["bat-adk[telemetry]"]   # or bat-adk[all]
+```
+
+### Turning It On
+
+Everything is configured in `config.yaml`, under `telemetry`. **Telemetry is on as soon as `output` has at least one entry**, and spans fan out to *every* entry, so a run can go to a collector and a file at once.
+
+```yaml
+telemetry:
+  # service_name: my-agent    # optional; defaults to the agent card name
+  # project_name: my-agent    # optional; Phoenix project (default: "default")
+  privacy: none               # none | content | names | full
+  output:
+    - type: remote
+      endpoint: http://localhost:6006
+    - type: local
+      file_path: spans.jsonl
+```
+
+| `type` | Destination |
+|---|---|
+| `remote` | OTLP/HTTP collector, e.g. Arize Phoenix. `endpoint` defaults to `http://localhost:6006` |
+| `local` | JSON Lines file, one span per line. `file_path` defaults to `spans.jsonl` |
+| `console` | stdout, for debugging |
+
+An unknown `type` is skipped with a warning rather than disabling the whole pipeline.
+
+`project_name` is distinct from `service_name`: the first is the project the trace is filed under, the second labels the spans within it. **Agents that share a distributed trace must use the same `project_name`**, or the trace fragments across projects.
+
+### Privacy
+
+By default a span carries prompts, completions and tool definitions in full. `telemetry.privacy` decides how much of that may leave the process. It is a single ordered dial, and each level redacts everything the level below it does:
+
+| Level | Redacts |
+|---|---|
+| `none` | nothing — the default |
+| `content` | prompts, messages, completions, invocation parameters, and every tool's description, parameter schema and call arguments |
+| `names` | also span names, i.e. the LangGraph node names. Span kinds (`LLM`/`CHAIN`/`TOOL`) replace them, so the trace keeps its shape |
+| `full` | also tool names |
+
+Redacted values are replaced with `__REDACTED__` before any exporter sees them; they never leave the process.
+
+**Token counts, span kinds, hierarchy and timing survive at every level**, so cost accounting keeps working even at `full`. What `full` costs you is anything that reconstructs tool calls from spans: those metrics key off the tool name and go empty. Use it when the tool inventory itself is considered proprietary.
+
+The level is written as its name (`content`) or its ordinal (`1`). An unknown value is a **validation error**, not a silent fallback to `none`: a typo must not export in the clear precisely when someone was trying to lock the agent down.
+
+### Privacy Floor
+
+`config.yaml` sits beside the running agent and can be replaced there — a mounted ConfigMap, a swapped file, or `CONFIG_PATH` pointing elsewhere. On its own it is a default, not a guarantee.
+
+An agent shipped as a packaged binary can set a **floor** in its own source, which is frozen into the binary along with the rest of the agent code:
+
+```python
+agent = AgentApplication(
+    AgentGraphType=MyAgentGraph,
+    AgentStateType=MyAgentState,
+    telemetry_privacy_floor="content",
+)
+```
+
+The effective level is the **higher** of the two, so a replaced `config.yaml` can raise privacy but never lower it. The default floor is `none`, which leaves `config.yaml` to decide alone.
+
+### What Gets Instrumented
+
+- **LangChain / LangGraph** — automatically, through OpenInference: token counts, prompts, completions and tool calls.
+- **Agent Executor** — one root `invoke_agent <AgentName>` span per request, carrying the conversation and task ids, continuing an incoming trace when there is one.
+- **Call Agent Node** — a `CLIENT` span around the remote call, injecting `traceparent` into the outgoing message.

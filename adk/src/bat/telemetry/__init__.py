@@ -1,7 +1,11 @@
 from . import attributes
-from .build_policy import resolve_privacy
 from .config import ExporterSpec, TelemetryConfig
-from .privacy import TelemetryPrivacy, parse_privacy
+from .privacy import (
+    TelemetryPrivacy,
+    TelemetryPrivacyLevel,
+    parse_privacy,
+    resolve_privacy,
+)
 from .redaction import RedactingSpanExporter, redact_attributes
 from .setup import (
     SpanKind,
@@ -19,6 +23,7 @@ __all__ = [
     "SpanKind",
     "TelemetryConfig",
     "TelemetryPrivacy",
+    "TelemetryPrivacyLevel",
     "attributes",
     "extract_context",
     "get_tracer",

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-adk"
-version = "2026.9.22a0"
+version = "2026.9.23a0"
 authors = [
   { name="Andrea LEONE", email="andrea.leone@bubbleran.com" },
   { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },
@@ -44,9 +44,6 @@ telemetry = [
   "opentelemetry-sdk>=1.27.0",
   "opentelemetry-exporter-otlp>=1.27.0",
   "openinference-instrumentation-langchain>=0.1.29",
-  # Explicit floor on the (otherwise transitive) base package: the privacy
-  # ladder builds a TraceConfig with hide_llm_tools/hide_prompts, which older
-  # bases don't accept (TypeError at startup).
   "openinference-instrumentation>=0.1.53",
 ]
 

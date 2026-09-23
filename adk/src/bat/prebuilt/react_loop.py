@@ -1,6 +1,11 @@
-from typing import List, Literal, Optional, Type
+from typing import Any, Dict, List, Literal, Optional, Type
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    ToolCall,
+)
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START
 from langgraph.prebuilt import ToolNode
@@ -192,18 +197,18 @@ class ReActLoop(PrebuiltWorkflow):
         self._internal_final_response_key = f"{loop_name}.final_response"
         self._internal_trace_key = f"{loop_name}.trace.tool_calls"
         self.tool_call_policy = tool_call_policy
-        self._pending_key = f"{loop_name}.pending_tool_calls"
-        self._results_key = f"{loop_name}.tool_results"
+        self._pending_key: str = f"{loop_name}.pending_tool_calls"
+        self._results_key: str = f"{loop_name}.tool_results"
 
-        sequential = tool_call_policy == "sequential"
-        first_stop = "serialize" if sequential else "tools"
+        sequential: bool = tool_call_policy == "sequential"
+        first_stop: str = "serialize" if sequential else "tools"
 
-        def _tools_or_cleanup(state) -> str:
+        def _tools_or_cleanup(state: Type[AgentState]) -> str:
             if state.bat_buffer:
                 return first_stop
             return "cleanup"
 
-        def _serialize(state):
+        def _serialize(state: Type[AgentState]) -> Type[AgentState]:
             """Hand the ToolNode ONE call, and keep the rest for later.
 
             A model may ask for several tools in one turn, and a ToolNode runs
@@ -218,19 +223,21 @@ class ReActLoop(PrebuiltWorkflow):
             update lands before the next call starts.
             """
 
-            extra = state.bat_extra
-            pending = extra.get(self._pending_key)
+            extra: Dict[str, Any] = state.bat_extra
+            pending: Optional[List[ToolCall]] = extra.get(self._pending_key)
             if pending is None:
                 pending = list(
                     getattr(state.bat_buffer[-1], "tool_calls", None) or []
                 )
                 extra[self._results_key] = []
             else:
-                extra[self._results_key] = list(
+                results: List[BaseMessage] = list(
                     extra.get(self._results_key) or []
                 ) + list(state.bat_buffer)
+                extra[self._results_key] = results
             if pending:
-                call, rest = pending[0], pending[1:]
+                call: ToolCall = pending[0]
+                rest: List[ToolCall] = pending[1:]
                 extra[self._pending_key] = rest
                 state.bat_buffer = [AIMessage(content="", tool_calls=[call])]
             else:
@@ -238,8 +245,10 @@ class ReActLoop(PrebuiltWorkflow):
                 state.bat_buffer = extra.pop(self._results_key, [])
             return state
 
-        def _run_or_return(state) -> str:
-            pending = state.bat_extra.get(self._pending_key)
+        def _run_or_return(state: Type[AgentState]) -> str:
+            pending: Optional[List[ToolCall]] = state.bat_extra.get(
+                self._pending_key
+            )
             return "tools" if pending is not None else "llm"
 
         self.graph_builder.add_node("prepare", self._prepare_for_loop)

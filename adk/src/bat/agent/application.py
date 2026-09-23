@@ -17,7 +17,12 @@ from starlette.routing import Route
 
 from ..chat_model_client import ChatModelClientConfig
 from ..logging import create_logger
-from ..telemetry import TelemetryConfig, resolve_privacy, setup_telemetry
+from ..telemetry import (
+    TelemetryConfig,
+    TelemetryPrivacyLevel,
+    resolve_privacy,
+    setup_telemetry,
+)
 from ._executor import MinimalAgentExecutor
 from .config import AgentConfig, TelemetrySettings
 from .graph import AgentGraph
@@ -73,15 +78,23 @@ class AgentApplication:
         self,
         AgentGraphType: Type[AgentGraph],
         AgentStateType: Type[AgentState],
+        telemetry_privacy_floor: TelemetryPrivacyLevel = "none",
     ):
-        """Initialize the AgentApplication with the given agent card path and
-        agent graph.
+        """Initialize the AgentApplication with the agent's graph and state.
+
+        Everything else -- endpoint, model, agent card, telemetry -- is read
+        from ``config.yaml``; see the class docstring.
 
         Args:
             AgentGraphType (Type[AgentGraph]): The class to use to instantiate
                 the agent graph.
             AgentStateType (Type[AgentState]): The class to use to instantiate
                 the agent state.
+            telemetry_privacy_floor (TelemetryPrivacyLevel): The lowest
+                telemetry privacy level this agent allows -- ``"none"``,
+                ``"content"``, ``"names"`` or ``"full"``. Defaults to
+                ``"none"``, which leaves ``telemetry.privacy`` in
+                ``config.yaml`` to decide.
         """
         config_path = os.getenv("CONFIG_PATH", "./config.yaml")
         self._config = AgentConfig.load(config_path)
@@ -104,7 +117,7 @@ class AgentApplication:
 
         self._agent_card_display = os.getenv(
             "AGENT_CARD_DISPLAY", "1"
-        ).strip().lower() in {"1", "true", "yes", "on"}
+        )== "1"
 
 
         agent_card_path = (
@@ -128,14 +141,13 @@ class AgentApplication:
                 "disabled by default. To enable, add a `telemetry` section "
                 "with a valid output to config.yaml."
             )
-        # A `bat build --telemetry-privacy` floor (baked into the frozen
-        # binary, immune to a runtime-replaced config.yaml) can only raise
-        # the level; config.yaml alone decides when no floor was baked in.
-        privacy = resolve_privacy(telemetry.privacy)
+        # The agent's own floor (frozen into the binary) can only raise the
+        # level; config.yaml alone decides when no floor was set.
+        privacy = resolve_privacy(telemetry.privacy, telemetry_privacy_floor)
         if privacy > telemetry.privacy:
             logger.info(
-                "Telemetry: privacy level raised to %s by the build-time "
-                "policy (config.yaml asked for %s).",
+                "Telemetry: privacy level raised to %s by the agent's floor "
+                "(config.yaml asked for %s).",
                 privacy.name.lower(),
                 telemetry.privacy.name.lower(),
             )
