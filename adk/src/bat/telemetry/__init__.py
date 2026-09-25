@@ -6,7 +6,6 @@ from .privacy import (
     parse_privacy,
     resolve_privacy,
 )
-from .redaction import RedactingSpanExporter, redact_attributes
 from .setup import (
     SpanKind,
     extract_context,
@@ -19,7 +18,6 @@ from .setup import (
 
 __all__ = [
     "ExporterSpec",
-    "RedactingSpanExporter",
     "SpanKind",
     "TelemetryConfig",
     "TelemetryPrivacy",
@@ -30,7 +28,6 @@ __all__ = [
     "inject_context",
     "is_enabled",
     "parse_privacy",
-    "redact_attributes",
     "resolve_privacy",
     "setup_telemetry",
     "shutdown_telemetry",

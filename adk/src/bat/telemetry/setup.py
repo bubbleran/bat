@@ -2,9 +2,7 @@ import atexit
 import contextlib
 from typing import Any, Dict, Optional
 from .attributes import OPENINFERENCE_PROJECT_NAME
-from .file_exporter import JsonFileSpanExporter
 from .privacy import TelemetryPrivacy
-from .redaction import RedactingSpanExporter
 from ..logging import create_logger
 from .config import TelemetryConfig
 
@@ -129,7 +127,20 @@ def setup_telemetry(
         )
         return False
 
-    if trace is None:
+    try:
+        if trace is None:
+            raise ImportError
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from openinference.instrumentation import TraceConfig
+        from openinference.instrumentation.langchain import (
+            LangChainInstrumentor,
+        )
+        from .file_exporter import JsonFileSpanExporter
+        from .redaction import RedactingSpanExporter
+    except ImportError:
         logger.error(
             "Telemetry is enabled in config.yaml but no telemetry is "
             "installed; continuing with telemetry disabled. Install the "
@@ -137,10 +148,6 @@ def setup_telemetry(
         )
         return False
 
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     resource_attributes = {"service.name": cfg.service_name}
     if cfg.project_name:
         resource_attributes[OPENINFERENCE_PROJECT_NAME] = cfg.project_name
@@ -193,46 +200,26 @@ def setup_telemetry(
     _provider = provider
     atexit.register(shutdown_telemetry)
 
-    try:
-        from openinference.instrumentation import TraceConfig
-        from openinference.instrumentation.langchain import (
-            LangChainInstrumentor,
+    instrument_kwargs: Dict[str, Any] = {"tracer_provider": provider}
+    if cfg.privacy.hides_content:
+        instrument_kwargs["config"] = TraceConfig(
+            hide_inputs=True,
+            hide_outputs=True,
+            hide_prompts=True,
+            hide_llm_invocation_parameters=True,
+            hide_llm_tools=True,
         )
-
-        instrument_kwargs: Dict[str, Any] = {"tracer_provider": provider}
-        if cfg.privacy.hides_content:
-            # Redaction happens inside the instrumentation (before any
-            # exporter sees the span), so every destination receives
-            # "__REDACTED__" in place of prompts, messages, completions,
-            # tool definitions and invocation parameters. Usage attributes
-            # (token counts) and timing are untouched, so cost accounting
-            # and the eval engine keep working. Tool descriptions/schemas and
-            # tool-call arguments are out of TraceConfig's reach and are
-            # handled by RedactingSpanExporter above.
-            instrument_kwargs["config"] = TraceConfig(
-                hide_inputs=True,
-                hide_outputs=True,
-                hide_prompts=True,
-                hide_llm_invocation_parameters=True,
-                hide_llm_tools=True,
-            )
-        logger.info(
-            "Telemetry: privacy level %s (content=%s, span_names=%s, "
-            "tool_names=%s).",
-            cfg.privacy.name.lower(),
-            cfg.privacy.hides_content,
-            cfg.privacy.hides_span_names,
-            cfg.privacy.hides_tool_names,
-        )
-        LangChainInstrumentor().instrument(**instrument_kwargs)
-        _patch_openinference_langgraph_callbacks()
-        logger.debug("OpenInference LangChain instrumentation active.")
-
-    except ImportError:
-        logger.warning(
-            "openinference-instrumentation-langchain not installed: "
-            "LLM/tool spans will not be auto-captured."
-        )
+    logger.info(
+        "Telemetry: privacy level %s (content=%s, span_names=%s, "
+        "tool_names=%s).",
+        cfg.privacy.name.lower(),
+        cfg.privacy.hides_content,
+        cfg.privacy.hides_span_names,
+        cfg.privacy.hides_tool_names,
+    )
+    LangChainInstrumentor().instrument(**instrument_kwargs)
+    _patch_openinference_langgraph_callbacks()
+    logger.debug("OpenInference LangChain instrumentation active.")
 
     _initialized = True
     return True
