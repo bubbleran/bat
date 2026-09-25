@@ -9,16 +9,13 @@
 
 ### Protocols at a Glance
 
-- [A2A](https://a2a-protocol.org/latest/) is the **default and recommended** protocol for agent-to-agent communication.
+- [A2A](https://a2a-protocol.org/latest/) is the protocol for agent-to-agent communication.
 - [MCP](https://modelcontextprotocol.io/docs/getting-started/intro) is used by agents to securely interact with external resources such as tools and prompts.
-- While MCP *can* be used for agent-to-agent communication, this is mainly intended for compatibility with other agent frameworks. Whenever possible, prefer **A2A** for agent interactions.
 
 ### Design Philosophy
 
 BAT-ADK is designed to let you focus on **agent behavior and workflows**, not protocol details.  
 You define your agent’s logic using graph-based workflows, while the SDK handles communication, protocol compliance, and integration under the hood.
-
-
 
 ## Preliminary Concepts
 
@@ -33,13 +30,11 @@ Before using **BAT-ADK**, you should be familiar with a few core ideas:
 - **MCP fundamentals**  
   Have a basic understanding of the **Model Context Protocol (MCP)** and how it enables agents to access tools, prompts, and context.
 
-
-
 ## Agent Application
 
 An **Agent Application** is the entry point object for agents built with **BAT-ADK**. It is an instance of the `AgentApplication` class and requires two parameters:
 
-1. **Graph type** – a class extending `AgentGraph`  
+1. **Graph type** – a class extending `AgentGraph`
 2. **State type** – a class extending `AgentState`
 
 ### What Happens on Instantiation
@@ -47,84 +42,76 @@ An **Agent Application** is the entry point object for agents built with **BAT-A
 When you create an `AgentApplication`, it automatically:
 
 - Loads the **Agent Card** from `./agent.json` and the **Agent Configuration** from `./config.yaml`
-  - When loading the Agent Card, it expects the `supportedInterfaces` field to be empty, as it will configure it with the endpoint specified in the apposite environment variables (URL and PORT).
+  - When loading the Agent Card, it expects the `supportedInterfaces` field to be empty, as it will configure it with the endpoint specified in `config.yaml`'s `endpoint` section (`url` and `port`).
 - Instantiates the **AgentGraph**
 - Sets up the **AgentExecutor**, Request Handler, and a **Starlette** web application
 
 ### Running the Agent Application
 
-After creation, call the `run()` method of the Agent Application to start the **A2A Server**.  
-
-- Use `run(expose_mcp=True)` to also start an **MCP Server**, which provides two tools:
-  - `get_agent_card()` – returns the **Agent Card** as a JSON string  
-  - `call_agent(query, context_id, message_id)` – sends a request to the A2A Server and returns the response  
-
-> **Note:** All MCP requests are internally forwarded to the A2A endpoint.
+After creation, call the `run()` method of the Agent Application to start the **A2A Server**.
 
 ### Ports
 
-- **A2A:** 9900 (default)  
-- **MCP:** 9800 (default)  
+- **A2A:** 9900 (default)
 
-You can override these using the `PORT` and `MCP_PORT` environment variables.
-
-
+You can override these in `config.yaml` via `endpoint.port`.
 
 ## Agent Configuration
 
 The **AgentConfig** defines how an agent behaves and what external resources it can access, including:
 
-- Whether to perform **checkpoints**  
+- The **endpoint** (URL and ports) the agent binds to
+- The default **model** (provider, name, base URL) for the agent's clients
+- Whether to perform **checkpoints**
+- **Telemetry** (OpenTelemetry) settings — see [Telemetry](#telemetry)
 - Which **MCP Servers** and other **Agents** it needs to communicate with
 
 ### Loading and Validation
 
-- Automatically loaded from `config.yaml` or the path set in the `CONFIG` environment variable when the **AgentApplication** starts  
-- Validated by checking connectivity to all `required` MCP Servers and Agents  
+- Automatically loaded from `config.yaml` or the path set in the `CONFIG_PATH` environment variable when the **AgentApplication** starts
+- Validated by checking connectivity to all `required` MCP Servers and Agents
   - If any required resource is unreachable, the application crashes and must be restarted (handled automatically in Kubernetes)
 
 ### Features
 
 The `AgentConfig` class provides methods to:
 
-- List available MCP Servers and Agents  
-- Retrieve the **AgentCard** of specific Agents  
-- Retrieve the **Tools** provided by specific MCP Servers  
+- List available MCP Servers and Agents
+- Retrieve the **AgentCard** of specific Agents
+- Retrieve the **Tools** provided by specific MCP Servers
 
 These methods help you integrate external resources directly into your agent’s **Graph** logic.
 
 ### Naming Guidelines
 
-- In the configuration, you assign **a name** and a **URL** for each MCP Server or Agent.  
-- **Always use the Official name** of the server or agent in your agent logic, not the name you assigned in the config.  
-- The SDK automatically maps your assigned names to the Official names during validation.  
+- In the configuration, you assign **a name** and a **URL** for each MCP Server or Agent.
+- **Always use the Official name** of the server or agent in your agent logic, not the name you assigned in the config.
+- The SDK automatically maps your assigned names to the Official names during validation.
 - Using Official names ensures your agent will work correctly when deployed with tools like the **AIFabric controller** of the **Orama Operator**.
 
-**Example:**  
+**Example:**
+
 ```yaml
 remote-agents:
-  - name: MyHelperAgent   # your assigned name
+  - name: MyHelperAgent # your assigned name
     url: http://helper:9900
 ```
+
 In your agent code, reference this agent by its Official name, e.g., HelperAgent, not MyHelperAgent.
-
-
 
 ## Agent Executor
 
-The **Agent Executor** handles task execution and event publishing for an agent.  
+The **Agent Executor** handles task execution and event publishing for an agent.
 
 ### Key Functions
 
-- **Execute a request**  
+- **Execute a request**
   - Calls the `astream` method of the **AgentGraph**.
   - Processes each chunk individually, converting `AgentTaskResult` objects into **A2A events** for the event queue.
-  - Collects usage metadata from the graph at each step and includes them in the stream chunks.
+  - When telemetry is enabled, wraps the streaming loop in a root OpenTelemetry span (`invoke_agent`). Token usage and tool calls are captured through OpenTelemetry rather than collected by hand into the stream — see [Telemetry](#telemetry).
 
-- **Cancel a request**  
+- **Cancel a request**
   - Currently **not implemented**
-
-
 
 ## Agent Graph
 
@@ -134,7 +121,7 @@ An **AgentGraph** defines the core logic of an agent using the **LangGraph** lib
 
 You **cannot instantiate `AgentGraph` directly**. Instead:
 
-1. **Extend** the `AgentGraph` class  
+1. **Extend** the `AgentGraph` class
 2. Implement the `setup(config: AgentConfig)` method. Inside this method:
    - Instantiate all **ChatModelClient** instances your agent will use **as properties of the extended class** (e.g. `self.<client-name>`).
    - Instantiate any prebuilt workflows.
@@ -146,8 +133,6 @@ After `setup` completes, the **AgentGraph** is compiled by the BAT-ADK (you don'
 
 The `AgentGraph` class provides an `astream` method, which the **Agent Executor** uses to submit requests and receive streamed responses.
 
-
-
 ## Agent State
 
 Each **AgentGraph** has a **State** that updates after each node executes. The state is defined by extending the `AgentState` class, which is a **Pydantic model** ensuring type safety.
@@ -156,21 +141,19 @@ Each **AgentGraph** has a **State** that updates after each node executes. The s
 
 When you extend `AgentState`, you must:
 
-- Override `from_query(str)` – to initialize the state from a query  
-- Override `to_task_result()` – to convert the state into an `AgentTaskResult`  
+- Override `from_query(str)` – to initialize the state from a query
+- Override `to_task_result()` – to convert the state into an `AgentTaskResult`
 
 Optional overrides for advanced features:
 
-- `update_after_checkpoint_restore(str)` – for **multi-turn conversations**  
+- `update_after_checkpoint_restore(str)` – for **multi-turn conversations**
 - `is_waiting_for_human_input()` – for **Human-in-the-Loop (HITL)** interactions
 
 ### How State Works
 
-- Each node in the **Agent Graph** receives the current `AgentState` and returns an updated `AgentState`  
+- Each node in the **Agent Graph** receives the current `AgentState` and returns an updated `AgentState`
 - The **Agent Graph** converts the updated state into an **AgentTaskResult** using `to_task_result()` in the `astream` method.
 - The **Agent Executor** then processes the `AgentTaskResult` and generates **A2A events** for the event queue
-
-
 
 ## Chat Model Client
 
@@ -182,23 +165,21 @@ A **Chat Model Client** is a wrapper around an LLM that combines:
 
 ### What It Does
 
-- Provides `invoke` for single requests and `batch` for parallel requests  
-- Tracks usage metadata:
-  - Input, output, and total tokens
-  - LLM inference time
+- Provides `invoke` for single requests and `batch` for parallel requests
 
-When a `ChatModelClient` is created as part of an **AgentGraph**, the graph automatically collects this usage data after each node execution and includes it in the streamed results.
+Token usage (input/output/total tokens) and LLM timing are captured through **OpenTelemetry**: when telemetry is enabled, OpenInference auto-instrumentation records them on the underlying model's spans, so the client no longer collects them by hand. See [Telemetry](#telemetry) for how the data is exported and read back.
 
 ### Configuration
 
-A **ChatModelClient** is configured using a **ChatModelClientConfig**, typically loaded from environment variables via `from_env`.  
+A **ChatModelClient** is configured using a **ChatModelClientConfig**. Its defaults (provider, model name, base URL) come from `config.yaml`'s `model` section, while the `MODEL` / `MODEL_PROVIDER` / `BASE_URL` environment variables still override them.  
 The configuration includes:
 
-- Model provider and model name  
-- Optional LLM endpoint URL  
+- Model provider and model name
+- Optional LLM endpoint URL
 - Optional client name (developer-defined identifier)
 
 ### Structured Output
+
 A **ChatModelClient** can be configured to provide a Pydantic Model as output of the `invoke` method by setting the `output_schema` parameter in the **ChatModelClient** constructor.
 
 Note: this feature is currently not supported when using the ChatModelClient with tools or in a ReAct Loop. Support will be provided in the near future.
@@ -215,19 +196,17 @@ They help you encapsulate common or complex logic into reusable building blocks,
 
 BAT-ADK provides the abstract `PrebuiltWorkflow` class. To create one, you must extend it and implement:
 
-- `_setup()`  
-  - Similar to `AgentGraph.setup`  
+- `_setup()`
+  - Similar to `AgentGraph.setup`
   - Used to initialize models, tools, and internal state
 
-- `_astream()`  
-  - Implements the workflow’s **custom streaming logic**  
+- `_astream()`
+  - Implements the workflow’s **custom streaming logic**
   - This is more advanced and requires careful handling
 
 ### Using a Prebuilt Workflow
 
 Once defined, call `as_runnable()` to obtain a **Runnable** that can be directly used as a node in an **Agent Graph**.
-
-
 
 ## ReAct Loop
 
@@ -252,8 +231,6 @@ Check the documentation for the full list of available parameters.
 
 This design keeps the ReAct logic reusable while cleanly integrating with your agent’s state and graph.
 
-
-
 ## Call Agent Node
 
 The **Call Agent Node** is a prebuilt workflow that abstracts the **Agent-to-Agent (A2A)** streaming.
@@ -263,6 +240,7 @@ It lets you integrate a remote agent call into your graph as a **single node**, 
 ### How to Use It
 
 To instantiate a Call Agent Node, you must provide:
+
 - The **Agent Config** and **Agent State** schema
 - The target agent's name (the agent must be specified in the **Agent Config**)
 - A Message Builder function to construct the request from the current state
@@ -270,4 +248,79 @@ To instantiate a Call Agent Node, you must provide:
   - Where to store the remote agent's status and content
   - Where to flag if the remote agent needs human input
 
-This node also automatically captures **token usage** from the remote agent and merges it into your local metrics.
+When telemetry is enabled, this node propagates the trace context (W3C `traceparent`) to the remote agent so its spans join the **same trace**; the remote agent's token usage is then recomposed from those spans rather than merged into local metrics by the node. See [Telemetry](#telemetry).
+
+## Telemetry
+
+**BAT-ADK** exports its internals as **OpenTelemetry** spans: token usage, tool calls, LLM timing and the shape of the graph. An agent calling another propagates the W3C `traceparent` through the A2A message, so **both agents' spans land in the same trace** despite running as separate processes.
+
+It lives behind an extra, so an agent that does not want it does not pay for it:
+
+```toml
+dependencies = ["bat-adk[telemetry]"]   # or bat-adk[all]
+```
+
+### Turning It On
+
+Everything is configured in `config.yaml`, under `telemetry`. **Telemetry is on as soon as `output` has at least one entry**, and spans fan out to *every* entry, so a run can go to a collector and a file at once.
+
+```yaml
+telemetry:
+  # service_name: my-agent    # optional; defaults to the agent card name
+  # project_name: my-agent    # optional; Phoenix project (default: "default")
+  privacy: none               # none | content | names | full
+  output:
+    - type: remote
+      endpoint: http://localhost:6006
+    - type: local
+      file_path: spans.jsonl
+```
+
+| `type` | Destination |
+|---|---|
+| `remote` | OTLP/HTTP collector, e.g. Arize Phoenix. `endpoint` defaults to `http://localhost:6006` |
+| `local` | JSON Lines file, one span per line. `file_path` defaults to `spans.jsonl` |
+| `console` | stdout, for debugging |
+
+An unknown `type` is skipped with a warning rather than disabling the whole pipeline.
+
+`project_name` is distinct from `service_name`: the first is the project the trace is filed under, the second labels the spans within it. **Agents that share a distributed trace must use the same `project_name`**, or the trace fragments across projects.
+
+### Privacy
+
+By default a span carries prompts, completions and tool definitions in full. `telemetry.privacy` decides how much of that may leave the process. It is a single ordered dial, and each level redacts everything the level below it does:
+
+| Level | Redacts |
+|---|---|
+| `none` | nothing — the default |
+| `content` | prompts, messages, completions, invocation parameters, and every tool's description, parameter schema and call arguments |
+| `names` | also span names, i.e. the LangGraph node names. Span kinds (`LLM`/`CHAIN`/`TOOL`) replace them, so the trace keeps its shape |
+| `full` | also tool names |
+
+Redacted values are replaced with `__REDACTED__` before any exporter sees them; they never leave the process.
+
+**Token counts, span kinds, hierarchy and timing survive at every level**, so cost accounting keeps working even at `full`. What `full` costs you is anything that reconstructs tool calls from spans: those metrics key off the tool name and go empty. Use it when the tool inventory itself is considered proprietary.
+
+The level is written as its name (`content`) or its ordinal (`1`). An unknown value is a **validation error**, not a silent fallback to `none`: a typo must not export in the clear precisely when someone was trying to lock the agent down.
+
+### Privacy Floor
+
+`config.yaml` sits beside the running agent and can be replaced there — a mounted ConfigMap, a swapped file, or `CONFIG_PATH` pointing elsewhere. On its own it is a default, not a guarantee.
+
+An agent shipped as a packaged binary can set a **floor** in its own source, which is frozen into the binary along with the rest of the agent code:
+
+```python
+agent = AgentApplication(
+    AgentGraphType=MyAgentGraph,
+    AgentStateType=MyAgentState,
+    telemetry_privacy_floor="content",
+)
+```
+
+The effective level is the **higher** of the two, so a replaced `config.yaml` can raise privacy but never lower it. The default floor is `none`, which leaves `config.yaml` to decide alone.
+
+### What Gets Instrumented
+
+- **LangChain / LangGraph** — automatically, through OpenInference: token counts, prompts, completions and tool calls.
+- **Agent Executor** — one root `invoke_agent <AgentName>` span per request, carrying the conversation and task ids, continuing an incoming trace when there is one.
+- **Call Agent Node** — a `CLIENT` span around the remote call, injecting `traceparent` into the outgoing message.

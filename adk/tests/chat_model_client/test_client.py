@@ -1,112 +1,9 @@
-import time
 from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from bat.chat_model_client import (
-    ChatModelClient,
-    ChatModelClientConfig,
-    UsageMetadata,
-)
-
-# ------------------ UsageMetadata Tests ------------------
-
-
-def test_usage_metadata_add_instance():
-    meta1 = UsageMetadata(
-        input_tokens=5,
-        output_tokens=10,
-        total_tokens=15,
-        inference_time=1.5,
-    )
-    meta2 = UsageMetadata(
-        input_tokens=2,
-        output_tokens=3,
-        total_tokens=5,
-        inference_time=0.5,
-    )
-
-    result = meta1 + meta2
-    assert result.input_tokens == 7
-    assert result.output_tokens == 13
-    assert result.total_tokens == 20
-    assert abs(result.inference_time - 2.0) < 1e-6
-
-
-def test_usage_metadata_add_dict():
-    meta1 = UsageMetadata(
-        input_tokens=5,
-        output_tokens=10,
-        total_tokens=15,
-        inference_time=1.5,
-    )
-    meta2 = {
-        "input_tokens": 2,
-        "output_tokens": 3,
-        "total_tokens": 5,
-        "inference_time": 0.5,
-    }
-
-    result = meta1 + meta2
-    assert result.input_tokens == 7
-    assert result.output_tokens == 13
-    assert result.total_tokens == 20
-    assert abs(result.inference_time - 2.0) < 1e-6
-
-
-def test_usage_metadata_sub_instance():
-    meta1 = UsageMetadata(
-        input_tokens=5,
-        output_tokens=10,
-        total_tokens=15,
-        inference_time=1.5,
-    )
-    meta2 = UsageMetadata(
-        input_tokens=2,
-        output_tokens=3,
-        total_tokens=5,
-        inference_time=0.5,
-    )
-
-    result = meta1 - meta2
-    assert result.input_tokens == 3
-    assert result.output_tokens == 7
-    assert result.total_tokens == 10
-    assert abs(result.inference_time - 1.0) < 1e-6
-
-
-def test_usage_metadata_sub_dict():
-    meta1 = UsageMetadata(
-        input_tokens=5,
-        output_tokens=10,
-        total_tokens=15,
-        inference_time=1.5,
-    )
-    meta2 = {
-        "input_tokens": 2,
-        "output_tokens": 3,
-        "total_tokens": 5,
-        "inference_time": 0.5,
-    }
-
-    result = meta1 - meta2
-    assert result.input_tokens == 3
-    assert result.output_tokens == 7
-    assert result.total_tokens == 10
-    assert abs(result.inference_time - 1.0) < 1e-6
-
-
-def test_usage_metadata_non_negative_validator():
-    with pytest.raises(ValueError):
-        UsageMetadata(input_tokens=-1)
-    with pytest.raises(ValueError):
-        UsageMetadata(output_tokens=-1)
-    with pytest.raises(ValueError):
-        UsageMetadata(total_tokens=-1)
-    with pytest.raises(ValueError):
-        UsageMetadata(inference_time=-0.1)
-
+from bat.chat_model_client import ChatModelClient, ChatModelClientConfig
 
 # ------------------ ChatModelClient Tests ------------------
 
@@ -237,51 +134,84 @@ def test_update_history(client):
     assert history == [human_msg, ai_msg, new_human_msg, new_ai_msg]
 
 
-def test_invoke_and_usage_metadata(client):
+def test_invoke_returns_ai_message_and_updates_history(client):
     human_msg = HumanMessage("hi")
     history = []
     response = client.invoke(human_msg, history)
     assert isinstance(response, AIMessage)
-    assert len(client._metadata_collector._usage_metadatas) == 1
     assert history[-1] == response
-    # Check aggregated usage metadata
-    agg_meta = client.get_usage_metadata()
-    assert agg_meta.input_tokens == 1
-    assert agg_meta.output_tokens == 2
-    assert agg_meta.total_tokens == 3
 
 
-def test_invoke_and_usage_metadata_with_string_input(client):
+def test_invoke_with_string_input(client):
     str_input = "hi"
     history = []
     response = client.invoke(str_input, history)
     assert isinstance(response, AIMessage)
-    assert len(client._metadata_collector._usage_metadatas) == 1
     assert history[-1] == response
-    # Check aggregated usage metadata
-    agg_meta = client.get_usage_metadata()
-    assert agg_meta.input_tokens == 1
-    assert agg_meta.output_tokens == 2
-    assert agg_meta.total_tokens == 3
 
 
 def test_batch_invocation(client):
     msgs = [HumanMessage("hi1"), HumanMessage("hi2")]
     responses = client.batch(msgs)
+    assert len(responses) == 2
     assert all(isinstance(r, AIMessage) for r in responses)
-    recorded = client._metadata_collector._usage_metadatas
-    assert len(recorded) == 1
-    assert recorded[0][1].input_tokens == 2
-    assert recorded[0][1].output_tokens == 4
-    assert recorded[0][1].total_tokens == 6
 
 
-def test_get_usage_metadata_from_timestamp(client):
-    human_msg = HumanMessage("hi")
-    client.invoke(human_msg)
-    t0 = time.time()
-    client.invoke(human_msg)
-    agg_meta = client.get_usage_metadata(from_timestamp=t0)
-    assert agg_meta.input_tokens == 1
-    assert agg_meta.output_tokens == 2
-    assert agg_meta.total_tokens == 3
+# ------------------ Responses API selection Tests ------------------
+
+
+@pytest.fixture
+def captured_init_kwargs(monkeypatch):
+    captured = {}
+
+    def fake_init_chat_model(**kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(
+        "bat.chat_model_client.client.init_chat_model",
+        fake_init_chat_model,
+    )
+    return captured
+
+
+def test_openai_without_base_url_uses_responses_api(captured_init_kwargs):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="gpt-5.2",
+            model_provider="openai",
+        ),
+    )
+    assert captured_init_kwargs["use_responses_api"] is True
+
+
+def test_openai_with_base_url_keeps_chat_completions(captured_init_kwargs):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="gpt-oss:20b",
+            model_provider="openai",
+            base_url="http://localhost:8000/v1",
+        ),
+    )
+    assert "use_responses_api" not in captured_init_kwargs
+
+
+def test_non_openai_provider_never_gets_responses_api(captured_init_kwargs):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="claude-opus-5",
+            model_provider="anthropic",
+        ),
+    )
+    assert "use_responses_api" not in captured_init_kwargs
+
+
+def test_output_version_is_left_to_the_provider(captured_init_kwargs):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="gpt-5.2",
+            model_provider="openai",
+        ),
+    )
+    assert "output_version" not in captured_init_kwargs

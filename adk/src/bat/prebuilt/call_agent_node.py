@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import time
 from typing import Any, AsyncIterable, Callable, Dict, Literal, Optional, Type
 
 from a2a.client import ClientConfig, create_client
@@ -12,7 +11,6 @@ from a2a.types import (
     StreamResponse,
     TaskState,
 )
-from google.protobuf.json_format import MessageToDict
 from httpx import AsyncClient
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START
@@ -20,15 +18,32 @@ from typing_extensions import override
 
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState, AgentTaskResult, AgentTaskStatus
-from ..chat_model_client.metadata import (
-    MetadataCollector,
-    TraceMetadata,
-    UsageMetadata,
-)
 from ..logging import create_logger
+from ..telemetry import SpanKind, inject_context
+from ..telemetry import attributes as attrs
+from ..telemetry import get_tracer as _get_tracer
 from .prebuilt_workflow import PrebuiltWorkflow
 
 logger = create_logger(__name__, level="debug")
+tracer = _get_tracer(__name__)
+
+
+def _inject_traceparent(message: Message, span: Any = None) -> None:
+    """Inject the trace context of ``span`` into an outgoing A2A message.
+
+    Adds the W3C ``traceparent`` (and friends) to the message metadata so the
+    called agent can continue the same distributed trace. The span is passed
+    explicitly rather than read from the current context, because the caller is
+    an async generator that yields across tasks. Never raises.
+    """
+    carrier: Dict[str, str] = {}
+    inject_context(carrier, span=span)
+    if not carrier:
+        return
+    try:
+        message.metadata.update(carrier)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug(f"Could not inject trace context into message: {e}")
 
 
 class CallAgentNode(PrebuiltWorkflow):
@@ -287,7 +302,6 @@ class CallAgentNode(PrebuiltWorkflow):
         self.stream_done: bool = False
         self._queue: Optional[asyncio.Queue[Optional[AgentTaskResult]]] = None
         self._stream_task: Optional[asyncio.Task[None]] = None
-        self._metadata_collector = MetadataCollector()
 
         self.graph_builder.add_node("call_agent", self._call_agent)
         self.graph_builder.add_node("consume_stream", self._consume_stream)
@@ -556,13 +570,15 @@ class CallAgentNode(PrebuiltWorkflow):
         """Consume the agent stream from another A2A agent.
         The following operations are performed:
         1. Creates an A2A client configured for streaming (120s timeout)
-        2. Sends the request message to the target agent
-        3. Yields each stream item (events or messages)
-        4. Tracks usage metadata from the stream for metrics collection
-        5. Handles errors and ensures proper cleanup
+        2. Opens a CLIENT span and propagates its trace context to the called
+            agent via the message metadata (W3C ``traceparent``)
+        3. Sends the request message to the target agent
+        4. Yields each stream item (events or messages)
+        5. Handles errors and ensures the span is closed
 
-        The method automatically extracts and stores usage metadata from each
-        stream item, which can later be retrieved using get_usage_metadata().
+        Token usage and tool calls of the called agent are captured through its
+        own OpenTelemetry spans (correlated to this call by the shared
+        ``trace_id``), not extracted from the A2A messages here.
 
         Args:
             agent_card (AgentCard): The agent card of the target agent,
@@ -578,6 +594,15 @@ class CallAgentNode(PrebuiltWorkflow):
                 error.
         """
         TIMEOUT = 120.0  # seconds
+        span = tracer.start_span(
+            f"{attrs.OP_INVOKE_AGENT} {agent_card.name}",
+            kind=SpanKind.CLIENT,
+        )
+        span.set_attribute(attrs.GEN_AI_OPERATION_NAME, attrs.OP_INVOKE_AGENT)
+        span.set_attribute(attrs.GEN_AI_AGENT_NAME, agent_card.name)
+        # Propagate the trace to the called agent through message metadata.
+        _inject_traceparent(message, span)
+
         client = await create_client(
             agent=agent_card,
             client_config=ClientConfig(
@@ -588,64 +613,11 @@ class CallAgentNode(PrebuiltWorkflow):
         stream = client.send_message(SendMessageRequest(message=message))
         try:
             async for chunk in stream:
-                t = time.time()
-                if chunk.HasField("message"):
-                    metadata = chunk.message.metadata
-                elif chunk.HasField("status_update"):
-                    metadata = chunk.status_update.metadata
-                elif chunk.HasField("artifact_update"):
-                    metadata = chunk.artifact_update.metadata
-                elif chunk.HasField("task"):
-                    metadata = chunk.task.metadata
-                else:
-                    metadata = None
-
-                if metadata:
-                    self._metadata_collector.observe_metadata(
-                        MessageToDict(metadata),
-                        timestamp=t,
-                    )
                 yield chunk
 
         except Exception as e:
             logger.error(f"consume_agent_stream: Streaming failed: {e}")
+            span.record_exception(e)
             raise
-
-    def get_usage_metadata(
-        self,
-        from_timestamp: Optional[float] = None,
-    ) -> UsageMetadata:
-        """
-        Get the aggregated usage metadata collected from the agent
-        communication stream.
-
-        Args:
-            from_timestamp (Optional[float]): If provided, only usage metadata
-                after this timestamp will be considered.
-                If None, all usage metadata will be considered.
-
-        Returns:
-            UsageMetadata: The aggregated usage metadata from all stream events.
-        """
-        return self._metadata_collector.get_usage_metadata(
-            from_timestamp=from_timestamp
-        )
-
-    def get_trace_metadata(
-        self,
-        from_timestamp: Optional[float] = None,
-    ) -> TraceMetadata:
-        """Get aggregated trace metadata (tool calls) forwarded from the
-        called agent.
-
-        Args:
-            from_timestamp (Optional[float]): If provided, only entries after
-                this timestamp are returned.
-
-        Returns:
-            TraceMetadata: Aggregated trace metadata. The ``tool_calls`` list is
-                empty when no tool-call trace was forwarded.
-        """
-        return self._metadata_collector.get_trace_metadata(
-            from_timestamp=from_timestamp
-        )
+        finally:
+            span.end()

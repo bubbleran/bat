@@ -1,5 +1,7 @@
 import asyncio
-from typing import Dict, List, Literal, Tuple
+import os
+from typing import Dict, List, Literal, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 from a2a.client import A2ACardResolver
@@ -10,10 +12,11 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import (
     StreamableHttpConnection as MCPConnection,
 )
-from pydantic import BaseModel, BeforeValidator, Field
-from typing_extensions import Annotated, Self
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing_extensions import Self
 
 from ..logging import create_logger
+from ..telemetry.privacy import TelemetryPrivacy, parse_privacy
 
 logger = create_logger(__name__, "debug")
 
@@ -43,20 +46,12 @@ class MCPServerConfig(BaseModel):
     timeout: int = DEFAULT_TIMEOUT
 
 
-"""Type for inter-agent communication protocol ('A2A' or 'MCP')."""
-InteragentCommunicationProtocol = Annotated[
-    Literal["A2A", "MCP"], BeforeValidator(lambda v: v.upper())
-]
-
-
 class RemoteAgentConfig(BaseModel):
-    """Configuration for remote A2A or MCP agent connections.
+    """Configuration for a remote A2A agent connection.
 
     Attributes:
         name (str): The name of the remote agent.
         url (str): The URL of the remote agent.
-        protocol (InteragentCommunicationProtocol): The communication protocol
-            used by the remote agent ('A2A' or 'MCP').
         required (bool): Whether the remote agent is required to be reachable.
             Defaults to True.
             When set to False, connection failures will be treated by ignoring
@@ -69,7 +64,6 @@ class RemoteAgentConfig(BaseModel):
 
     name: str
     url: str
-    protocol: InteragentCommunicationProtocol
     required: bool = True
     timeout: int = DEFAULT_TIMEOUT
 
@@ -79,12 +73,168 @@ class A2AConnection(BaseModel):
     timeout: int
 
 
+class EndpointConfig(BaseModel):
+    """Where the agent is served (base URL and port).
+
+    Read directly by ``AgentApplication`` (not via environment variables).
+
+    A port embedded directly in ``url`` (e.g. ``http://host:8080``) is lifted
+    out into ``port`` so a single value is authoritative for both binding the
+    server and advertising the agent card. Specifying the port in both places
+    is allowed only if they agree; a mismatch is a configuration error.
+
+    Attributes:
+        url (Optional[str]): Base URL the agent is hosted at (used to build the
+            agent card interface URL). Stored without a port.
+        port (Optional[int]): A2A server port. Defaults to 9900.
+    """
+
+    url: Optional[str] = None
+    port: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _split_port_from_url(self) -> Self:
+        """Move a port embedded in ``url`` into the ``port`` field.
+
+        Ensures the port is defined in exactly one canonical place, so the
+        uvicorn bind port and the advertised agent-card URL cannot disagree.
+
+        Raises:
+            ValueError: If ``url`` carries a port that conflicts with an
+                explicitly set ``port``.
+        """
+        if self.url is None:
+            return self
+        # urlsplit needs a scheme to recognise the ``host:port`` authority.
+        raw = self.url if "://" in self.url else f"http://{self.url}"
+        parts = urlsplit(raw)
+        if parts.port is not None:
+            if self.port is not None and self.port != parts.port:
+                raise ValueError(
+                    f"Conflicting ports: url has ':{parts.port}' but "
+                    f"endpoint.port is {self.port}. Set the port in only "
+                    "one place."
+                )
+            self.port = parts.port
+            netloc = parts.hostname or ""
+            self.url = urlunsplit(
+                (
+                    parts.scheme,
+                    netloc,
+                    parts.path,
+                    parts.query,
+                    parts.fragment,
+                )
+            ).rstrip("/")
+        return self
+
+
+class ModelConfig(BaseModel):
+    """Chat model selection.
+
+    These three values are the only ones an environment variable may override:
+    ``MODEL`` / ``MODEL_PROVIDER`` / ``BASE_URL`` take precedence when set (see
+    :meth:`bat.chat_model_client.ChatModelClientConfig.load`).
+
+    Attributes:
+        provider (Optional[str]): Model provider, e.g. ``openai``.
+        name (Optional[str]): Model name, e.g. ``gpt-4.1-mini``.
+        base_url (Optional[str]): Optional base URL for the provider; needed by
+            local providers such as ollama.
+    """
+
+    provider: Optional[str] = None
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+class OutputConfig(BaseModel):
+    """A single telemetry export destination.
+
+    Attributes:
+        type (str): ``local`` (JSONL file), ``remote`` (OTLP/Phoenix) or
+            ``console`` (stdout).
+        file_path (Optional[str]): Target file for ``local`` (defaults to
+            ``spans.jsonl``).
+        endpoint (Optional[str]): OTLP collector base URL for ``remote``
+            (defaults to ``http://localhost:6006``).
+    """
+
+    type: Literal["local", "remote", "console"]
+    file_path: Optional[str] = None
+    endpoint: Optional[str] = None
+
+
+class TelemetrySettings(BaseModel):
+    """OpenTelemetry settings (the enabling switch and exporter list).
+
+    Named ``TelemetrySettings`` to avoid colliding with
+    ``bat.telemetry.config.TelemetryConfig``. ``AgentApplication`` reads these
+    directly and feeds them to ``TelemetryConfig.from_settings``.
+
+    Spans are fanned out to **every** entry in ``output``, e.g.::
+
+        telemetry:
+          output:
+            - type: local
+              file_path: spans.jsonl
+            - type: remote
+              endpoint: http://localhost:6006
+
+    Attributes:
+        service_name (Optional[str]): ``service.name``; defaults to the agent
+            card name.
+        project_name (Optional[str]): OpenInference/Phoenix project to file
+            traces under (the ``openinference.project.name`` resource
+            attribute). When unset, Phoenix uses the ``default`` project. This
+            is distinct from ``service_name`` (which labels spans within a
+            project). Agents that share a distributed trace must use the same
+            project or the trace fragments across projects.
+        privacy (TelemetryPrivacy): How much of the agent's internals may
+            leave the process. An ordered ladder, each level a superset of
+            the one below::
+
+                none     # export everything (default)
+                content  # redact prompts, messages, completions,
+                         # invocation parameters, and every tool's
+                         # description, parameter schema and call arguments
+                names    # also redact span (LangGraph node) names
+                full     # also redact tool names
+
+            Values replaced with ``__REDACTED__`` never leave the process.
+            Token counts, span kinds, hierarchy and timing survive at every
+            level, so usage/cost tracking keeps working. ``full`` empties the
+            eval engine's tool-call metrics, which key off the tool name.
+            Written as the level name or its ordinal; an unknown value is a
+            validation error rather than a silent fallback to ``none``.
+        output (List[OutputConfig]): One entry per active destination.
+    """
+
+    service_name: Optional[str] = None
+    project_name: Optional[str] = None
+    privacy: TelemetryPrivacy = TelemetryPrivacy.NONE
+    output: List[OutputConfig] = Field(default=[])
+
+    @field_validator("privacy", mode="before")
+    @classmethod
+    def _coerce_privacy(cls, value: object) -> object:
+        """Accept the level name or ordinal, and reject anything else.
+
+        A typo'd level must not silently fall back to ``none``: that would
+        export in the clear exactly when someone was trying to lock the agent
+        down, which is the one failure mode this setting exists to prevent.
+        """
+        return parse_privacy(value)
+
+
 class AgentConfig(BaseModel):
     """
     Agent Configuration, including MCP servers and remote agents.
 
     Attributes
     -------
+        agent_card (Optional[str]): Path to the agent card JSON file. When
+            unset it defaults to ``./agent.json`` (see ``AgentApplication``).
         mcp_servers (List[MCPServerConfig]): List of MCP server
             configurations.
         remote_agents (List[RemoteAgentConfig]): List of remote agent
@@ -105,13 +255,16 @@ class AgentConfig(BaseModel):
     """
 
     checkpoints: bool = Field(default=False)
+    agent_card: Optional[str] = None
+    endpoint: Optional[EndpointConfig] = None
+    model: Optional[ModelConfig] = None
+    telemetry: Optional[TelemetrySettings] = None
     mcp_servers: List[MCPServerConfig] = Field(default=[], alias="mcp-servers")
     remote_agents: List[RemoteAgentConfig] = Field(
         default=[], alias="remote-agents"
     )
 
     _mcp_server_connections: dict[str, MCPConnection] = {}
-    _mcp_agent_connections: dict[str, MCPConnection] = {}
     _a2a_agent_connections: dict[str, A2AConnection] = {}
 
     _required_mcp_servers: Dict[str, bool] = {}
@@ -183,6 +336,10 @@ class AgentConfig(BaseModel):
         """Load the agent configuration from a YAML file. If the YAML file is
         not found, an empty configuration is used.
 
+        Environment variables referenced as ``$VAR`` or ``${VAR}`` are expanded
+        in the file before parsing, so values can be templated from the
+        environment (e.g. ``port: ${PORT}``). Unset variables are left literal.
+
         Args:
             path (str): The path to the configuration YAML file.
 
@@ -195,15 +352,13 @@ class AgentConfig(BaseModel):
         """
         try:
             with open(path, "r") as f:
-                data = yaml.safe_load(f)
+                data = yaml.safe_load(os.path.expandvars(f.read()))
             cfg = cls.model_validate(data)
             cfg._mcp_server_connections = _build_mcp_server_connections(
                 mcp_servers=cfg.mcp_servers,
             )
-            cfg._a2a_agent_connections, cfg._mcp_agent_connections = (
-                _build_remote_agent_connections(
-                    remote_agents=cfg.remote_agents,
-                )
+            cfg._a2a_agent_connections = _build_remote_agent_connections(
+                remote_agents=cfg.remote_agents,
             )
             for server in cfg.mcp_servers:
                 cfg._required_mcp_servers[server.name] = server.required
@@ -248,27 +403,6 @@ class AgentConfig(BaseModel):
         server_alias = self._mcp_servers_aliases.get(server_name, "")
         if server_alias in self._mcp_server_connections:
             return self._mcp_server_connections[server_alias]
-        return None
-
-    def get_mcp_agent_connection(
-        self,
-        agent_name: str,
-    ) -> MCPConnection | None:
-        """Get the MCP connection for a given remote agent, if it uses
-        MCP protocol.
-
-        Args:
-            agent_name (str): The name of the remote agent.
-
-        Returns:
-            MCPConnection | None: The MCP connection object if the agent is
-                found and uses MCP protocol, otherwise None.
-        """
-        if agent_name in self._mcp_agent_connections:
-            return self._mcp_agent_connections[agent_name]
-        agent_alias = self._remote_agents_aliases.get(agent_name, "")
-        if agent_alias in self._mcp_agent_connections:
-            return self._mcp_agent_connections[agent_name]
         return None
 
     def get_a2a_agent_connection(
@@ -352,39 +486,19 @@ class AgentConfig(BaseModel):
             ConnectionError: If a `required` remote agent cannot be
                 connected to.
         """
-        mcp_connections: dict[str, MCPConnection] = {}
-        for name in agent_names:
-            if conn := self.get_mcp_agent_connection(name):
-                mcp_connections[name] = conn
-
-        mcp_client = MultiServerMCPClient(connections=mcp_connections)
-        client = None
         agent_cards = {}
         for name in agent_names:
             try:
                 if a2a_conn := self.get_a2a_agent_connection(name):
-                    if client is None or client.timeout != a2a_conn.timeout:
-                        client = AsyncClient(timeout=a2a_conn.timeout)
-                    card_resolver = A2ACardResolver(
-                        httpx_client=client,
-                        base_url=a2a_conn.url,
-                    )
-                    agent_card = await card_resolver.get_agent_card()
-                    agent_cards[name] = agent_card
-                elif name in mcp_connections:
-                    async with mcp_client.session(name) as session:
-                        call_tool_result = await session.call_tool(
-                            "get_agent_card"
+                    async with AsyncClient(
+                        timeout=a2a_conn.timeout
+                    ) as client:
+                        card_resolver = A2ACardResolver(
+                            httpx_client=client,
+                            base_url=a2a_conn.url,
                         )
-                    if call_tool_result.isError:
-                        raise RuntimeError(
-                            "The MCP remote agent 'get_agent_card' tool "
-                            "returned an error."
-                        )
-                    agent_card = AgentCard.model_validate(
-                        call_tool_result.result
-                    )
-                    agent_cards[name] = agent_card
+                        agent_card = await card_resolver.get_agent_card()
+                        agent_cards[name] = agent_card
                 else:
                     logger.warning(
                         f"Remote Agent {name} not found in configuration."
@@ -448,31 +562,25 @@ class AgentConfig(BaseModel):
         Raises:
             Exception: if the connection to one of the `required` agents fails.
         """
-        mcp_client = MultiServerMCPClient(
-            connections=self._mcp_server_connections
-        )
-        async_client = AsyncClient(timeout=DEFAULT_TIMEOUT)
         aliases: Dict[str, str] = {}
 
-        for agent in self.remote_agents:
-            try:
-                if agent.protocol == "A2A":
+        async with AsyncClient(timeout=DEFAULT_TIMEOUT) as async_client:
+            for agent in self.remote_agents:
+                try:
                     alias = await _request_a2a_name(async_client, agent.url)
-                else:
-                    alias = await _request_mcp_name(mcp_client, agent.name)
-                aliases[alias] = agent.name
-            except Exception as e:
-                if agent.required:
-                    logger.error(
-                        "Failed to get name from required Agent"
-                        f"'{agent.name}': {e}"
-                    )
-                    raise e
-                else:
-                    logger.warning(
-                        "Failed to get name from Agent "
-                        f"'{agent.name}': {e}"
-                    )
+                    aliases[alias] = agent.name
+                except Exception as e:
+                    if agent.required:
+                        logger.error(
+                            "Failed to get name from required Agent"
+                            f"'{agent.name}': {e}"
+                        )
+                        raise e
+                    else:
+                        logger.warning(
+                            "Failed to get name from Agent "
+                            f"'{agent.name}': {e}"
+                        )
 
         logger.debug(
             "Retrieved alias for "
@@ -547,33 +655,21 @@ def _build_mcp_server_connections(
 
 def _build_remote_agent_connections(
     remote_agents: List[RemoteAgentConfig],
-) -> Tuple[Dict[str, A2AConnection], Dict[str, MCPConnection]]:
-    """Build MCP and A2A agent connections from configuration.
+) -> Dict[str, A2AConnection]:
+    """Build A2A agent connections from configuration.
 
     Args:
         remote_agents (List[RemoteAgentConfig]): List of remote agent
             configurations.
 
     Returns:
-        Tuple[Dict[str, A2AConnection], Dict[str, MCPConnection]]:
-            Two dictionaries, one with A2A agent connections and one with MCP
-            agent connections.
+        Dict[str, A2AConnection]: Dictionary of A2A agent connections.
     """
-    mcp_connections = {
-        agent.name: MCPConnection(
-            url=agent.url,
-            timeout=agent.timeout,
-            transport="streamable_http",
-        )
-        for agent in remote_agents
-        if agent.protocol == "MCP"
-    }
     a2a_connections = {
         agent.name: A2AConnection(
             url=agent.url,
             timeout=agent.timeout,
         )
         for agent in remote_agents
-        if agent.protocol == "A2A"
     }
-    return a2a_connections, mcp_connections
+    return a2a_connections
