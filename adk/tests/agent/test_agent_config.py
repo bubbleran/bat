@@ -1,6 +1,7 @@
 """Tests for the nested config.yaml schema on AgentConfig."""
 
 from bat.agent.config import AgentConfig
+from bat.telemetry.privacy import TelemetryPrivacy
 
 
 def test_empty_config_has_no_optional_sections():
@@ -30,6 +31,7 @@ def test_full_nested_schema_parses():
             "agent_card": "./cards/agent.json",
             "telemetry": {
                 "service_name": "my-agent",
+                "privacy": "names",
                 "output": [
                     {"type": "local", "file_path": "spans.jsonl"},
                     {"type": "remote", "endpoint": "http://localhost:6006"},
@@ -55,6 +57,7 @@ def test_full_nested_schema_parses():
     assert cfg.agent_card == "./cards/agent.json"
 
     assert cfg.telemetry.service_name == "my-agent"
+    assert cfg.telemetry.privacy is TelemetryPrivacy.NAMES
     assert cfg.telemetry.output[0].type == "local"
     assert cfg.telemetry.output[0].file_path == "spans.jsonl"
     assert cfg.telemetry.output[1].type == "remote"
@@ -76,4 +79,5 @@ def test_partial_sections_default_their_fields():
         {"telemetry": {"output": [{"type": "console"}]}}
     )
     assert cfg2.telemetry.service_name is None
+    assert cfg2.telemetry.privacy is TelemetryPrivacy.NONE
     assert cfg2.telemetry.output[0].type == "console"

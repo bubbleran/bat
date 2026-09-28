@@ -302,12 +302,7 @@ class CallAgentNode(PrebuiltWorkflow):
         self.recursion_limit = recursion_limit
         self.loop_name = loop_name
         self._agent_card = None
-        # Per-invocation stream state is keyed by a unique call id so that
-        # concurrent requests sharing this single node instance cannot clobber
-        # each other's queue/worker task. The (non-serializable) queue and
-        # worker task live here; the call id and the done flag travel in the
-        # graph state (`bat_extra`) so `_router` — which only receives the
-        # state — can read them.
+
         self._streams: Dict[str, Dict[str, Any]] = {}
         self._call_id_key = f"{loop_name}.call_id"
         self._stream_done_key = f"{loop_name}.stream_done"
