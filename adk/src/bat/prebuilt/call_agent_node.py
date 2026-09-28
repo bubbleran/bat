@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import uuid
 from typing import Any, AsyncIterable, Callable, Dict, Literal, Optional, Type
 
 from a2a.client import ClientConfig, create_client
@@ -236,7 +237,9 @@ class CallAgentNode(PrebuiltWorkflow):
                 stream is done or input is required, otherwise returns
                 "consume_stream" to continue processing.
         """
-        stream_done_val = self.stream_done
+        stream_done_val = bool(
+            state.bat_extra.get(self._stream_done_key, False)
+        )
         needs_input_val = bool(getattr(state, self.agent_input_required))
 
         return (
@@ -299,9 +302,15 @@ class CallAgentNode(PrebuiltWorkflow):
         self.recursion_limit = recursion_limit
         self.loop_name = loop_name
         self._agent_card = None
-        self.stream_done: bool = False
-        self._queue: Optional[asyncio.Queue[Optional[AgentTaskResult]]] = None
-        self._stream_task: Optional[asyncio.Task[None]] = None
+        # Per-invocation stream state is keyed by a unique call id so that
+        # concurrent requests sharing this single node instance cannot clobber
+        # each other's queue/worker task. The (non-serializable) queue and
+        # worker task live here; the call id and the done flag travel in the
+        # graph state (`bat_extra`) so `_router` — which only receives the
+        # state — can read them.
+        self._streams: Dict[str, Dict[str, Any]] = {}
+        self._call_id_key = f"{loop_name}.call_id"
+        self._stream_done_key = f"{loop_name}.stream_done"
 
         self.graph_builder.add_node("call_agent", self._call_agent)
         self.graph_builder.add_node("consume_stream", self._consume_stream)
@@ -396,8 +405,11 @@ class CallAgentNode(PrebuiltWorkflow):
                 f"Set agent card URL to {url} for agent {self._agent_card.name}"
             )
 
-        # Reset dynamic fields
-        self.stream_done = False
+        # Reset dynamic fields. A fresh call id isolates this invocation's
+        # stream state from any concurrent one.
+        call_id = uuid.uuid4().hex
+        state.bat_extra[self._call_id_key] = call_id
+        state.bat_extra[self._stream_done_key] = False
         setattr(state, self.agent_response_status, None)
         setattr(state, self.agent_response_content, None)
         setattr(state, self.agent_input_required, False)
@@ -421,7 +433,7 @@ class CallAgentNode(PrebuiltWorkflow):
         setattr(state, self.output, f"Forwarding request to {self.loop_name}…")
 
         # Start streaming worker
-        await self._start_stream(request)
+        await self._start_stream(call_id, request)
 
         yield state
 
@@ -448,10 +460,12 @@ class CallAgentNode(PrebuiltWorkflow):
         Yields:
             Type[AgentState]: The updated state after consuming one stream item.
         """
-        q = self._queue
+        call_id = state.bat_extra.get(self._call_id_key)
+        stream = self._streams.get(call_id) if call_id else None
+        q = stream["queue"] if stream else None
         if q is None:
             # Nothing to consume: consider stream finished
-            self.stream_done = True
+            state.bat_extra[self._stream_done_key] = True
             yield state
             return
 
@@ -459,8 +473,8 @@ class CallAgentNode(PrebuiltWorkflow):
 
         # Sentinel: end of stream
         if atr is None:
-            self.stream_done = True
-            await self._stop_stream()
+            state.bat_extra[self._stream_done_key] = True
+            await self._stop_stream(call_id)
             yield state
             return
 
@@ -478,44 +492,60 @@ class CallAgentNode(PrebuiltWorkflow):
 
         if atr.requires_input():
             # If user input is required, stop the stream
-            self.stream_done = True
-            await self._stop_stream()
+            state.bat_extra[self._stream_done_key] = True
+            await self._stop_stream(call_id)
 
         yield state
 
-    def _cleanup(self, state: Type[AgentState]) -> AgentState:
-        """Final cleanup node (only an endpoint)."""
+    async def _cleanup(self, state: Type[AgentState]) -> AgentState:
+        """Final cleanup node.
+
+        Tears down this invocation's stream worker (if still running) and drops
+        its per-invocation bookkeeping from the state.
+        """
+        call_id = state.bat_extra.pop(self._call_id_key, None)
+        if call_id:
+            await self._stop_stream(call_id)
+        state.bat_extra.pop(self._stream_done_key, None)
         return state
 
     # -------------------------------------------------------------------------
     # STREAM HELPERS
     # -------------------------------------------------------------------------
-    async def _stop_stream(self) -> None:
-        """Stop the streaming worker task and clear the queue.
+    async def _stop_stream(self, call_id: Optional[str]) -> None:
+        """Stop the streaming worker for a given call id and drop its entry.
 
         1. Cancels the background worker task if it's running
         2. Awaits the task cancellation to ensure clean shutdown
-        3. Clears references to the task and queue
+        3. Removes the call's queue/task entry from the registry
 
         This method is safe to call multiple times and handles the case where
-        no streaming task is currently running.
+        no streaming task is currently running for the given call id.
+
+        Args:
+            call_id (Optional[str]): The id identifying this invocation's
+                stream state.
         """
-        if self._stream_task:
-            self._stream_task.cancel()
+        if call_id is None:
+            return
+        stream = self._streams.pop(call_id, None)
+        if stream is None:
+            return
+        task = stream.get("task")
+        if task:
+            task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._stream_task
-        self._stream_task = None
-        self._queue = None
+                await task
 
-    async def _start_stream(self, request: Message) -> None:
+    async def _start_stream(self, call_id: str, request: Message) -> None:
         """Start a background worker to consume the agent stream and populate
-        the queue.
+        this invocation's queue.
 
-        1. Stops any existing stream to ensure clean state
-        2. Creates a new asyncio Queue for inter-task communication
-        3. Spawns a background worker task that:
+        1. Creates a new asyncio Queue for inter-task communication, registered
+           under ``call_id`` so concurrent invocations stay isolated
+        2. Spawns a background worker task that:
            - Consumes the agent stream using consume_agent_stream()
-           - Maps each stream item to (status, content) tuples
+           - Maps each stream item to an AgentTaskResult
            - Pushes items to the queue for the main workflow to consume
            - Handles errors and ensures a sentinel (None) is sent at the end
 
@@ -523,12 +553,11 @@ class CallAgentNode(PrebuiltWorkflow):
         to consume stream items at its own pace.
 
         Args:
+            call_id (str): The id identifying this invocation's stream state.
             request (Message): The A2A message to send to the target agent.
         """
-        await self._stop_stream()
-
-        q: asyncio.Queue[Optional[tuple[str, str]]] = asyncio.Queue()
-        self._queue = q
+        q: asyncio.Queue[Optional[AgentTaskResult]] = asyncio.Queue()
+        self._streams[call_id] = {"queue": q, "task": None}
 
         async def _worker():
             """Background worker that consumes agent stream and pushes items
@@ -560,7 +589,7 @@ class CallAgentNode(PrebuiltWorkflow):
                 # Sentinel: end of stream
                 await q.put(None)
 
-        self._stream_task = asyncio.create_task(_worker())
+        self._streams[call_id]["task"] = asyncio.create_task(_worker())
 
     async def consume_agent_stream(
         self,
