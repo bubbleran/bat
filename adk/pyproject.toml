@@ -21,9 +21,9 @@ dependencies = [
   "a2a-sdk>=1.0.0",
   "a2a-sdk[http-server]",
   "httpx>=0.28.1",
-  "langchain>=0.3.24",
+  "langchain>=1.0",
   "langchain-mcp-adapters>=0.2.0",
-  "langgraph>=1.0.0",
+  "langgraph>=1.2",
   "mcp[cli]>=1.17.0",
   "pydantic>=2.10.6",
   "pyyaml>=6.0.1",
@@ -35,7 +35,7 @@ anthropic = ["langchain-anthropic"]
 deepseek = ["langchain-deepseek"]
 nvidia = ["langchain-nvidia-ai-endpoints"]
 ollama = ["langchain-ollama"]
-openai = ["langchain-openai"]
+openai = ["langchain-openai>=1.6.6"]
 
 # OpenTelemetry instrumentation. Export to any OTLP backend (e.g. Arize
 # Phoenix). Auto-instruments LangChain/LangGraph via OpenInference.
