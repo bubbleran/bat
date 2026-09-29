@@ -165,7 +165,9 @@ A **Chat Model Client** is a wrapper around an LLM that combines:
 
 ### What It Does
 
-- Provides `invoke` for single requests and `batch` for parallel requests
+- Provides `invoke` for single requests, `ainvoke` for the same request from
+  async code (it awaits the model instead of blocking the event loop), and
+  `batch` for parallel requests
 
 Token usage (input/output/total tokens) and LLM timing are captured through **OpenTelemetry**: when telemetry is enabled, OpenInference auto-instrumentation records them on the underlying model's spans, so the client no longer collects them by hand. See [Telemetry](#telemetry) for how the data is exported and read back.
 
@@ -180,7 +182,7 @@ The configuration includes:
 
 ### Structured Output
 
-A **ChatModelClient** can be configured to provide a Pydantic Model as output of the `invoke` method by setting the `output_schema` parameter in the **ChatModelClient** constructor.
+A **ChatModelClient** can be configured to provide a Pydantic Model as output of `invoke` and `ainvoke` by setting the `output_schema` parameter in the **ChatModelClient** constructor.
 
 Note: this feature is currently not supported when using the ChatModelClient with tools or in a ReAct Loop. Support will be provided in the near future.
 
@@ -228,6 +230,9 @@ To instantiate a ReAct Loop, you must provide:
   - Where the loop writes its output to
 
 Check the documentation for the full list of available parameters.
+
+The LLM node calls the client's `ainvoke`. A client that customises the model
+call (a budget, a short-circuit) overrides `ainvoke`, not `invoke`.
 
 This design keeps the ReAct logic reusable while cleanly integrating with your agent’s state and graph.
 

@@ -395,7 +395,7 @@ class ReActLoop(PrebuiltWorkflow):
                 )
                 else state_input
             )
-            response = self.chat_model_client.invoke(
+            response = await self.chat_model_client.ainvoke(
                 input=input,
                 history=state.bat_extra[self._internal_messages_key],
             )

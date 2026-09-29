@@ -294,8 +294,10 @@ class ChatModelClient:
             ValidationError: If the parsed response does not conform to the
                 output schema.
         """
-        response = self._chat_model.invoke(self._prepare(input, history))
-        return self._record(response, input, history)
+        response = self._chat_model.invoke(
+            self._prepare_messages(input, history)
+        )
+        return self._record_response(response, input, history)
 
     async def ainvoke(
         self,
@@ -305,10 +307,12 @@ class ChatModelClient:
         """Asynchronous `invoke`: same arguments, result, errors and history
         update, but it awaits the chat model instead of blocking the event
         loop."""
-        response = await self._chat_model.ainvoke(self._prepare(input, history))
-        return self._record(response, input, history)
+        response = await self._chat_model.ainvoke(
+            self._prepare_messages(input, history)
+        )
+        return self._record_response(response, input, history)
 
-    def _prepare(
+    def _prepare_messages(
         self,
         input: str | HumanMessage | List[ToolMessage],
         history: Optional[List[BaseMessage]],
@@ -319,7 +323,7 @@ class ChatModelClient:
         )
         return self._build_messages_list(input, history)
 
-    def _record(
+    def _record_response(
         self,
         response: Any,
         input: str | HumanMessage | List[ToolMessage],
