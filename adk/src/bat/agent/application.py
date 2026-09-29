@@ -117,7 +117,7 @@ class AgentApplication:
 
         self._agent_card_display = os.getenv(
             "AGENT_CARD_DISPLAY", "1"
-        )== "1"
+        ) == "1"
 
 
         agent_card_path = (
