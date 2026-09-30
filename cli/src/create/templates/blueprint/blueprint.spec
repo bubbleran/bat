@@ -1,16 +1,53 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-# No `datas`: each agent's config.yaml and agent.json are read from the
-# filesystem at runtime (the Dockerfile copies them next to the binary), not
-# frozen in. The agents themselves are reached through the static imports in
-# __main__.py, which is what PyInstaller follows.
-datas = []
+from importlib.metadata import PackageNotFoundError
 
+from PyInstaller.utils.hooks import copy_metadata
+
+# OpenInference's LangChain instrumentor gates itself on a dependency check that
+# reads the *installed distribution metadata* of langchain-core. PyInstaller
+# bundles modules but not their .dist-info directories, so inside the binary
+# that lookup fails and BaseInstrumentor.instrument() logs
+#     DependencyConflict: requested: "langchain_core >= 0.1.0" but found: "None"
+# and returns without instrumenting anything. Nothing raises, so the agent
+# starts, reports telemetry enabled, and exports only its own invoke_agent
+# spans: no LLM/TOOL spans, no token counts. Shipping the metadata is what
+# makes the auto-instrumentation engage in the frozen build. Distributions
+# that are not installed (another provider's integration, or telemetry when
+# its extra was dropped) are skipped.
+def _metadata(*distributions):
+    datas = []
+    for distribution in distributions:
+        try:
+            datas += copy_metadata(distribution)
+        except PackageNotFoundError:
+            pass
+    return datas
+
+
+telemetry_metadata = _metadata(
+    'langchain-core',
+    'langchain',
+    'openinference-instrumentation',
+    'openinference-instrumentation-langchain',
+    'opentelemetry-api',
+    'opentelemetry-sdk',
+    'langchain-anthropic',
+    'langchain-deepseek',
+    'langchain-nvidia-ai-endpoints',
+    'langchain-ollama',
+    'langchain-openai',
+)
+
+# No agent files in `datas`: each agent's config.yaml and agent.json are read
+# from the filesystem at runtime (the Dockerfile copies the cards next to the
+# binary), not frozen in. The agents themselves are reached through the static
+# imports in __main__.py, which is what PyInstaller follows.
 a = Analysis(
 	['__main__.py'],
-	pathex=[],
+	pathex=['.'],
 	binaries=[],
-	datas=datas,
+	datas=telemetry_metadata,
 	hiddenimports=[],
 	hookspath=[],
 	hooksconfig={},

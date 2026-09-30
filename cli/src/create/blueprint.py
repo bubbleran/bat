@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+from project import blueprint_agent_names_on_disk
+
 from .agent import (
     _PROVIDER_API_KEY_VAR,
     BAT_ADK_VERSION,
@@ -22,6 +24,7 @@ from .agent import (
     _build_graph_content,
     _build_src_init_content,
     _write_llm_clients,
+    resolve_telemetry_privacy,
 )
 from .rendering import render_template
 
@@ -56,17 +59,21 @@ def create_blueprint_scaffold(
     *,
     force: bool = False,
     model_provider: str = "openai",
-    namespace: str = "default",
-    provider: str = "bubbleran",
-    version: str = "v0.1.0",
+    telemetry_privacy: str | None = None,
 ) -> list[Path]:
     """Write an empty blueprint into ``target_dir``.
 
     Empty means no agents: ``bat add agent`` adds those. The provider is fixed
     here rather than per agent because the extras live in the one shared
-    pyproject.
+    pyproject, and the telemetry privacy floor because the one image freezes
+    it into the binary every agent runs from. There is no manifest and no
+    blueprint-level config.yaml: the layout is what makes it a blueprint (see
+    :mod:`project`), and each agent carries its own config.
     """
     name = target_dir.name.lower()
+    # Resolved before anything is written: a typo'd level must not leave a
+    # half-created blueprint behind.
+    telemetry_privacy = resolve_telemetry_privacy(telemetry_privacy)
 
     if target_dir.exists() and not target_dir.is_dir():
         raise FileExistsError(
@@ -83,22 +90,18 @@ def create_blueprint_scaffold(
 
     substitutions = {
         "BLUEPRINT_NAME": name,
-        "BLUEPRINT_NAMESPACE": namespace,
-        "BLUEPRINT_PROVIDER": provider,
-        "BLUEPRINT_VERSION": version,
         "BLUEPRINT_DESCRIPTION": f"{name.upper()} blueprint",
         "BAT_ADK_EXTRAS": _bat_adk_extras(model_provider),
         "BAT_ADK_VERSION": BAT_ADK_VERSION,
         "API_KEY_LINE": _api_key_line(model_provider),
+        "TELEMETRY_PRIVACY_FLOOR": telemetry_privacy,
     }
 
     # (written name, template name). The spec is named after the blueprint so
     # the binary is, too.
     rendered: list[tuple[str, str]] = [
-        ("blueprint.yaml", "blueprint.yaml"),
         ("pyproject.toml", "pyproject.toml.template"),
         ("__main__.py", "__main__.py"),
-        ("config.yaml", "config.yaml"),
         ("Makefile", "Makefile"),
         ("docker-compose.yaml", "docker-compose.yaml"),
         ("Dockerfile", "Dockerfile"),
@@ -164,15 +167,6 @@ def replace_managed_region(
     return "\n".join(new_lines) + "\n"
 
 
-def blueprint_agent_names(blueprint_root: Path) -> list[str]:
-    """The agents registered in ``blueprint.yaml``, sorted."""
-    data = yaml.safe_load(
-        (blueprint_root / "blueprint.yaml").read_text(encoding="utf-8")
-    )
-    agents = (data or {}).get("agents") or {}
-    return sorted(agents)
-
-
 def _dispatcher_region(agent_names: list[str]) -> str:
     """The dispatcher's APPS set and ``_load``, rebuilt from the agent list.
 
@@ -201,45 +195,91 @@ def _dispatcher_region(agent_names: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _compose_region(agent_names: list[str]) -> str:
+def _compose_region(blueprint_root: Path, agent_names: list[str]) -> str:
     """The compose ``services`` block, rebuilt from the agent list.
 
-    One image for the whole blueprint; the service's command is the selector,
-    and CONFIG_PATH names the agent's config the same way the Makefile does.
-    ``network_mode: host`` keeps the localhost ports in each config.yaml valid
-    between agents.
+    One image for the whole blueprint, tagged once and shared by every
+    service; the service's command is the selector, and CONFIG_PATH names the
+    agent's config the same way the Makefile does. The image carries no
+    config.yaml, so each service mounts its agent's own. ``network_mode:
+    host`` keeps the localhost ports in each config.yaml valid between
+    agents, and is what lets the healthcheck reach the agent's port.
     """
     if not agent_names:
         return "services: {}"
 
+    # Docker image names must be lowercase; a hand-named root may not be.
+    image = f"${{IMAGE_TAG:-{blueprint_root.name.lower()}:dev}}"
     lines = ["services:"]
     for name in agent_names:
         lines.extend(
             [
                 f"  {name}:",
-                "    build: .",
+                f"    image: {image}",
+                "    build:",
+                "      context: .",
+                "      args:",
+                "        VERSION: ${VERSION:-}",
                 f'    command: ["{name}"]',
                 "    environment:",
                 f"      CONFIG_PATH: {name}/config.yaml",
+                "      LOG_LEVEL: ${LOG_LEVEL:-info}",
                 "    env_file:",
                 "      - .env",
+                "    volumes:",
+                f"      - ./{name}/config.yaml:/app/{name}/config.yaml:ro",
                 "    network_mode: host",
             ]
         )
+        port = _agent_port(blueprint_root, name)
+        if port is not None:
+            lines.extend(
+                [
+                    "    healthcheck:",
+                    "      test:",
+                    '        ["CMD-SHELL", '
+                    f'"curl -fsS http://localhost:{port}/ping"]',
+                    "      interval: 5s",
+                    "      timeout: 2s",
+                    "      retries: 5",
+                ]
+            )
+        lines.append("    restart: unless-stopped")
     return "\n".join(lines)
 
 
+def _agent_port(blueprint_root: Path, name: str) -> int | None:
+    """The port in ``<name>/config.yaml``, or ``None`` when it has none."""
+    config_path = blueprint_root / name / "config.yaml"
+    if not config_path.is_file():
+        return None
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    port = (data.get("endpoint") or {}).get("port")
+    return port if isinstance(port, int) else None
+
+
 def _next_free_port(blueprint_root: Path, agent_names: list[str]) -> int:
-    ports: list[int] = []
-    for name in agent_names:
-        config_path = blueprint_root / name / "config.yaml"
-        if not config_path.is_file():
-            continue
-        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        port = (data.get("endpoint") or {}).get("port")
-        if isinstance(port, int):
-            ports.append(port)
+    ports = [
+        port
+        for port in (_agent_port(blueprint_root, name) for name in agent_names)
+        if port is not None
+    ]
     return max(ports) + 1 if ports else _DEFAULT_PORT
+
+
+def _files_without_managed_region(blueprint_root: Path) -> list[str]:
+    """The files ``bat add agent`` registers in that it cannot rewrite.
+
+    A hand-made blueprint is recognised by its layout just the same, but its
+    dispatcher and compose file carry no markers to regenerate between.
+    """
+    missing = []
+    for name in ("__main__.py", "docker-compose.yaml"):
+        path = blueprint_root / name
+        text = path.read_text(encoding="utf-8") if path.is_file() else ""
+        if AGENTS_BEGIN not in text or AGENTS_END not in text:
+            missing.append(name)
+    return missing
 
 
 def _rewrite_region(path: Path, body: str) -> None:
@@ -262,14 +302,16 @@ def add_agent_to_blueprint(
 ) -> list[Path]:
     """Create agent ``name`` inside ``blueprint_root`` and register it.
 
-    Registration means three files: the ``agents`` map in blueprint.yaml, the
-    dispatcher's managed region in __main__.py, and the services block in
-    docker-compose.yaml. The Makefile discovers agents from the filesystem and
-    needs no edit.
+    Registration regenerates two managed regions from the agents on disk --
+    the dispatcher's in __main__.py and the services block in
+    docker-compose.yaml -- so an agent directory added by hand is picked up
+    too. The Makefile and the Dockerfile discover agents themselves and need
+    no edit.
 
     Raises:
-        ValueError: If ``name`` is not importable as a Python module, or an
-            agent with that name is already registered.
+        ValueError: If ``name`` is not importable as a Python module, an
+            agent with that name is already registered, or the blueprint has
+            no managed regions to register it in.
     """
     agent_dir_name = name.lower()
     if not agent_dir_name.isidentifier():
@@ -280,7 +322,20 @@ def add_agent_to_blueprint(
             "starting with a digit)."
         )
 
-    existing = blueprint_agent_names(blueprint_root)
+    # Checked before anything is written: finding out at registration time
+    # would leave the agent's files behind in a blueprint it never joined.
+    unmanaged = _files_without_managed_region(blueprint_root)
+    if unmanaged:
+        raise ValueError(
+            f"Cannot register an agent in blueprint '{blueprint_root.name}': "
+            f"{' and '.join(unmanaged)} "
+            f"{'has' if len(unmanaged) == 1 else 'have'} no "
+            f"'{AGENTS_BEGIN}' ... '{AGENTS_END}' region to regenerate. "
+            "`bat add agent` extends blueprints created by `bat init "
+            "blueprint`; add the markers to use it here."
+        )
+
+    existing = blueprint_agent_names_on_disk(blueprint_root)
     if agent_dir_name in existing and not force:
         raise ValueError(
             f"Blueprint '{blueprint_root.name}' already has an agent named "
@@ -329,21 +384,14 @@ def add_agent_to_blueprint(
     )
 
     # --- registration -----------------------------------------------------
-    names = sorted({*existing, agent_dir_name})
-
-    blueprint_path = blueprint_root / "blueprint.yaml"
-    agents_body = yaml.safe_dump(
-        {"agents": {agent: {} for agent in names}}, sort_keys=True
-    ).rstrip("\n")
-    _rewrite_region(blueprint_path, agents_body)
-    created.append(blueprint_path)
+    names = blueprint_agent_names_on_disk(blueprint_root)
 
     main_path = blueprint_root / "__main__.py"
     _rewrite_region(main_path, _dispatcher_region(names))
     created.append(main_path)
 
     compose_path = blueprint_root / "docker-compose.yaml"
-    _rewrite_region(compose_path, _compose_region(names))
+    _rewrite_region(compose_path, _compose_region(blueprint_root, names))
     created.append(compose_path)
 
     return created

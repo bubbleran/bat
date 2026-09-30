@@ -14,6 +14,6 @@ venv/
 /build/
 /dist/
 
-# Evaluation output
-eval/output/
-spans.jsonl
+# Evaluation output (each agent keeps its own under <agent>/eval/)
+**/eval/output/
+**/spans.jsonl

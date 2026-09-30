@@ -1,6 +1,7 @@
 # This agent's own config. The process runs from the blueprint root, so every
 # path here is relative to that root -- and CONFIG_PATH must name this file
-# (`make __AGENT_NAME__` does it) or the SDK reads the blueprint's instead.
+# (`make __AGENT_NAME__` and docker-compose.yaml do it), since the SDK would
+# otherwise look for ./config.yaml at the root, where there is none.
 agent_card: __AGENT_NAME__/agent.json
 
 endpoint:                              # where this agent binds (the eval reads this too)

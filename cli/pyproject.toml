@@ -21,8 +21,9 @@ dependencies = [
   # Naming a pre-release here is what lets pip resolve one at all (PEP 440
   # excludes pre-releases from a specifier that does not mention one), and the
   # eval engine needs this ADK: it reads usage and tool calls back from spans,
-  # which older releases do not emit.
-  "bat-adk>=2026.9.10a0",
+  # which older releases do not emit. Kept equal to BAT_ADK_VERSION, the floor
+  # the scaffolds pin (cli/src/create/agent.py).
+  "bat-adk>=2026.9.29a0",
   "bat-adk[all]",
   "a2a-sdk>=1.0.0",
   "python-dotenv>=1.0.1",

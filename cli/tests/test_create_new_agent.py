@@ -73,7 +73,7 @@ def test_create_new_agent_custom_name(tmp_path, monkeypatch) -> None:
     assert 'requires-python = ">=3.12"' in pyproject_content
     # The default provider is openai; `telemetry` is always pinned so the
     # scaffolded agent emits the spans `bat eval` reads usage back from.
-    assert '"bat-adk[openai,telemetry]>=2026.9.10a0"' in pyproject_content
+    assert '"bat-adk[openai,telemetry]>=2026.9.29a0"' in pyproject_content
 
     agent_json_content = (root / "agent.json").read_text(encoding="utf-8")
     assert '"version": "1.0.0"' in agent_json_content
@@ -563,3 +563,63 @@ def test_set_env_requires_at_least_one_option(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 1
     assert "Provide at least one option to set" in result.output
+
+
+def test_agent_image_has_no_floor_by_default(
+    tmp_path, monkeypatch, image_floor
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    runner.invoke(app, ["init", "agent", "demo_agent"])
+
+    assert image_floor(Path("demo_agent")) == "none"
+
+
+def test_agent_bakes_the_requested_floor_into_its_image(
+    tmp_path, monkeypatch, image_floor
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["init", "agent", "demo_agent", "--telemetry-privacy", "content"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert image_floor(Path("demo_agent")) == "content"
+
+
+def test_agent_rejects_an_unknown_telemetry_floor(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app, ["init", "agent", "demo_agent", "--telemetry-privacy", "secret"]
+    )
+
+    assert result.exit_code != 0
+    assert "secret" in result.output
+    assert not Path("demo_agent").exists()
+
+
+def test_agent_run_from_source_has_no_floor(
+    tmp_path, monkeypatch, floor_given_to_the_application
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "agent", "demo_agent"])
+
+    assert floor_given_to_the_application(tmp_path / "demo_agent") == "none"
+
+
+def test_agent_takes_the_floor_baked_into_its_image(
+    tmp_path, monkeypatch, floor_given_to_the_application
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "agent", "demo_agent"])
+    root = tmp_path / "demo_agent"
+    (root / "telemetry_floor.py").write_text(
+        'TELEMETRY_PRIVACY_FLOOR = "full"\n', encoding="utf-8"
+    )
+
+    assert floor_given_to_the_application(root) == "full"

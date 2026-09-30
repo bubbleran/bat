@@ -6,11 +6,18 @@ from .rendering import render_template
 
 # The `bat-adk` floor a scaffolded agent pins. Naming a pre-release is what
 # lets the resolver pick one at all (PEP 440 excludes pre-releases from a
-# specifier that does not mention one), and an agent meant to be evaluated
-# needs this one: it is the first ADK that emits the OpenTelemetry spans
-# `bat eval` reads token usage and tool calls back from. Keep in sync with the
-# `bat-adk` floor in cli/pyproject.toml.
-BAT_ADK_VERSION = "2026.9.10a0"
+# specifier that does not mention one). This one emits the OpenTelemetry spans
+# `bat eval` reads token usage and tool calls back from, accepts
+# `telemetry_privacy_floor`, and restores checkpoints through the compiled
+# graph -- which the blueprint image's LANGGRAPH_STRICT_MSGPACK needs, since
+# only the compiled graph's checkpointer knows the state types it may load.
+# Keep in sync with the `bat-adk` floor in cli/pyproject.toml.
+BAT_ADK_VERSION = "2026.9.29a0"
+
+# Levels accepted by --telemetry-privacy, mirroring bat.telemetry.privacy's
+# ladder. Duplicated as plain strings so the CLI does not need to import the
+# ADK just to validate a flag.
+TELEMETRY_PRIVACY_LEVELS = ("none", "content", "names", "full")
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "agent"
 _DYNAMIC_TEMPLATE_FILES = {
@@ -112,6 +119,31 @@ def _bat_adk_extras(model_provider: str) -> str:
     return ",".join(sorted(extras))
 
 
+def resolve_telemetry_privacy(telemetry_privacy: str | None) -> str:
+    """The telemetry privacy floor a scaffold bakes into its image.
+
+    It becomes the default of the Dockerfile's ``TELEMETRY_PRIVACY_FLOOR``
+    build arg, which the image freezes into the binary for every agent it
+    carries; ``None`` (no flag) means ``none``, AgentApplication's own
+    default, so config.yaml alone decides.
+
+    Raises:
+        ValueError: If ``telemetry_privacy`` is not a known level. A typo must
+            not silently degrade to ``none`` -- which is what the ADK does
+            with an unknown floor -- since that would ship an agent exporting
+            in the clear exactly when someone meant to lock it down.
+    """
+    if telemetry_privacy is None:
+        return "none"
+    level = telemetry_privacy.strip().lower()
+    if level not in TELEMETRY_PRIVACY_LEVELS:
+        raise ValueError(
+            f"Unknown telemetry privacy level {telemetry_privacy!r}; "
+            f"expected one of {', '.join(TELEMETRY_PRIVACY_LEVELS)}."
+        )
+    return level
+
+
 def _build_pyproject_content(
     agent_dir_name: str, *, model_provider: str
 ) -> str:
@@ -136,11 +168,14 @@ def _build_agent_spec_content(agent_dir_name: str) -> str:
     )
 
 
-def _build_dockerfile_content(agent_dir_name: str) -> str:
+def _build_dockerfile_content(
+    agent_dir_name: str, *, telemetry_privacy: str = "none"
+) -> str:
     return _render_template(
         "Dockerfile",
         {
             "PROJECT_NAME": _normalize_name(agent_dir_name, "project"),
+            "TELEMETRY_PRIVACY_FLOOR": telemetry_privacy,
         },
     )
 
@@ -384,12 +419,16 @@ def create_agent_scaffold(
     model: str = "gpt-4o-mini",
     model_provider: str = "openai",
     class_name_source: str | None = None,
+    telemetry_privacy: str | None = None,
 ) -> list[Path]:
     # The State/Graph class names keep the original (pre-lowercasing) casing,
     # while every directory-derived name follows the lowercase folder name.
     class_source = (
         class_name_source if class_name_source is not None else target_dir.name
     )
+    # Resolved before anything is written: a typo'd level must not leave a
+    # half-created agent behind.
+    telemetry_privacy = resolve_telemetry_privacy(telemetry_privacy)
 
     if target_dir.exists() and not target_dir.is_dir():
         raise FileExistsError(
@@ -464,7 +503,10 @@ def create_agent_scaffold(
     dockerfile_path = target_dir / "Dockerfile"
     if force or not dockerfile_path.exists():
         dockerfile_path.write_text(
-            _build_dockerfile_content(target_dir.name), encoding="utf-8"
+            _build_dockerfile_content(
+                target_dir.name, telemetry_privacy=telemetry_privacy
+            ),
+            encoding="utf-8",
         )
         created.append(dockerfile_path)
 
@@ -497,7 +539,8 @@ def create_agent_scaffold(
     main_path = target_dir / "__main__.py"
     if force or not main_path.exists():
         main_path.write_text(
-            _build_main_content(class_source), encoding="utf-8"
+            _build_main_content(class_source),
+            encoding="utf-8",
         )
         created.append(main_path)
 

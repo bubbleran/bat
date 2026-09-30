@@ -4,10 +4,13 @@ Two project shapes exist. A *standalone* agent keeps ``config.yaml``,
 ``agent.json`` and ``pyproject.toml`` in one directory and starts with
 ``uv run .``. A *blueprint* is one uv project holding several agents: the
 pyproject and the ``__main__.py`` dispatcher sit at the blueprint root, each
-agent owns a directory with its own ``config.yaml`` and ``agent.json``, and
-starting one takes both a selector (``uv run . <agent>``) and ``CONFIG_PATH``
-naming that agent's config -- the SDK would otherwise read the blueprint's
-shared ``./config.yaml``.
+agent owns a directory right below it with its own ``config.yaml`` and
+``agent.json`` (but no pyproject), and starting one takes both a selector
+(``uv run . <agent>``) and ``CONFIG_PATH`` naming that agent's config -- the
+SDK would otherwise look for ``./config.yaml`` at the blueprint root.
+
+A blueprint is recognised by that layout alone, with no manifest file: the
+real ones carry none, and a freshly initialised one has no agents yet.
 
 Commands resolve an :class:`AgentTarget` once and read the difference off it,
 so the two shapes stay in one place instead of spreading through every
@@ -16,10 +19,9 @@ command.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-
-BLUEPRINT_FILE = "blueprint.yaml"
 
 _STANDALONE_REQUIRED = ("config.yaml", "agent.json", "pyproject.toml")
 _BLUEPRINT_AGENT_REQUIRED = ("config.yaml", "agent.json")
@@ -65,35 +67,60 @@ class AgentTarget:
     def run_env(self) -> dict[str, str]:
         """Env vars the launch needs on top of the caller's own.
 
-        Inside a blueprint ``./config.yaml`` is the blueprint's, not the
-        agent's, so ``CONFIG_PATH`` has to name the agent's explicitly. The
-        SDK reads it at startup.
+        Inside a blueprint the process runs from the blueprint root, where
+        ``./config.yaml`` is not the agent's, so ``CONFIG_PATH`` has to name
+        the agent's explicitly. The SDK reads it at startup.
         """
         if self.agent_name is None:
             return {}
         return {"CONFIG_PATH": f"{self.agent_name}/config.yaml"}
 
 
+def is_blueprint_root(path: Path) -> bool:
+    """Whether ``path`` is the root of a blueprint.
+
+    A uv project with a ``__main__.py`` to dispatch from -- and no
+    ``agent.json``, which is what a standalone agent, holding the same two
+    files, has on top.
+    """
+    return (
+        (path / "pyproject.toml").is_file()
+        and (path / "__main__.py").is_file()
+        and not (path / "agent.json").is_file()
+    )
+
+
 def find_blueprint_root(start: Path) -> Path | None:
-    """Nearest ancestor of ``start`` (inclusive) holding a blueprint.yaml."""
+    """The blueprint ``start`` belongs to, if any.
+
+    That is ``start`` itself, or its parent when ``start`` is a directory of
+    that blueprint -- unless it holds a pyproject of its own, which makes it
+    a separate project that merely sits in the blueprint's folder.
+    """
     start = start.resolve()
-    for candidate in [start, *start.parents]:
-        if (candidate / BLUEPRINT_FILE).is_file():
-            return candidate
+    if is_blueprint_root(start):
+        return start
+    if (
+        is_blueprint_root(start.parent)
+        and not (start / "pyproject.toml").is_file()
+    ):
+        return start.parent
     return None
 
 
 def blueprint_agent_names_on_disk(blueprint_root: Path) -> list[str]:
     """The agent directories actually present under ``blueprint_root``.
 
-    Discovered from the filesystem -- a directory holding a ``config.yaml`` --
-    the same way the generated Makefile does, so a stale ``blueprint.yaml``
-    never makes a real agent unreachable.
+    Discovered from the filesystem -- the directories right below the root
+    that hold a ``config.yaml`` and an ``agent.json`` and are not projects of
+    their own -- so there is no registry to fall out of date.
     """
     return sorted(
         child.name
         for child in blueprint_root.iterdir()
-        if child.is_dir() and (child / "config.yaml").is_file()
+        if child.is_dir()
+        and all((child / name).is_file() for name in _BLUEPRINT_AGENT_REQUIRED)
+        and not (child / "pyproject.toml").is_file()
     )
 
 
@@ -129,6 +156,28 @@ def resolve_agent_target(
     return _resolve_blueprint_agent(blueprint_root, cwd)
 
 
+def unwired_agent_warning(target: AgentTarget) -> str | None:
+    """Why ``uv run . <agent>`` would likely be refused, if it would.
+
+    The selector is the agent's directory name, but only the blueprint's
+    ``__main__.py`` decides what it accepts -- automation's ``logs_agent/``
+    is selected as ``logs``. A dispatcher that never spells the name out is
+    almost certainly one that will reject it; the check stays a warning
+    because a dispatcher is free to compute its names.
+    """
+    if target.agent_name is None:
+        return None
+    main = (target.project_root / "__main__.py").read_text(encoding="utf-8")
+    if re.search(rf"""["']{re.escape(target.agent_name)}["']""", main):
+        return None
+    return (
+        f"{target.project_root.name}/__main__.py never names "
+        f"'{target.agent_name}', so `uv run . {target.agent_name}` will "
+        "probably be rejected. Add it to the dispatcher (`bat add agent` "
+        "does this for the blueprints it creates)."
+    )
+
+
 def _resolve_named_agent(blueprint_root: Path, agent_name: str) -> AgentTarget:
     agent_dir = blueprint_root / agent_name
     required = [
@@ -157,24 +206,19 @@ def _resolve_standalone(cwd: Path) -> AgentTarget:
         raise ProjectError(
             "Current directory does not look like an agent root. Missing: "
             f"{', '.join(missing)}. Run this command from the root of an "
-            "existing agent, or from an agent directory inside a blueprint."
+            "existing agent, or from an agent directory inside a blueprint "
+            "(whose parent holds pyproject.toml and __main__.py)."
         )
     return AgentTarget(project_root=cwd, agent_dir=cwd, agent_name=None)
 
 
 def _resolve_blueprint_agent(blueprint_root: Path, cwd: Path) -> AgentTarget:
-    relative = cwd.relative_to(blueprint_root)
-    if not relative.parts:
+    if cwd == blueprint_root:
         known = ", ".join(blueprint_agent_names_on_disk(blueprint_root))
         raise ProjectError(
             f"{cwd} is the root of a blueprint, not an agent. cd into one of "
             "its agent directories, or name the agent as an argument. Known "
             f"agents: {known or '(none yet -- run `bat add agent`)'}."
-        )
-    if len(relative.parts) > 1:
-        raise ProjectError(
-            f"{cwd} is nested inside blueprint {blueprint_root.name} but is "
-            "not one of its agent directories, which sit one level down."
         )
     missing = [
         name
@@ -189,5 +233,5 @@ def _resolve_blueprint_agent(blueprint_root: Path, cwd: Path) -> AgentTarget:
     return AgentTarget(
         project_root=blueprint_root,
         agent_dir=cwd,
-        agent_name=relative.parts[0],
+        agent_name=cwd.name,
     )

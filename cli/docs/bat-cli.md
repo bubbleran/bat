@@ -39,14 +39,14 @@ bat
 │   │   ├── --force, -f
 │   │   ├── --port
 │   │   ├── --model
-│   │   └── --model-provider
+│   │   ├── --model-provider
+│   │   └── --telemetry-privacy
 │   └── blueprint
 │       ├── <name>
 │       ├── --output-dir, -o
 │       ├── --force, -f
 │       ├── --model-provider
-│       ├── --namespace
-│       └── --provider
+│       └── --telemetry-privacy
 ├── add
 │   ├── client
 │   │   ├── <clients>
@@ -81,8 +81,7 @@ bat
 │   ├── --docker-registry
 │   ├── --repo
 │   ├── --version
-│   ├── --no-cache
-│   └── --telemetry-privacy
+│   └── --no-cache
 ├── push
 │   ├── --context, -C
 │   ├── --docker-registry
@@ -99,21 +98,21 @@ Built-in help is available at every level (`bat --help`, `bat eval --help`, ...)
 
 `bat init agent` scaffolds a **standalone agent** — `config.yaml`, `agent.json` and `pyproject.toml` in one directory, started with `uv run .`. That shape is unchanged and still the right one for a single agent.
 
-`bat init blueprint` scaffolds a **blueprint**: one uv project holding several agents. The pyproject, the virtualenv, the PyInstaller spec and the packaging live once at the root; each agent is a package inside it with its own `config.yaml` and `agent.json`. One binary serves them all, and `bat add agent <name>` adds one:
+`bat init blueprint` scaffolds a **blueprint**: one uv project holding several agents. The pyproject, the virtualenv, the PyInstaller spec and the packaging live once at the root; each agent is a package right below it with its own `config.yaml` and `agent.json`. One binary serves them all, and `bat add agent <name>` adds one:
 
 ```
 my-blueprint/
-├── blueprint.yaml          # identity, and the agents this blueprint ships
 ├── pyproject.toml          # one project: one venv, one uv.lock
-├── __main__.py             # shared entrypoint; selects the agent
+├── __main__.py             # shared entrypoint; runs the agent named by argv[1]
 ├── my-blueprint.spec       # one frozen binary for every agent
-├── config.yaml             # the blueprint's own config
 ├── Dockerfile · docker-compose.yaml · Makefile · .env
 ├── netops/     agent.json · app.py · config.yaml · src/
 └── hermes/     agent.json · app.py · config.yaml · src/
 ```
 
-**Starting a blueprint agent takes two things, not one.** The entrypoint picks the agent from `argv[1]`, or from `AGENT_MODE` when there is none — a Deployment rendered without command or args has only the env var. And `CONFIG_PATH` must name the agent's config, because `./config.yaml` at the blueprint root is the *blueprint's*, not the agent's:
+There is no manifest and no blueprint-level `config.yaml`. **A blueprint is recognised by its layout**: a folder with `pyproject.toml` and `__main__.py` but no `agent.json` (which is what a standalone agent has on top), whose agents are the directories right below it holding `config.yaml` and `agent.json` and no `pyproject.toml` of their own. A directory that does have one — a nested MCP server, say — is a separate project, not one of the blueprint's agents. This is what `bat add agent` and `bat eval` look for, so they work in blueprints the CLI did not create, too.
+
+**Starting a blueprint agent takes two things, not one.** The entrypoint picks the agent from `argv[1]` — locally, in the compose service's `command`, and in the deployment mode's `args` on a cluster alike. And `CONFIG_PATH` must name the agent's config, because the process runs from the blueprint root, where there is no `config.yaml`:
 
 ```bash
 make netops        # CONFIG_PATH=netops/config.yaml uv run . netops
@@ -123,13 +122,16 @@ An agent's name becomes a Python package the entrypoint imports, so it has to be
 
 ### What `bat add agent` keeps in sync
 
-Three files carry a list of agents, and each has a region between `# bat:agents:begin` and `# bat:agents:end` that `bat add agent` rewrites — edit anything outside those markers freely:
+The agent directories on disk are the only registry. Two files carry a list of agents, and each has a region between `# bat:agents:begin` and `# bat:agents:end` that `bat add agent` regenerates from those directories — so an agent directory added by hand is picked up the next time. Edit anything outside the markers freely:
 
-- **`blueprint.yaml`** — the `agents` map
 - **`__main__.py`** — the `APPS` set and the dispatch branches. The imports there are static and sit inside their branch on purpose: PyInstaller has to see them to freeze them, and importing lazily keeps one agent's dependencies off another's startup path.
-- **`docker-compose.yaml`** — one service per agent
+- **`docker-compose.yaml`** — one service per agent, all on the same image, each mounting its own `config.yaml` and health-checked on its own port
 
-The `Makefile` is not in that list: it discovers agents from the filesystem (`wildcard */config.yaml`), so adding one never touches it.
+The `Makefile` and the `Dockerfile` are not in that list: they discover agents from the filesystem, so adding one never touches them.
+
+### Building the image
+
+The image installs from the lockfile (`uv sync --frozen`), so a blueprint needs a committed `uv.lock`; `make build` writes one first when there is none. It carries the binary and each agent's `agent.json`, but no `config.yaml` — that is deployment-specific, mounted by `docker-compose.yaml` and provided by the platform on a cluster. It also sets `LANGGRAPH_STRICT_MSGPACK=true`, so checkpoints only deserialize the types the agent's graph declares, which is why the scaffolds pin `bat-adk>=2026.9.29a0`: that release restores checkpoints through the compiled graph, the only place those types are known.
 
 ## Scaffolding (`init` / `add`)
 
@@ -149,6 +151,24 @@ The command parameterizes the generated files so the new agent is ready to run:
 `bat add client <names>` adds new **ChatModelClient** scaffolds to an _existing_ agent. It must be run from the agent root (it expects `src/llm_clients/` to exist) and refuses to overwrite files unless `--force` is given.
 
 This keeps the "one client per LLM role" pattern (e.g. `reformulator`, `planner`, `executor`) consistent whether the clients are created up front or added incrementally.
+
+### Telemetry Privacy Floor
+
+An agent's `telemetry.privacy` in `config.yaml` says how much of its internals may leave the process — `none` (the default) | `content` | `names` | `full`, each level redacting everything the one below it does. See the ADK's [bat-adk.md](../../adk/docs/bat-adk.md) for what each level covers.
+
+That file is editable wherever the agent runs — a mounted ConfigMap, a replaced file, `CONFIG_PATH` pointing elsewhere — so for an agent shipped as a packaged artifact it is a default, not a guarantee. The **floor** closes the gap: a minimum that `config.yaml` can raise but never lower (the effective level is `max(floor, config.yaml)`). The ADK takes it as `AgentApplication(..., telemetry_privacy_floor=...)`.
+
+The floor is set **per image**, in the Dockerfile, so inside a blueprint every agent of the binary gets the same one:
+
+```dockerfile
+ARG TELEMETRY_PRIVACY_FLOOR=content
+```
+
+`bat init blueprint --telemetry-privacy LEVEL` and `bat init agent --telemetry-privacy LEVEL` write that default; without the flag it is `none`. Right before PyInstaller runs, the Dockerfile checks the level and writes it into `telemetry_floor.py`, which every generated entrypoint (`app.py`, or `__main__.py` for a standalone agent) imports and passes as `telemetry_privacy_floor`. It is compiled into the binary, not read at runtime, so neither a mounted `config.yaml` nor an environment variable can lower it; a different build can still choose its own with `docker build --build-arg TELEMETRY_PRIVACY_FLOOR=full`.
+
+`telemetry_floor.py` exists only inside the image. Run from source — `make <agent>`, `uv run .`, `bat eval` — there is no floor and `config.yaml` alone decides, so an evaluation still sees the tool names the eval keys its metrics on.
+
+An unknown level is rejected — by `bat init` before any file is created, and by the Dockerfile before anything is frozen — since the ADK itself falls back to `none` on an unknown floor, and a typo silently degrading to `none` would ship an agent exporting in the clear precisely when someone meant to lock it down.
 
 ## Configuration (`set env`)
 
@@ -181,14 +201,6 @@ The registry and repository can come from several sources. The CLI resolves them
 
 This means that once an agent's `.env` carries the Docker defaults, `bat build` and `bat push` can be run with no arguments at all.
 
-### Telemetry Privacy Floor
-
-An agent's `telemetry.privacy` in `config.yaml` says how much of its internals may leave the process — `none` (the default) | `content` | `names` | `full`, each level redacting everything the one below it does. See the ADK's [TELEMETRY.md](../../adk/docs/TELEMETRY.md) for what each level covers.
-
-That file is editable wherever the agent runs, so for an agent shipped as a packaged artifact it is a default, not a guarantee. `bat build --telemetry-privacy LEVEL` closes the gap by baking a **minimum** level into the frozen binary: the effective level is `max(floor, config.yaml)`, so a replaced `config.yaml` can raise privacy but never lower it.
-
-The flag writes a generated module into the Docker build context just long enough for PyInstaller to compile it in, then removes it — it never lands in the agent's source tree. Without the flag no floor is baked and `config.yaml` remains the sole authority. An unknown level is rejected outright, since a typo silently degrading to `none` would ship an artifact exporting in the clear precisely when someone meant to lock it down.
-
 ## Evaluation Engine (`eval`)
 
 `bat eval` works in both shapes. It has to know *which* agent it is acting on, and there are two ways to tell it:
@@ -198,9 +210,9 @@ cd netops && bat eval run      # the agent is the directory you are in
 bat eval run netops            # or name it, from the blueprint root
 ```
 
-`init`, `run` and `show` all take that optional `AGENT` argument; it resolves against the enclosing blueprint and wins over the working directory, so it works from anywhere inside the blueprint. Naming an agent outside a blueprint is an error, since a standalone agent is just the directory you are in. Omit it at the blueprint root and the command says so, and lists the agents it found.
+`init`, `run` and `show` all take that optional `AGENT` argument; it resolves against the enclosing blueprint and wins over the working directory, so it works from the blueprint root and from any of its agent directories. Naming an agent outside a blueprint is an error, since a standalone agent is just the directory you are in. Omit it at the blueprint root and the command says so, and lists the agents it found.
 
-Either way the eval reads that agent's `eval/` folder, and inside a blueprint it starts the agent exactly as the Makefile does, from the blueprint root: `CONFIG_PATH=<agent>/config.yaml uv run . <agent>`. The `config.yaml` it patches for the run (to turn on the local span exporter) is the agent's, never the blueprint's shared one.
+Either way the eval reads that agent's `eval/` folder, and inside a blueprint it starts the agent exactly as the Makefile does, from the blueprint root: `CONFIG_PATH=<agent>/config.yaml uv run . <agent>`. The `config.yaml` it patches for the run (to turn on the local span exporter) is the agent's own. Since that start command only works if the blueprint's `__main__.py` accepts the directory name as a selector, `bat eval run` warns when `__main__.py` never names the agent — automation's `logs_agent/`, selected as `logs`, is the case it catches.
 
 The **evaluation engine** is the most substantial part of BAT-CLI. It runs a dataset of tasks against a live agent, judges the outcomes, and produces machine-readable artifacts and charts. It is exposed through four subcommands — `init`, `show`, `run`, and `plot` — and is implemented as a pipeline of cooperating components.
 

@@ -185,6 +185,16 @@ def create_new_agent(
         "--model_provider",
         help="Model provider written to config.yaml (model.provider).",
     ),
+    telemetry_privacy: str | None = typer.Option(
+        None,
+        "--telemetry-privacy",
+        help=(
+            "Lowest telemetry privacy level the agent's image allows "
+            "(none|content|names|full): the default of the Dockerfile's "
+            "TELEMETRY_PRIVACY_FLOOR build arg, frozen into the binary. "
+            "config.yaml can raise it but never lower it."
+        ),
+    ),
 ) -> None:
     agent_name = _validate_agent_name(name)
     # The directory (and every name derived from it) is lowercased, while the
@@ -201,8 +211,9 @@ def create_new_agent(
             model=model,
             model_provider=model_provider,
             class_name_source=agent_name,
+            telemetry_privacy=telemetry_privacy,
         )
-    except FileExistsError as exc:
+    except (FileExistsError, ValueError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 
@@ -239,11 +250,15 @@ def create_new_blueprint(
             "the bat-adk extra in pyproject.toml."
         ),
     ),
-    namespace: str = typer.Option(
-        "default", "--namespace", help="Value written to blueprint.yaml."
-    ),
-    provider: str = typer.Option(
-        "bubbleran", "--provider", help="Value written to blueprint.yaml."
+    telemetry_privacy: str | None = typer.Option(
+        None,
+        "--telemetry-privacy",
+        help=(
+            "Lowest telemetry privacy level every agent of the image allows "
+            "(none|content|names|full): the default of the Dockerfile's "
+            "TELEMETRY_PRIVACY_FLOOR build arg, frozen into the binary. "
+            "config.yaml can raise it but never lower it."
+        ),
     ),
 ) -> None:
     blueprint_name = _validate_agent_name(name)
@@ -254,10 +269,9 @@ def create_new_blueprint(
             target_dir,
             force=force,
             model_provider=model_provider,
-            namespace=namespace,
-            provider=provider,
+            telemetry_privacy=telemetry_privacy,
         )
-    except FileExistsError as exc:
+    except (FileExistsError, ValueError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 
@@ -346,9 +360,10 @@ def add_new_agent(
     blueprint_root = find_blueprint_root(Path.cwd())
     if blueprint_root is None:
         typer.secho(
-            "No blueprint.yaml found here or in any parent directory. Run "
-            "this command inside a blueprint, or create one with "
-            "`bat init blueprint`.",
+            "Not inside a blueprint. Run this command from a blueprint's "
+            "root (a folder with pyproject.toml and __main__.py, and no "
+            "agent.json) or from one of its agent directories, or create one "
+            "with `bat init blueprint`.",
             fg=typer.colors.RED,
             err=True,
         )

@@ -12,3 +12,11 @@ dependencies = [
     # provider's LangChain integration, which `langchain` itself does not ship.
     "bat-adk[__BAT_ADK_EXTRAS__]>=__BAT_ADK_VERSION__"
 ]
+
+[dependency-groups]
+# The Dockerfile freezes the blueprint with pyinstaller after a plain
+# `uv sync --frozen`, which installs this group -- so this is where it comes
+# from, locked like everything else.
+dev = [
+    "pyinstaller>=6.20.0",
+]

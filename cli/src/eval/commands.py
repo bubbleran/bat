@@ -17,7 +17,12 @@ import typer
 import yaml
 from dotenv import dotenv_values
 
-from project import AgentTarget, ProjectError, resolve_agent_target
+from project import (
+    AgentTarget,
+    ProjectError,
+    resolve_agent_target,
+    unwired_agent_warning,
+)
 
 from .engine.contracts import JudgeSpec
 from .engine.eval_config import (
@@ -491,6 +496,13 @@ def eval_show(agent: str | None = _AGENT_ARGUMENT) -> None:
 def eval_run(agent: str | None = _AGENT_ARGUMENT) -> None:
     target = _resolve_target(agent)
     agent_root = target.agent_dir
+
+    # Only this command starts the agent, so only here does a dispatcher
+    # that rejects the selector matter -- and it would otherwise surface as
+    # a startup timeout rather than as its cause.
+    warning = unwired_agent_warning(target)
+    if warning is not None:
+        typer.secho(f"Warning: {warning}", fg=typer.colors.YELLOW, err=True)
 
     eval_yaml_path = agent_root / "eval" / "eval.yaml"
     if not eval_yaml_path.exists():

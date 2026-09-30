@@ -39,15 +39,14 @@ class _FakeProcess:
         self.returncode = -9
 
 
-def _write_blueprint_with_agent(root: Path) -> Path:
-    (root / "blueprint.yaml").write_text(
-        "name: demo\nagents:\n  netops: {}\n", encoding="utf-8"
-    )
+def _write_blueprint_with_agent(root: Path, selector: str = "netops") -> Path:
+    """A blueprint laid out like the real ones: no manifest and no root
+    config.yaml, just the project and a dispatcher accepting ``selector``."""
     (root / "pyproject.toml").write_text(
         "[project]\nname='demo'\nversion='1.0.0'\n", encoding="utf-8"
     )
-    (root / "config.yaml").write_text(
-        "endpoint:\n  url: http://localhost\n  port: 9900\n", encoding="utf-8"
+    (root / "__main__.py").write_text(
+        f'APPS = {{"{selector}"}}\n', encoding="utf-8"
     )
     venv_bin = root / ".venv" / "bin"
     venv_bin.mkdir(parents=True, exist_ok=True)
@@ -131,9 +130,6 @@ def test_eval_run_patches_and_restores_the_agents_config(
     tmp_path, monkeypatch
 ) -> None:
     agent = _write_blueprint_with_agent(tmp_path)
-    blueprint_config_before = (tmp_path / "config.yaml").read_text(
-        encoding="utf-8"
-    )
     captured: dict = {}
     _patch_eval(monkeypatch, captured, agent)
     monkeypatch.chdir(agent)
@@ -142,10 +138,6 @@ def test_eval_run_patches_and_restores_the_agents_config(
 
     during = yaml.safe_load(captured["config_during_run"])
     assert during["telemetry"]["output"][0]["type"] == "local"
-    # The blueprint's shared config is none of the eval's business.
-    assert (tmp_path / "config.yaml").read_text(
-        encoding="utf-8"
-    ) == blueprint_config_before
     # And the agent's is put back.
     after = yaml.safe_load((agent / "config.yaml").read_text(encoding="utf-8"))
     assert after["telemetry"]["output"] == []
@@ -206,3 +198,19 @@ def test_eval_show_accepts_the_agent_name(tmp_path, monkeypatch) -> None:
     result = runner.invoke(app, ["eval", "show", "netops"])
 
     assert result.exit_code == 0, result.output
+
+
+def test_eval_run_warns_when_the_dispatcher_does_not_name_the_agent(
+    tmp_path, monkeypatch
+) -> None:
+    """The agent directory is the selector, but the dispatcher decides what it
+    accepts: a mismatch means the agent never starts, which should not first
+    surface as a startup timeout."""
+    agent = _write_blueprint_with_agent(tmp_path, selector="ops")
+    captured: dict = {}
+    _patch_eval(monkeypatch, captured, agent)
+    monkeypatch.chdir(agent)
+
+    result = runner.invoke(app, ["eval", "run"])
+
+    assert "never names 'netops'" in result.output

@@ -8,5 +8,5 @@ __pycache__/
 .venv/
 
 .git/
-eval/output/
-spans.jsonl
+**/eval/output/
+**/spans.jsonl

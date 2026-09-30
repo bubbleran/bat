@@ -251,6 +251,9 @@ class BatA2AAdapter:
             try:
                 for turn in task.turns:
                     turn_started = False
+                    # The final output is the last turn's answer, not an
+                    # earlier turn's left over.
+                    last_content = ""
                     message = new_text_message(
                         text=turn,
                         context_id=thread_id,
@@ -281,7 +284,11 @@ class BatA2AAdapter:
 
                         if status in TERMINAL_STATUSES:
                             last_status = status
-                            last_content = content or ""
+                            # The answer arrives as an artifact and the stream
+                            # then closes on a completed status carrying no
+                            # message: that one must not erase the answer.
+                            if content:
+                                last_content = content
 
             except Exception as exc:
                 last_status = "error"

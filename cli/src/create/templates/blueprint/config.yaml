@@ -1,8 +1,0 @@
-# The blueprint's own config, read when nothing points CONFIG_PATH elsewhere.
-# Each agent has its own config.yaml next to its code, and that is the one that
-# matters: `make <agent>` and `bat eval` both set CONFIG_PATH to it.
-endpoint:
-  url: http://localhost
-  port: 9900
-
-checkpoints: false
