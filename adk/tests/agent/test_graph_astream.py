@@ -49,10 +49,11 @@ def _graph_with(tasks: tuple, stream_error: Exception) -> _Graph:
     graph = object.__new__(_Graph)
     graph.StateType = _State
     graph._memory = MagicMock()
-    graph._memory.get = MagicMock(return_value=None)
     graph._graph = MagicMock()
     graph._graph.astream = _failing_stream(stream_error)
-    graph._graph.get_state = MagicMock(return_value=MagicMock(tasks=tasks))
+    graph._graph.get_state = MagicMock(
+        return_value=MagicMock(tasks=tasks, created_at=None)
+    )
     return graph
 
 

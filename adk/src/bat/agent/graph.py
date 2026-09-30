@@ -158,15 +158,15 @@ class AgentGraph(ABC):
         """
         thread_id = config.get("configurable", {}).get("thread_id")
 
-        checkpoint = self._memory.get(config) if self._memory else None
+        snapshot = self._graph.get_state(config) if self._memory else None
+        checkpoint = snapshot.values if snapshot and snapshot.created_at else None
         if checkpoint is None:
             logger.debug(f"[{thread_id}]: No checkpoint")
             state = self.StateType.from_query(query)
             logger.debug(f"[{thread_id}]: State initialized")
         else:
             logger.debug(f"[{thread_id}]: Checkpoint found")
-            channel_values = checkpoint.get("channel_values", {})
-            state = self.StateType.model_validate(channel_values)
+            state = self.StateType.model_validate(checkpoint)
             logger.debug(f"[{thread_id}]: State restored")
             state.update_after_checkpoint_restore(query)
             logger.debug(f"[{thread_id}]: State updated")

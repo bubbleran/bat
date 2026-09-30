@@ -1,6 +1,6 @@
 import asyncio
 from typing import Optional
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from langchain_core.messages import AIMessage
 from typing_extensions import Self, override
@@ -38,7 +38,7 @@ def _loop(response: AIMessage) -> ReActLoop:
     loop._internal_final_response_key = "loop.final_response"
     loop._internal_trace_key = "loop.trace.tool_calls"
     loop.chat_model_client = MagicMock()
-    loop.chat_model_client.invoke = MagicMock(return_value=response)
+    loop.chat_model_client.ainvoke = AsyncMock(return_value=response)
     return loop
 
 

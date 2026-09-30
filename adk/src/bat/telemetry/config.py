@@ -15,8 +15,8 @@ _TRACES_PATH = "/v1/traces"
 
 @dataclass
 class ExporterSpec:
-    """A single resolved telemetry destination.
-
+    """The destination of telemetry spans. One per active exporter.
+    
     Attributes:
         kind (str): Canonical exporter kind: ``"file"``, ``"otlp"`` or
             ``"console"``.

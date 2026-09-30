@@ -1,4 +1,5 @@
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -148,6 +149,15 @@ def test_invoke_with_string_input(client):
     response = client.invoke(str_input, history)
     assert isinstance(response, AIMessage)
     assert history[-1] == response
+
+
+def test_ainvoke_awaits_the_model_and_updates_history(client, mock_chat_model):
+    mock_chat_model.ainvoke = AsyncMock(return_value=AIMessage("async ok"))
+    history = []
+    response = asyncio.run(client.ainvoke("hi", history))
+    assert response.content == "async ok"
+    assert len(history) == 2 and history[-1] == response
+    mock_chat_model.invoke.assert_not_called()
 
 
 def test_batch_invocation(client):

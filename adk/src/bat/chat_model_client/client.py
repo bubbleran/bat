@@ -294,22 +294,44 @@ class ChatModelClient:
             ValidationError: If the parsed response does not conform to the
                 output schema.
         """
+        response = self._chat_model.invoke(
+            self._prepare_messages(input, history)
+        )
+        return self._record_response(response, input, history)
+
+    async def ainvoke(
+        self,
+        input: str | HumanMessage | List[ToolMessage],
+        history: Optional[List[BaseMessage]] = None,
+    ) -> Union[AIMessage, Any]:
+        """Asynchronous `invoke`: same arguments, result, errors and history
+        update, but it awaits the chat model instead of blocking the event
+        loop."""
+        response = await self._chat_model.ainvoke(
+            self._prepare_messages(input, history)
+        )
+        return self._record_response(response, input, history)
+
+    def _prepare_messages(
+        self,
+        input: str | HumanMessage | List[ToolMessage],
+        history: Optional[List[BaseMessage]],
+    ) -> List[BaseMessage]:
         assert self._validate_input_type(input), (
             f"Invalid input type: {type(input)}. "
             "Expected str or HumanMessageor List[ToolMessage]."
         )
+        return self._build_messages_list(input, history)
 
-        messages = self._build_messages_list(input, history)
-
-        try:
-            response = self._chat_model.invoke(messages)
-        except Exception as e:
-            raise e
+    def _record_response(
+        self,
+        response: Any,
+        input: str | HumanMessage | List[ToolMessage],
+        history: Optional[List[BaseMessage]],
+    ) -> Union[AIMessage, Any]:
         r_for_history, r_to_return = self._process_response(response)
-
         if history is not None:
             self._update_history(history, input, r_for_history)
-
         return r_to_return
 
     def batch(
