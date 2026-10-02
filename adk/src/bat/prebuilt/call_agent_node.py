@@ -575,9 +575,13 @@ class CallAgentNode(PrebuiltWorkflow):
                     ]:
                         break
             except Exception as e:
+                logger.exception(f"Call to agent '{self._agent_name}' failed")
                 atr = AgentTaskResult(
                     task_status=TaskState.TASK_STATE_FAILED,
-                    content=f"CallAgentNode stream error: {e}",
+                    content=(
+                        f"Call to agent '{self._agent_name}' failed "
+                        f"({type(e).__name__})."
+                    ),
                 )
                 await q.put(atr)
             finally:

@@ -90,10 +90,11 @@ def test_node_error_is_reported_not_masked_by_an_empty_interrupt():
 
     results = _collect(graph)
 
-    assert [r.task_status for r in results] == [
-        AgentTaskStatus.AGENT_TASK_STATUS_FAILED
+    assert results == [
+        AgentTaskResult(
+            task_status=FAILED, content="Agent execution failed (RuntimeError)."
+        )
     ]
-    assert "node blew up" in results[0].content
 
 
 def test_graph_error_wins_over_a_pending_interrupt():
@@ -257,7 +258,7 @@ def test_invalid_state_of_the_agent_graph_fails_the_task():
     results = _collect(_WritesInvalidState(AgentConfig(), _Strict))
 
     assert results[-1].task_status == FAILED
-    assert results[-1].content.startswith("Stream error:")
+    assert results[-1].content == "Agent execution failed (ValidationError)."
     assert all(r.task_status == WORKING for r in results[:-1])
 
 

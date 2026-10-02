@@ -221,10 +221,10 @@ class AgentGraph(ABC):
                 if interrupted is not None:
                     final_result = interrupted
         except Exception as e:
-            logger.error(f"[{thread_id}]: Error during stream processing: {e}")
+            logger.exception(f"[{thread_id}]: Agent execution failed")
             final_result = AgentTaskResult(
                 task_status=AgentTaskStatus.AGENT_TASK_STATUS_FAILED,
-                content=f"Stream error: {str(e)}",
+                content=f"Agent execution failed ({type(e).__name__}).",
             )
         if final_result is None or final_result.task_status == working:
             final_result = AgentTaskResult(
