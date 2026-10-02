@@ -342,10 +342,11 @@ class ChatModelClient:
         input: str | HumanMessage | List[ToolMessage],
         history: Optional[List[BaseMessage]],
     ) -> List[BaseMessage]:
-        assert self._validate_input_type(input), (
-            f"Invalid input type: {type(input)}. "
-            "Expected str or HumanMessageor List[ToolMessage]."
-        )
+        if not self._validate_input_type(input):
+            raise ValueError(
+                f"Invalid input type: {type(input)}. "
+                "Expected str, HumanMessage or List[ToolMessage]."
+            )
         return self._build_messages_list(input, history)
 
     def _record_response(

@@ -83,6 +83,11 @@ def test_validate_input_type(client):
     )
 
 
+def test_invoke_rejects_an_invalid_input_type(client):
+    with pytest.raises(ValueError, match="Invalid input type"):
+        client.invoke(42)
+
+
 def test_build_messages_list_with_human_message(client):
     human_msg = HumanMessage("hello")
     history = [AIMessage("prev")]
