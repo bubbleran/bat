@@ -134,8 +134,7 @@ class CallAgentNode(PrebuiltWorkflow):
         and parameters.
 
         Args:
-            config (AgentConfig): Configuration for the agent, including
-                checkpointing options.
+            config (AgentConfig): Configuration for the agent.
             StateType (Type[AgentState]): The AgentState schema used in the
                 loop.
             loop_name (str): The name of this workflow loop

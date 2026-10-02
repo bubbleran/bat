@@ -31,8 +31,7 @@ class ReActLoop(PrebuiltWorkflow):
 
     Args
     -------
-        config (AgentConfig): Configuration for the agent, including
-            checkpointing options.
+        config (AgentConfig): Configuration for the agent.
         StateType (Type[AgentState]): The AgentState schema used in the loop.
         loop_name (str): The name of the loop.
         chat_model_client (ChatModelClient): The chat model client to use.
@@ -122,8 +121,7 @@ class ReActLoop(PrebuiltWorkflow):
         parameters.
 
         Args:
-            config (AgentConfig): Configuration for the agent, including
-                checkpointing options.
+            config (AgentConfig): Configuration for the agent.
             StateType (Type[AgentState]): The AgentState schema used in the
                 loop.
             loop_name (str): The name of the loop.
