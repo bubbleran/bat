@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import AsyncIterable, Dict, Optional, Type
+from contextlib import aclosing, suppress
+from typing import Any, AsyncIterable, Dict, Optional, Tuple, Type
 
 from a2a.helpers import new_text_message
 from a2a.types import Message, Role
@@ -8,6 +9,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
+from pydantic import ValidationError
 
 from ..chat_model_client import ChatModelClient
 from ..logging import create_logger
@@ -128,7 +130,19 @@ class AgentGraph(ABC):
     ) -> AsyncIterable[AgentTaskResult]:
         """Asynchronously stream results from the agent graph based on the
         query and configuration.
-        This method performes the following steps:
+
+        While the graph runs, WORKING results are yielded as progress, without
+        consecutive duplicates. When it stops, exactly one final result is
+        yielded:
+        - INPUT_REQUIRED if the graph is paused on an interrupt;
+        - otherwise `to_task_result()` of the graph's final state;
+        - FAILED if the graph raised or finished without a final result.
+
+        Other results of intermediate states are ignored: the answer always
+        comes from the final state. The executor publishes every result
+        yielded here, so an override must follow these rules.
+
+        This method performs the following steps:
         1. Looks for a checkpoint associated with the provided configuration.
         2. If no checkpoint is found, creates a new agent state from the query,
             using the `from_query` method of the `StateType`.
@@ -138,14 +152,12 @@ class AgentGraph(ABC):
         4. Prepares the input for the graph execution, wrapping the state in a
             `Command` if the `is_waiting_for_human_input` method of the state
             returns `True`.
-        5. Executes the graph with the `astream` method, passing the input and
-            configuration.
-        6. For each item in the stream:
-            - If it is an interrupt, yields an `AgentTaskResult` with the status
-            `input-required`. This enables human-in-the-loop interactions.
-            - Otherwise, validates the item as an `StateType` and converts it to
-                an `AgentTaskResult` using the `to_task_result` method of the
-                state. Then it yields the result.
+        5. Executes the graph with the `astream` method, including nested
+            graphs, so that prebuilt workflows can report progress.
+        6. Converts each streamed state with `to_task_result`, and yields it
+            if it is new WORKING progress. A state of a nested graph that is
+            not a `StateType` is skipped.
+        7. Once the graph stops, yields the final result.
 
         This method prints debug logs in the format `[<thread_id>]: <message>`.
 
@@ -188,45 +200,73 @@ class AgentGraph(ABC):
             f"{'with Command' if state.is_waiting_for_human_input() else ''}"
         )
 
+        working = AgentTaskStatus.AGENT_TASK_STATUS_WORKING
+        final_result: Optional[AgentTaskResult] = None
+        progress: Optional[AgentTaskResult] = None
         try:
-            async for item in stream:
-                try:
-                    state_item = self.StateType.model_validate(item[1])
-                    task_result_item = state_item.to_task_result()
-                    logger.debug(
-                        f"[{thread_id}]: Yielding AgentTaskResult: "
-                        f"[{task_result_item.task_status}] "
-                        f"{task_result_item.content}"
-                    )
-                    yield task_result_item
-                except Exception as ve:
-                    logger.error(f"[{thread_id}]: Validation error: {ve}")
-                    yield AgentTaskResult(
-                        task_status=AgentTaskStatus.AGENT_TASK_STATUS_FAILED,
-                        content="Invalid state format",
-                    )
+            async with aclosing(stream):
+                async for namespace, value in stream:
+                    result = self._to_task_result(namespace, value)
+                    if not namespace:
+                        final_result = result
+                    if (
+                        result is not None
+                        and result.task_status == working
+                        and result != progress
+                    ):
+                        progress = result
+                        yield result
+            if self._memory:
+                interrupted = self._interrupt_result(config)
+                if interrupted is not None:
+                    final_result = interrupted
         except Exception as e:
             logger.error(f"[{thread_id}]: Error during stream processing: {e}")
-            yield AgentTaskResult(
+            final_result = AgentTaskResult(
                 task_status=AgentTaskStatus.AGENT_TASK_STATUS_FAILED,
                 content=f"Stream error: {str(e)}",
             )
-
-        # Checkpoints are possible only if memory is enabled
-        if self._memory:
-            current_state = self._graph.get_state(config=config)
-            intr = (
-                current_state.tasks[0].interrupts[0]
-                if current_state.tasks and current_state.tasks[0].interrupts
-                else None
+        if final_result is None or final_result.task_status == working:
+            final_result = AgentTaskResult(
+                task_status=AgentTaskStatus.AGENT_TASK_STATUS_FAILED,
+                content="Agent finished without a final result.",
             )
-            if intr:
-                logger.debug(f"[{thread_id}]: Yielding Interrupt: {intr.value}")
-                yield AgentTaskResult(
-                    task_status=AgentTaskStatus.AGENT_TASK_STATUS_INPUT_REQUIRED,
-                    content=intr.value,
-                )
+        yield final_result
         logger.debug(f"[{thread_id}]: Graph execution completed")
+
+    def _to_task_result(
+        self,
+        namespace: Tuple[str, ...],
+        value: Dict[str, Any],
+    ) -> Optional[AgentTaskResult]:
+        """Convert a streamed state to an `AgentTaskResult`.
+
+        An empty `namespace` means the state comes from this graph. Otherwise
+        it comes from a nested graph, which may use its own schema: such a
+        state gives None.
+        """
+        result = None
+        if namespace:
+            with suppress(ValidationError):
+                result = self.StateType.model_validate(value).to_task_result()
+        else:
+            result = self.StateType.model_validate(value).to_task_result()
+        return result
+
+    def _interrupt_result(
+        self,
+        config: RunnableConfig,
+    ) -> Optional[AgentTaskResult]:
+        """Return an INPUT_REQUIRED result for the interrupt the graph is
+        paused on, or None if there is none.
+        """
+        interrupts = []
+        for task in self._graph.get_state(config).tasks:
+            interrupts.extend(task.interrupts)
+        return AgentTaskResult(
+            task_status=AgentTaskStatus.AGENT_TASK_STATUS_INPUT_REQUIRED,
+            content=interrupts[0].value,
+        ) if interrupts else None
 
     def draw_mermaid(
         self,
