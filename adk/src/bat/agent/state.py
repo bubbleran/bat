@@ -260,6 +260,12 @@ class AgentState(BaseModel, ABC):
         defines how the agent's internal state translates to external-facing
         task results.
 
+        It is called on every state while the graph runs, including states
+        inside prebuilt workflows. WORKING results are sent as progress. The
+        answer is the result of the graph's final state, so this method may
+        return COMPLETED as soon as the answer is set, even if later nodes
+        change it.
+
         Returns:
             AgentTaskResult: Task result representation of current state
         """
