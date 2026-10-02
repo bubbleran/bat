@@ -4,10 +4,6 @@ from typing import ClassVar, Dict, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import Literal
 
-from ..logging import create_logger
-
-logger = create_logger(__name__, "debug")
-
 ModelProvider = Literal[
     "anthropic",
     "deepseek",
@@ -215,19 +211,3 @@ class ChatModelClientConfig(BaseModel):
             An instance of `ChatModelClientConfig`.
         """
         return cls.load(client_name=client_name)
-
-    def build_default_headers(
-        self,
-    ) -> Dict[str, str]:
-        if self.model_provider == "nvidia":
-            api_key = os.getenv("API_KEY")
-            if api_key is None:
-                logger.warning("API_KEY environment variable not set")
-                api_key = "<not-used>"
-            result = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            }
-        else:
-            result = {}
-        return result
