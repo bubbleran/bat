@@ -2,6 +2,7 @@ import asyncio
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from langchain_core.messages import AIMessage
 from typing_extensions import Self, override
 
@@ -97,3 +98,19 @@ def test_tool_calls_bypass_the_final_response():
     out = _run_llm(_loop(response), state)
     assert "loop.final_response" not in out.bat_extra
     assert out.bat_buffer == [response]
+
+
+def test_tool_call_that_cannot_be_parsed_raises():
+    response = AIMessage(
+        content="",
+        invalid_tool_calls=[
+            {
+                "name": "get_weather",
+                "args": '{"city": "Par',
+                "id": "call_1",
+                "error": None,
+            },
+        ],
+    )
+    with pytest.raises(ValueError, match="get_weather"):
+        _run_llm(_loop(response), _state())
