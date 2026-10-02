@@ -11,7 +11,6 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 from pydantic import ValidationError
 
-from ..chat_model_client import ChatModelClient
 from ..logging import create_logger
 from .config import AgentConfig
 from .state import AgentState, AgentTaskResult, AgentTaskStatus
@@ -54,7 +53,6 @@ class AgentGraph(ABC):
     """
 
     StateType: Type[AgentState]
-    _chat_model_clients: Dict[str, ChatModelClient] = {}
     _graph_builder: StateGraph
     _graph: CompiledStateGraph
 
