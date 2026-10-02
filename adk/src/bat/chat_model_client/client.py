@@ -124,8 +124,7 @@ class ChatModelClient:
             model=self.config.model,
             model_provider=self.config.model_provider,
             base_url=self.config.base_url,
-            default_headers=self.config.build_default_headers(),
-            **self._responses_api_kwargs(),
+            **self._extra_kwargs(),
         )
         _full_model_name = self.config.model_provider + ":" + self.config.model
         client_name = self.config.client_name or ""
@@ -152,13 +151,16 @@ class ChatModelClient:
         else:
             self.output_schema = AIMessage
 
-    def _responses_api_kwargs(self) -> Dict[str, Any]:
-        """Extra `init_chat_model` arguments selecting the OpenAI endpoint."""
-        if self.config.model_provider != "openai":
-            return {}
-        if self.config.base_url is not None:
-            return {}
-        return {"use_responses_api": True}
+    def _extra_kwargs(self) -> Dict[str, Any]:
+        """Extra `init_chat_model` arguments for the configured provider."""
+        kwargs: Dict[str, Any] = {}
+        # OpenAI's own endpoint (no base_url) uses the Responses API.
+        if (
+            self.config.model_provider == "openai"
+            and self.config.base_url is None
+        ):
+            kwargs["use_responses_api"] = True
+        return kwargs
 
     @property
     def chat_model(self) -> BaseChatModel:
