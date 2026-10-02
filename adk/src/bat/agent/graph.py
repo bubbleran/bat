@@ -168,8 +168,11 @@ class AgentGraph(ABC):
         """
         thread_id = config.get("configurable", {}).get("thread_id")
 
-        snapshot = self._graph.get_state(config) if self._memory else None
-        checkpoint = snapshot.values if snapshot and snapshot.created_at else None
+        checkpoint = None
+        if self._memory:
+            snapshot = await self._graph.aget_state(config)
+            if snapshot.created_at:
+                checkpoint = snapshot.values
         if checkpoint is None:
             logger.debug(f"[{thread_id}]: No checkpoint")
             state = self.StateType.from_query(query)
@@ -215,7 +218,7 @@ class AgentGraph(ABC):
                         progress = result
                         yield result
             if self._memory:
-                interrupted = self._interrupt_result(config)
+                interrupted = await self._interrupt_result(config)
                 if interrupted is not None:
                     final_result = interrupted
         except Exception as e:
@@ -251,7 +254,7 @@ class AgentGraph(ABC):
             result = self.StateType.model_validate(value).to_task_result()
         return result
 
-    def _interrupt_result(
+    async def _interrupt_result(
         self,
         config: RunnableConfig,
     ) -> Optional[AgentTaskResult]:
@@ -259,7 +262,8 @@ class AgentGraph(ABC):
         paused on, or None if there is none.
         """
         interrupts = []
-        for task in self._graph.get_state(config).tasks:
+        snapshot = await self._graph.aget_state(config)
+        for task in snapshot.tasks:
             interrupts.extend(task.interrupts)
         return AgentTaskResult(
             task_status=AgentTaskStatus.AGENT_TASK_STATUS_INPUT_REQUIRED,

@@ -1,6 +1,6 @@
 import asyncio
 from typing import List, Optional
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -78,7 +78,7 @@ def _graph_with(tasks: tuple, stream_error: Exception) -> _Graph:
     graph._memory = MagicMock()
     graph._graph = MagicMock()
     graph._graph.astream = _failing_stream(stream_error)
-    graph._graph.get_state = MagicMock(
+    graph._graph.aget_state = AsyncMock(
         return_value=MagicMock(tasks=tasks, created_at=None)
     )
     return graph
