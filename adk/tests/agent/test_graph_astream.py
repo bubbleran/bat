@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from typing_extensions import Self, override
 
 from bat.agent import (
@@ -294,3 +294,132 @@ def test_interrupt_requires_input():
         task_status=INPUT_REQUIRED, content="Which cell?"
     )
     assert all(r.task_status == WORKING for r in results[:-1])
+
+
+def _conversation(
+    graph: AgentGraph, queries: List[str]
+) -> List[List[AgentTaskResult]]:
+    """Send each query as a new message of the same conversation."""
+
+    async def drive():
+        config = {"configurable": {"thread_id": "t"}}
+        messages = []
+        for query in queries:
+            messages.append(
+                [r async for r in graph.astream(query=query, config=config)]
+            )
+        return messages
+
+    return asyncio.run(drive())
+
+
+class _Fresh(AgentState):
+    query: str = Field(frozen=True)
+    answer: Optional[str] = None
+    previous: Optional[str] = None
+
+    @classmethod
+    @override
+    def from_query(cls, query: str) -> Self:
+        return cls(query=query)
+
+    @override
+    def to_task_result(self) -> AgentTaskResult:
+        if self.answer:
+            return AgentTaskResult(
+                task_status=COMPLETED,
+                content=f"{self.answer}, previous: {self.previous}",
+            )
+        return AgentTaskResult(task_status=WORKING, content="working")
+
+
+class _Answers(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        def answer(state: _Fresh) -> _Fresh:
+            state.previous = state.answer
+            state.answer = f"A({state.query})"
+            return state
+
+        self.graph_builder.add_node("answer", answer)
+        self.graph_builder.add_edge(START, "answer")
+        self.graph_builder.add_edge("answer", END)
+
+
+def test_with_checkpoints_each_message_is_answered_as_without():
+    queries = ["one", "two"]
+
+    without = _conversation(_Answers(AgentConfig(), _Fresh), queries)
+    with_checkpoints = _conversation(
+        _Answers(AgentConfig(checkpoints=True), _Fresh), queries
+    )
+
+    assert with_checkpoints == without
+    assert without[1][-1].content == "A(two), previous: None"
+
+
+class _Confirm(_Answer):
+    pending: bool = False
+
+    @override
+    def is_waiting_for_human_input(self) -> bool:
+        return self.pending
+
+
+class _Confirms(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        def prepare(state: _Confirm) -> _Confirm:
+            state.pending = True
+            return state
+
+        def confirm(state: _Confirm) -> _Confirm:
+            interrupt(f"Confirm '{state.query}'?")
+            state.pending = False
+            state.answer = f"done: {state.query}"
+            return state
+
+        self.graph_builder.add_node("prepare", prepare)
+        self.graph_builder.add_node("confirm", confirm)
+        self.graph_builder.add_edge(START, "prepare")
+        self.graph_builder.add_edge("prepare", "confirm")
+        self.graph_builder.add_edge("confirm", END)
+
+
+def test_the_answer_to_a_pending_question_resumes_the_graph():
+    results = _conversation(
+        _Confirms(AgentConfig(checkpoints=True), _Confirm),
+        ["delete demo", "yes"],
+    )
+
+    assert results[0][-1] == AgentTaskResult(
+        task_status=INPUT_REQUIRED, content="Confirm 'delete demo'?"
+    )
+    assert results[1][-1] == AgentTaskResult(
+        task_status=COMPLETED, content="done: delete demo"
+    )
+
+
+class _BreaksOnRequest(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        def answer(state: _Strict) -> dict:
+            if state.query == "break":
+                return {"answer": "bad"}
+            return {"answer": state.query.upper()}
+
+        self.graph_builder.add_node("answer", answer)
+        self.graph_builder.add_edge(START, "answer")
+        self.graph_builder.add_edge("answer", END)
+
+
+def test_a_checkpoint_that_is_not_a_valid_state_starts_over():
+    results = _conversation(
+        _BreaksOnRequest(AgentConfig(checkpoints=True), _Strict),
+        ["break", "two"],
+    )
+
+    assert results[0][-1].task_status == FAILED
+    assert results[1][-1] == AgentTaskResult(
+        task_status=COMPLETED, content="TWO"
+    )
