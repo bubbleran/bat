@@ -146,7 +146,9 @@ class AgentGraph(ABC):
             using the `from_query` method of the `StateType`.
         3. If a checkpoint is found, restores the state from the checkpoint and
             updates it with the query using the
-            `update_after_checkpoint_restore` method.
+            `update_after_checkpoint_restore` method. A checkpoint that is not
+            a valid `StateType` is dropped: the state starts over from the
+            query.
         4. Prepares the input for the graph execution, wrapping the state in a
             `Command` if the `is_waiting_for_human_input` method of the state
             returns `True`.
@@ -179,10 +181,23 @@ class AgentGraph(ABC):
             logger.debug(f"[{thread_id}]: State initialized")
         else:
             logger.debug(f"[{thread_id}]: Checkpoint found")
-            state = self.StateType.model_validate(checkpoint)
-            logger.debug(f"[{thread_id}]: State restored")
-            state.update_after_checkpoint_restore(query)
-            logger.debug(f"[{thread_id}]: State updated")
+            try:
+                state = self.StateType.model_validate(checkpoint)
+            except ValidationError:
+                logger.warning(
+                    f"[{thread_id}]: Checkpoint is not a valid state, "
+                    "starting over",
+                    exc_info=True,
+                )
+                # Passing every field marks them all as set: LangGraph skips a
+                # field that is None and unset, so its old value would stay.
+                state = self.StateType.model_construct(
+                    **dict(self.StateType.from_query(query))
+                )
+            else:
+                logger.debug(f"[{thread_id}]: State restored")
+                state.update_after_checkpoint_restore(query)
+                logger.debug(f"[{thread_id}]: State updated")
 
         input = (
             Command(resume=state)
