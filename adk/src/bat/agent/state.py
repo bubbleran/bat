@@ -243,14 +243,22 @@ class AgentState(BaseModel, ABC):
     def update_after_checkpoint_restore(self, query: str) -> None:
         """Update state with new query after checkpoint restoration.
 
-        Called by the SDK when restoring from a saved checkpoint. Allows the
-        state to synchronize with new execution parameters before resuming the
-        graph.
+        Called by the SDK when a message arrives in a conversation with a
+        saved checkpoint, before `is_waiting_for_human_input`.
+
+        By default, the state starts over from `from_query(query)`, so the
+        agent answers as if there were no checkpoint. While the agent is
+        waiting for human input, the restored state is kept for the resume.
+        Override to keep data across the messages of a conversation.
 
         Args:
             query: New query to execute with the restored state
         """
-        return
+        if self.is_waiting_for_human_input():
+            return
+        # Copied directly: a frozen field or an assignment validator would
+        # reject `setattr`.
+        self.__dict__.update(self.from_query(query).__dict__)
 
     @abstractmethod
     def to_task_result(self) -> AgentTaskResult:
