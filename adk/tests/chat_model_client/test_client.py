@@ -83,6 +83,11 @@ def test_validate_input_type(client):
     )
 
 
+def test_invoke_rejects_an_invalid_input_type(client):
+    with pytest.raises(ValueError, match="Invalid input type"):
+        client.invoke(42)
+
+
 def test_build_messages_list_with_human_message(client):
     human_msg = HumanMessage("hello")
     history = [AIMessage("prev")]
@@ -165,6 +170,65 @@ def test_batch_invocation(client):
     responses = client.batch(msgs)
     assert len(responses) == 2
     assert all(isinstance(r, AIMessage) for r in responses)
+
+
+# ------------------ Truncated output Tests ------------------
+
+TRUNCATED = [
+    {"finish_reason": "length"},
+    {
+        "status": "incomplete",
+        "incomplete_details": {"reason": "max_output_tokens"},
+    },
+    {"stop_reason": "max_tokens"},
+    {"done_reason": "length"},
+]
+
+
+@pytest.mark.parametrize("metadata", TRUNCATED)
+def test_truncated_output_raises(client, mock_chat_model, metadata):
+    mock_chat_model.invoke.return_value = AIMessage(
+        "half an ans", response_metadata=metadata
+    )
+    with pytest.raises(ValueError, match="truncated"):
+        client.invoke("hi")
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"finish_reason": "stop"},
+        {"status": "completed"},
+        {"stop_reason": "end_turn"},
+        {"done_reason": "stop"},
+        {},
+    ],
+)
+def test_complete_output_is_returned(client, mock_chat_model, metadata):
+    mock_chat_model.invoke.return_value = AIMessage(
+        "answer", response_metadata=metadata
+    )
+    assert client.invoke("hi").content == "answer"
+
+
+def test_truncation_is_reported_before_the_parsing_error(client):
+    response = {
+        "raw": AIMessage('{"answer": "hal', response_metadata=TRUNCATED[0]),
+        "parsed": None,
+        "parsing_error": ValueError("invalid JSON"),
+    }
+    with pytest.raises(ValueError, match="truncated"):
+        client._process_response(response)
+
+
+def test_batch_raises_if_one_output_is_truncated(client, mock_chat_model):
+    mock_chat_model.batch.side_effect = None
+    mock_chat_model.batch.return_value = [
+        AIMessage("answer"),
+        AIMessage("half an ans", response_metadata=TRUNCATED[0]),
+    ]
+    with pytest.raises(ValueError, match="truncated"):
+        client.batch([HumanMessage("hi1"), HumanMessage("hi2")])
 
 
 # ------------------ Responses API selection Tests ------------------

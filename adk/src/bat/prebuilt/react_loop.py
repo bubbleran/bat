@@ -31,8 +31,7 @@ class ReActLoop(PrebuiltWorkflow):
 
     Args
     -------
-        config (AgentConfig): Configuration for the agent, including
-            checkpointing options.
+        config (AgentConfig): Configuration for the agent.
         StateType (Type[AgentState]): The AgentState schema used in the loop.
         loop_name (str): The name of the loop.
         chat_model_client (ChatModelClient): The chat model client to use.
@@ -122,8 +121,7 @@ class ReActLoop(PrebuiltWorkflow):
         parameters.
 
         Args:
-            config (AgentConfig): Configuration for the agent, including
-                checkpointing options.
+            config (AgentConfig): Configuration for the agent.
             StateType (Type[AgentState]): The AgentState schema used in the
                 loop.
             loop_name (str): The name of the loop.
@@ -374,6 +372,8 @@ class ReActLoop(PrebuiltWorkflow):
         input_key from the state and then cleared.
         - If the chat model produces tool calls, they are added to the buffer
         for processing in the ToolNode.
+        - If the chat model produces tool calls that cannot be parsed, a
+        ValueError is raised.
         - If a status_key is provided, the status is updated to reflect the
         current operation.
         """
@@ -401,6 +401,9 @@ class ReActLoop(PrebuiltWorkflow):
             )
         except Exception as e:
             raise RuntimeError(f"Error invoking chat model client: {e}") from e
+        if response.invalid_tool_calls:
+            names = [call["name"] for call in response.invalid_tool_calls]
+            raise ValueError(f"Model returned invalid tool calls: {names}")
         if response.tool_calls:
             tool_calls = list(response.tool_calls)
             state.bat_extra[self._internal_trace_key].extend(tool_calls)

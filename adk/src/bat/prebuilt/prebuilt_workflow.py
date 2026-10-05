@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, AsyncIterable, Optional, Type
+from typing import AsyncGenerator, AsyncIterable, Type
 
 from langchain_core.runnables import RunnableConfig, RunnableGenerator
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -20,7 +19,6 @@ class PrebuiltWorkflow(ABC):
 
     _StateType: Type[AgentState]
     _graph_builder: StateGraph
-    _memory: Optional[MemorySaver]
     _graph: CompiledStateGraph
     _agent_config: AgentConfig
 
@@ -31,26 +29,26 @@ class PrebuiltWorkflow(ABC):
         *args,
         **kwargs,
     ):
-        """Initialize the AgentGraph with a state graph and optional
-        checkpointing and logger.
-        Compile the state graph and set up the logger if the logger_name
-        is provided.
+        """Initialize the workflow: set up the graph with `_setup` and compile
+        it.
+
+        The graph is compiled without a checkpointer: run as a node of an
+        `AgentGraph`, it uses the checkpointer of that graph.
 
         Args:
-            graph_builder (StateGraph): The state graph builder.
-            use_checkpoint (bool): Whether to use checkpointing.
-                Defaults toFalse.
-            logger_name (Optional[str]): The name of the logger to use.
-                Defaults to None.
+            config (AgentConfig): The agent configuration.
+            StateType (Type[AgentState]): The AgentState schema of the
+                workflow.
+            *args, **kwargs: Forwarded to `_setup`.
         """
         self._StateType = StateType
         self._graph_builder = StateGraph(StateType)
+        # TODO: poor design, prebuilts should not need config: drop it.
         self._agent_config = config
 
         self._setup(*args, **kwargs)
 
-        self._memory = MemorySaver() if config.checkpoints else None
-        self._graph = self._graph_builder.compile(checkpointer=self._memory)
+        self._graph = self._graph_builder.compile()
 
     @property
     def StateType(self) -> Type[AgentState]:

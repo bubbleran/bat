@@ -1,32 +1,59 @@
 import asyncio
 from typing import List, Optional
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from langchain_core.messages import AIMessage
+from langchain_core.tools import tool
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
+from pydantic import BaseModel, Field, model_validator
 from typing_extensions import Self, override
 
 from bat.agent import (
+    AgentConfig,
     AgentGraph,
     AgentState,
     AgentTaskResult,
     AgentTaskStatus,
 )
+from bat.prebuilt import ReActLoop
+
+WORKING = AgentTaskStatus.AGENT_TASK_STATUS_WORKING
+COMPLETED = AgentTaskStatus.AGENT_TASK_STATUS_COMPLETED
+FAILED = AgentTaskStatus.AGENT_TASK_STATUS_FAILED
+INPUT_REQUIRED = AgentTaskStatus.AGENT_TASK_STATUS_INPUT_REQUIRED
 
 
-class _State(AgentState):
-    question: str = ""
+class _Answer(AgentState):
+    query: str
     answer: Optional[str] = None
 
     @classmethod
     @override
     def from_query(cls, query: str) -> Self:
-        return cls(question=query)
+        return cls(query=query)
 
     @override
     def to_task_result(self) -> AgentTaskResult:
-        return AgentTaskResult(
-            task_status=AgentTaskStatus.AGENT_TASK_STATUS_COMPLETED,
-            content=self.answer or "",
-        )
+        if self.answer:
+            return AgentTaskResult(task_status=COMPLETED, content=self.answer)
+        return AgentTaskResult(task_status=WORKING, content="working")
+
+
+def _collect(
+    graph: AgentGraph, query: str = "question"
+) -> List[AgentTaskResult]:
+    async def drive():
+        return [
+            item
+            async for item in graph.astream(
+                query=query,
+                config={"configurable": {"thread_id": "t"}},
+            )
+        ]
+
+    return asyncio.run(drive())
 
 
 class _Graph(AgentGraph):
@@ -47,27 +74,14 @@ def _graph_with(tasks: tuple, stream_error: Exception) -> _Graph:
     """An AgentGraph whose compiled graph fails mid-stream and then reports
     `tasks`, so the post-stream interrupt lookup runs on a failed task."""
     graph = object.__new__(_Graph)
-    graph.StateType = _State
+    graph.StateType = _Answer
     graph._memory = MagicMock()
     graph._graph = MagicMock()
     graph._graph.astream = _failing_stream(stream_error)
-    graph._graph.get_state = MagicMock(
+    graph._graph.aget_state = AsyncMock(
         return_value=MagicMock(tasks=tasks, created_at=None)
     )
     return graph
-
-
-def _collect(graph: _Graph) -> List[AgentTaskResult]:
-    async def drive():
-        return [
-            item
-            async for item in graph.astream(
-                query="question",
-                config={"configurable": {"thread_id": "t"}},
-            )
-        ]
-
-    return asyncio.run(drive())
 
 
 def test_node_error_is_reported_not_masked_by_an_empty_interrupt():
@@ -76,22 +90,22 @@ def test_node_error_is_reported_not_masked_by_an_empty_interrupt():
 
     results = _collect(graph)
 
-    assert [r.task_status for r in results] == [
-        AgentTaskStatus.AGENT_TASK_STATUS_FAILED
+    assert results == [
+        AgentTaskResult(
+            task_status=FAILED, content="Agent execution failed (RuntimeError)."
+        )
     ]
-    assert "node blew up" in results[0].content
 
 
-def test_pending_interrupt_is_still_yielded():
+def test_graph_error_wins_over_a_pending_interrupt():
     task = MagicMock(interrupts=(MagicMock(value="need input"),))
     graph = _graph_with((task,), RuntimeError("interrupted"))
 
     results = _collect(graph)
 
-    assert results[-1].task_status == (
-        AgentTaskStatus.AGENT_TASK_STATUS_INPUT_REQUIRED
-    )
-    assert results[-1].content == "need input"
+    assert [r.task_status for r in results] == [
+        AgentTaskStatus.AGENT_TASK_STATUS_FAILED
+    ]
 
 
 def test_no_tasks_yields_no_interrupt():
@@ -101,3 +115,311 @@ def test_no_tasks_yields_no_interrupt():
 
     assert len(results) == 1
     assert results[0].task_status == AgentTaskStatus.AGENT_TASK_STATUS_FAILED
+
+
+class _ReActState(AgentState):
+    input: str = ""
+    output: Optional[str] = None
+    final: Optional[str] = None
+    status: Optional[str] = None
+
+    @classmethod
+    @override
+    def from_query(cls, query: str) -> Self:
+        return cls(input=query)
+
+    @override
+    def to_task_result(self) -> AgentTaskResult:
+        # Deliberately naive: COMPLETED as soon as the ReAct loop answered,
+        # although `polish` still changes the answer afterwards.
+        if self.output:
+            return AgentTaskResult(
+                task_status=COMPLETED, content=self.final or self.output
+            )
+        return AgentTaskResult(
+            task_status=WORKING, content=self.status or "working"
+        )
+
+
+@tool
+def lookup() -> str:
+    """Look something up."""
+    return "found"
+
+
+class _Client:
+    """A chat model client that calls `lookup` once, then answers."""
+
+    tools = [lookup]
+
+    def __init__(self):
+        self.calls = 0
+
+    async def ainvoke(self, input, history=None):
+        self.calls += 1
+        if self.calls == 1:
+            response = AIMessage(
+                content="",
+                tool_calls=[{"name": "lookup", "args": {}, "id": "call-1"}],
+            )
+        else:
+            response = AIMessage(content="draft")
+        if history is not None:
+            history.append(response)
+        return response
+
+
+class _ReActThenPolish(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        loop = ReActLoop(
+            config=config,
+            StateType=_ReActState,
+            loop_name="react",
+            chat_model_client=_Client(),
+            status_key="status",
+        )
+
+        def polish(state: _ReActState) -> _ReActState:
+            state.final = f"POLISHED: {state.output}"
+            return state
+
+        self.graph_builder.add_node("react", loop.as_runnable())
+        self.graph_builder.add_node("polish", polish)
+        self.graph_builder.add_edge(START, "react")
+        self.graph_builder.add_edge("react", "polish")
+        self.graph_builder.add_edge("polish", END)
+
+
+@pytest.mark.parametrize("checkpoints", [False, True])
+def test_answer_is_the_final_state_not_the_prebuilt_draft(checkpoints):
+    graph = _ReActThenPolish(AgentConfig(checkpoints=checkpoints), _ReActState)
+
+    results = _collect(graph)
+
+    assert results[-1] == AgentTaskResult(
+        task_status=COMPLETED, content="POLISHED: draft"
+    )
+    assert all(r.task_status == WORKING for r in results[:-1])
+    progress = [r.content for r in results[:-1]]
+    assert "Calling tools: lookup" in progress
+    assert all(a != b for a, b in zip(progress, progress[1:], strict=False))
+
+
+class _Upper(BaseModel):
+    text: str
+
+
+class _NestedGraphWithOwnSchema(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        inner = StateGraph(_Upper)
+        inner.add_node("upper", lambda s: {"text": s.text.upper()})
+        inner.add_edge(START, "upper")
+        inner.add_edge("upper", END)
+        compiled_inner = inner.compile()
+
+        async def node(state: _Answer) -> _Answer:
+            out = await compiled_inner.ainvoke({"text": state.query})
+            state.answer = out["text"]
+            return state
+
+        self.graph_builder.add_node("node", node)
+        self.graph_builder.add_edge(START, "node")
+        self.graph_builder.add_edge("node", END)
+
+
+def test_nested_graph_with_its_own_schema_does_not_fail_the_task():
+    results = _collect(_NestedGraphWithOwnSchema(AgentConfig(), _Answer), "hi")
+
+    assert results == [
+        AgentTaskResult(task_status=WORKING, content="working"),
+        AgentTaskResult(task_status=COMPLETED, content="HI"),
+    ]
+
+
+class _Strict(_Answer):
+    @model_validator(mode="after")
+    def _reject_bad_answer(self) -> Self:
+        if self.answer == "bad":
+            raise ValueError("bad answer")
+        return self
+
+
+class _WritesInvalidState(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        self.graph_builder.add_node("node", lambda s: {"answer": "bad"})
+        self.graph_builder.add_edge(START, "node")
+        self.graph_builder.add_edge("node", END)
+
+
+def test_invalid_state_of_the_agent_graph_fails_the_task():
+    results = _collect(_WritesInvalidState(AgentConfig(), _Strict))
+
+    assert results[-1].task_status == FAILED
+    assert results[-1].content == "Agent execution failed (ValidationError)."
+    assert all(r.task_status == WORKING for r in results[:-1])
+
+
+class _EndsWithoutAnswer(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        self.graph_builder.add_edge(START, END)
+
+
+def test_graph_that_ends_while_working_fails():
+    results = _collect(_EndsWithoutAnswer(AgentConfig(), _Answer))
+
+    assert results[-1].task_status == FAILED
+    assert results[-1].content == "Agent finished without a final result."
+
+
+class _AsksForInput(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        def ask(state: _Answer) -> _Answer:
+            state.answer = interrupt("Which cell?")
+            return state
+
+        self.graph_builder.add_node("ask", ask)
+        self.graph_builder.add_edge(START, "ask")
+        self.graph_builder.add_edge("ask", END)
+
+
+def test_interrupt_requires_input():
+    results = _collect(_AsksForInput(AgentConfig(checkpoints=True), _Answer))
+
+    assert results[-1] == AgentTaskResult(
+        task_status=INPUT_REQUIRED, content="Which cell?"
+    )
+    assert all(r.task_status == WORKING for r in results[:-1])
+
+
+def _conversation(
+    graph: AgentGraph, queries: List[str]
+) -> List[List[AgentTaskResult]]:
+    """Send each query as a new message of the same conversation."""
+
+    async def drive():
+        config = {"configurable": {"thread_id": "t"}}
+        messages = []
+        for query in queries:
+            messages.append(
+                [r async for r in graph.astream(query=query, config=config)]
+            )
+        return messages
+
+    return asyncio.run(drive())
+
+
+class _Fresh(AgentState):
+    query: str = Field(frozen=True)
+    answer: Optional[str] = None
+    previous: Optional[str] = None
+
+    @classmethod
+    @override
+    def from_query(cls, query: str) -> Self:
+        return cls(query=query)
+
+    @override
+    def to_task_result(self) -> AgentTaskResult:
+        if self.answer:
+            return AgentTaskResult(
+                task_status=COMPLETED,
+                content=f"{self.answer}, previous: {self.previous}",
+            )
+        return AgentTaskResult(task_status=WORKING, content="working")
+
+
+class _Answers(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        def answer(state: _Fresh) -> _Fresh:
+            state.previous = state.answer
+            state.answer = f"A({state.query})"
+            return state
+
+        self.graph_builder.add_node("answer", answer)
+        self.graph_builder.add_edge(START, "answer")
+        self.graph_builder.add_edge("answer", END)
+
+
+def test_with_checkpoints_each_message_is_answered_as_without():
+    queries = ["one", "two"]
+
+    without = _conversation(_Answers(AgentConfig(), _Fresh), queries)
+    with_checkpoints = _conversation(
+        _Answers(AgentConfig(checkpoints=True), _Fresh), queries
+    )
+
+    assert with_checkpoints == without
+    assert without[1][-1].content == "A(two), previous: None"
+
+
+class _Confirm(_Answer):
+    pending: bool = False
+
+    @override
+    def is_waiting_for_human_input(self) -> bool:
+        return self.pending
+
+
+class _Confirms(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        def prepare(state: _Confirm) -> _Confirm:
+            state.pending = True
+            return state
+
+        def confirm(state: _Confirm) -> _Confirm:
+            interrupt(f"Confirm '{state.query}'?")
+            state.pending = False
+            state.answer = f"done: {state.query}"
+            return state
+
+        self.graph_builder.add_node("prepare", prepare)
+        self.graph_builder.add_node("confirm", confirm)
+        self.graph_builder.add_edge(START, "prepare")
+        self.graph_builder.add_edge("prepare", "confirm")
+        self.graph_builder.add_edge("confirm", END)
+
+
+def test_the_answer_to_a_pending_question_resumes_the_graph():
+    results = _conversation(
+        _Confirms(AgentConfig(checkpoints=True), _Confirm),
+        ["delete demo", "yes"],
+    )
+
+    assert results[0][-1] == AgentTaskResult(
+        task_status=INPUT_REQUIRED, content="Confirm 'delete demo'?"
+    )
+    assert results[1][-1] == AgentTaskResult(
+        task_status=COMPLETED, content="done: delete demo"
+    )
+
+
+class _BreaksOnRequest(AgentGraph):
+    @override
+    def setup(self, config: AgentConfig) -> None:
+        def answer(state: _Strict) -> dict:
+            if state.query == "break":
+                return {"answer": "bad"}
+            return {"answer": state.query.upper()}
+
+        self.graph_builder.add_node("answer", answer)
+        self.graph_builder.add_edge(START, "answer")
+        self.graph_builder.add_edge("answer", END)
+
+
+def test_a_checkpoint_that_is_not_a_valid_state_starts_over():
+    results = _conversation(
+        _BreaksOnRequest(AgentConfig(checkpoints=True), _Strict),
+        ["break", "two"],
+    )
+
+    assert results[0][-1].task_status == FAILED
+    assert results[1][-1] == AgentTaskResult(
+        task_status=COMPLETED, content="TWO"
+    )

@@ -134,8 +134,7 @@ class CallAgentNode(PrebuiltWorkflow):
         and parameters.
 
         Args:
-            config (AgentConfig): Configuration for the agent, including
-                checkpointing options.
+            config (AgentConfig): Configuration for the agent.
             StateType (Type[AgentState]): The AgentState schema used in the
                 loop.
             loop_name (str): The name of this workflow loop
@@ -575,9 +574,13 @@ class CallAgentNode(PrebuiltWorkflow):
                     ]:
                         break
             except Exception as e:
+                logger.exception(f"Call to agent '{self._agent_name}' failed")
                 atr = AgentTaskResult(
                     task_status=TaskState.TASK_STATE_FAILED,
-                    content=f"CallAgentNode stream error: {e}",
+                    content=(
+                        f"Call to agent '{self._agent_name}' failed "
+                        f"({type(e).__name__})."
+                    ),
                 )
                 await q.put(atr)
             finally:
