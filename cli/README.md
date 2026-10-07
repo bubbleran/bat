@@ -1,12 +1,13 @@
 # bat-cli
 
-A CLI tool for creating, building, and evaluating BAT agent projects.
+A CLI tool for creating, building, and evaluating BAT agent projects: standalone
+agents and blueprints.
 
 ## Prerequisites
 
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/) installed
 - Docker installed (required for `bat build` and `bat push`)
-- For evaluation commands: an existing BAT agent root containing `agent.json`, `config.yaml`, and `pyproject.toml`
+- For evaluation commands: a BAT agent — a standalone agent root (`agent.json`, `config.yaml` and `pyproject.toml`), or an agent folder of a blueprint
 
 ---
 
@@ -82,41 +83,71 @@ All examples below show `bat ...`; replace with `uv run bat ...` when using this
 ```
 bat
 ├── init
+│   ├── agent
+│   │   ├── <name>
+│   │   ├── --clients, -c
+│   │   ├── --output-dir, -o
+│   │   ├── --force, -f
+│   │   ├── --port
+│   │   ├── --model
+│   │   ├── --model-provider
+│   │   └── --privacy
+│   └── blueprint
+│       ├── <name>
+│       ├── --output-dir, -o
+│       ├── --force, -f
+│       └── --model-provider
+├── add
+│   ├── client
+│   │   ├── <clients>
+│   │   └── --force, -f
 │   └── agent
 │       ├── <name>
 │       ├── --clients, -c
-│       ├── --output-dir, -o
-│       ├── --force, -f
-│       ├── --port
-│       ├── --model
-│       └── --model-provider
-├── add
-│   └── client
-│       ├── <clients>
-│       └── --force, -f
-├── set
-│   └── env
 │       ├── --port
 │       ├── --model
 │       ├── --model-provider
+│       ├── --privacy
+│       └── --force, -f
+├── set
+│   ├── config
+│   │   ├── [AGENT]
+│   │   ├── --port
+│   │   ├── --model
+│   │   └── --model-provider
+│   └── image
 │       ├── --docker-registry
 │       └── --repo
 ├── eval
 │   ├── init
+│   │   ├── [AGENT]
 │   │   └── --force, -f
 │   ├── run
+│   │   └── [AGENT]
 │   ├── show
+│   │   └── [AGENT]
 │   └── plot
 │       ├── --folder, -f
 │       └── --filter, -F
+├── manifests
+│   ├── aifabric
+│   │   ├── --output, -o
+│   │   ├── --name
+│   │   ├── --namespace
+│   │   ├── --image-pull-secret
+│   │   └── --telemetry-endpoint
+│   └── composition-model
+│       ├── --output, -o
+│       ├── --name
+│       ├── --namespace
+│       ├── --docker-registry
+│       ├── --repo
+│       └── --version
 ├── build
-│   ├── --context, -C
 │   ├── --docker-registry
 │   ├── --repo
-│   ├── --version
-│   └── --no-cache
+│   └── --version
 ├── push
-│   ├── --context, -C
 │   ├── --docker-registry
 │   ├── --repo
 │   └── --version
@@ -128,8 +159,10 @@ Built-in help is available at every level:
 ```bash
 bat --help
 bat init agent --help
+bat add agent --help
 bat eval --help
-bat build --help
+bat manifests aifabric --help
+bat manifests composition-model --help
 ```
 
 ---
@@ -149,9 +182,37 @@ bat init agent my_agent --clients reformulator,planner,executor
 
 # set the port/model/provider written to config.yaml
 bat init agent my_agent --port 9900 --model gpt-4o-mini --model-provider openai
+
+# the lowest telemetry privacy level the agent allows (none|content|names|full)
+bat init agent my_agent --privacy content
 ```
 
-### 2. Add clients to an existing agent
+### 2. Create a blueprint and add agents
+
+Agents live in a blueprint: one uv project, one image, one folder per agent.
+
+```bash
+bat init blueprint my_blueprint
+cd my_blueprint
+
+# pre-generate LLM clients
+bat add agent netops --clients reformulator,planner,executor
+
+# set the port/model/provider written to netops/config.yaml
+# (without --port: one past the highest port already used)
+bat add agent hermes --port 9901 --model gpt-4o-mini --model-provider openai
+
+# the lowest telemetry privacy level the agent allows (none|content|names|full)
+bat add agent kpi --privacy content
+
+uv run . netops          # or: make netops
+```
+
+Agent names must be valid Python identifiers (`cluster_view`, not
+`cluster-view`). `bat add agent` also gives every agent a service in
+`docker-compose.yaml`.
+
+### 3. Add clients to an existing agent
 
 Run from the agent root (must contain `src/llm_clients/`):
 
@@ -162,48 +223,68 @@ bat add client planner,executor
 bat add client planner,executor --force
 ```
 
-### 3. Update agent settings
+### 4. Update agent settings
 
-Run from the agent root (must contain `config.yaml`). The runtime values
-(`--port`, `--model`, `--model-provider`) are written into `config.yaml`
-(`endpoint.port`, `model.name`, `model.provider`); the Docker defaults
-(`--docker-registry`, `--repo`) are written into `.env`:
-
-```bash
-# endpoint.port / model.name / model.provider in config.yaml
-bat set env --port 8080 --model gpt-4o-mini --model-provider openai
-
-# Docker defaults for build/push, written to .env
-bat set env --docker-registry hub.bubbleran.com --repo orama/labs/my-agent
-```
-
-### 4. Build and push a Docker image
+`bat set config` writes an agent's runtime values into its `config.yaml`
+(`endpoint.port`, `model.name`, `model.provider`). Run it from the agent root,
+or name the agent from a blueprint's root:
 
 ```bash
-# --version is used both as the image tag and as the VERSION build arg (default: latest)
-bat build --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --version latest
-
-# no-cache build with a specific version
-bat build --context ./my_agent --repo orama/labs/my-agent --version 1.0.0 --no-cache
-
-bat push --context ./my_agent --docker-registry hub.bubbleran.com --repo orama/labs/my-agent --version latest
+bat set config --port 8080 --model gpt-4o-mini --model-provider openai
+bat set config netops --port 9309
 ```
+
+`bat set image` writes the image settings into the project's `Makefile`
+(`DOCKER_REGISTRY`, `REPO`; the blueprint's, from an agent folder), where
+`make build` reads them as well as `bat build`:
+
+```bash
+bat set image --docker-registry hub.bubbleran.com --repo orama/labs/my-agent
+```
+
+### 5. Build and push a Docker image
+
+`bat build` and `bat push` run the project's `make build` / `make push`
+(from an agent folder of a blueprint, the blueprint's), passing only the
+settings they are given:
+
+```bash
+# the Makefile's defaults: demo:<git tag or commit>, or demo:dev outside git
+bat build
+
+# registry, repository and version (also the VERSION build arg)
+bat build --docker-registry hub.bubbleran.com --repo orama/labs/demo --version 1.0.0
+
+# builds, then pushes; a registry is required
+bat push --docker-registry hub.bubbleran.com --repo orama/labs/demo --version 1.0.0
+```
+
+The same works with `make` directly:
+`make push DOCKER_REGISTRY=hub.bubbleran.com REPO=orama/labs/demo VERSION=1.0.0`.
+
+Without a registry (none given, none in the Makefile) the image is built for
+this machine only, and `bat push` refuses, since the image would go to Docker
+Hub. BubbleRAN can provide a registry for your images.
 
 The image reference is always `{registry}/{repo}:{version}`.
 
-If `BAT_DOCKER_REGISTRY` and `BAT_DOCKER_REPO` are already set in `.env` or the shell, `--docker-registry` and `--repo` can be omitted.
+Once `bat set image` has written them to the Makefile, `--docker-registry` and
+`--repo` can be omitted.
 
 **Precedence** (both `--docker-registry` / `--repo`):
 
 1. CLI flag
-2. Shell environment variable (`BAT_DOCKER_REGISTRY` / `BAT_DOCKER_REPO`)
-3. `.env` file in the current directory
-4. Hardcoded default (`default_registry` / `default-repository/<project-name>`)
+2. Shell environment variable (`DOCKER_REGISTRY` / `REPO`), which make reads itself
+3. The Makefile's `DOCKER_REGISTRY ?=` / `REPO ?=`
 
-### 5. Run evaluation
+A project without a Makefile reads the same flags and shell variables; without
+a registry its image is `<name>:latest`, for this machine only.
 
-Run all `eval` commands from an existing agent root (must contain `agent.json`,
-`config.yaml`, and `pyproject.toml`):
+### 6. Run evaluation
+
+Run `eval` commands from an agent root — a standalone agent's, or an agent
+folder of a blueprint. From a blueprint's root, name the agent
+(`bat eval run netops`):
 
 ```bash
 # scaffold evaluation files
@@ -245,21 +326,26 @@ judge:
   provider: ollama
   model: local-judge-model
   base_url: http://localhost:11434
-  # api_key_env: BAT_JUDGE_API_KEY      # env var name holding the judge's API key
+  # api_key_env: BAT_JUDGE_API_KEY      # env var (shell or .env) holding the judge's API key
+  # mode: full                          # outcome: one lenient task-success score from the request and final response only
 ```
 
 Notes:
 
-- `bat eval run` starts the agent via `uv run .` from the agent root and waits until
-  the agent's `config.yaml` endpoint (`endpoint.url:port`) accepts a TCP
-  connection, so the agent project must have its dependencies installed (its own
-  `.venv`). The eval reads that endpoint from the agent's `config.yaml`; it is no
-  longer configured in `eval.yaml`.
+- `bat eval run` starts the agent — `uv run .` from a standalone agent's root,
+  `CONFIG_PATH=<agent>/config.yaml uv run . <agent>` from a blueprint's — and
+  waits until the agent's `config.yaml` endpoint (`endpoint.url:port`) accepts a
+  TCP connection. The agent's output goes to `agent-<n>.log` in the run's
+  output folder; if it stops before it is ready, the eval prints the error.
+- The agent gets the project's `.env` (the blueprint's, for a blueprint agent),
+  as under `make <agent>`, so API keys go there (e.g. `OPENAI_API_KEY`); a
+  variable already exported in the shell wins.
+- `bat eval run` refuses an agent whose `telemetry_privacy_floor` is above
+  `none`: its spans would hide what the eval reads. Set it to `"none"` while
+  you evaluate.
 - `models` entries may also be written as `"<provider>:<model>"` strings.
-- For models that require an API key, set it in the agent's `.env` under
-  `<PROVIDER>_API_KEY` (e.g. `OPENAI_API_KEY`).
 
-### 6. Plot evaluation metrics
+### 7. Plot evaluation metrics
 
 `bat eval plot` reads the `metrics.json` files produced by `eval run` and renders
 charts. Point `--folder` at an evaluation output directory; each sub-folder
