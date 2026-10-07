@@ -240,12 +240,18 @@ class AgentConfig(BaseModel):
 
     Attributes
     -------
+        checkpoints (bool): Keep each conversation's state in memory between
+            messages. Defaults to False.
         agent_card (Optional[str]): Path to the agent card JSON file. When
             unset it defaults to ``./agent.json`` (see ``AgentApplication``).
+        endpoint (Optional[EndpointConfig]): Where the agent is served;
+            ``endpoint.url`` is required by ``AgentApplication``.
+        model (Optional[ModelConfig]): Chat model selection and settings.
+        telemetry (Optional[TelemetrySettings]): OpenTelemetry settings.
         mcp_servers (List[MCPServerConfig]): List of MCP server
-            configurations.
+            configurations (``mcp-servers`` in YAML).
         remote_agents (List[RemoteAgentConfig]): List of remote agent
-            configurations.
+            configurations (``remote-agents`` in YAML).
 
     Methods
     -------
