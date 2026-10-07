@@ -298,7 +298,7 @@ By default a span carries prompts, completions and tool definitions in full. `te
 | Level | Redacts |
 |---|---|
 | `none` | nothing — the default |
-| `content` | prompts, messages, completions, invocation parameters, and every tool's description, parameter schema and call arguments |
+| `content` | prompts, messages, completions, invocation parameters, every tool's description, parameter schema and call arguments, what one agent asked another and its answer (`input.value` / `output.value`), and error text (status descriptions, exception messages and stack traces — the exception type survives) |
 | `names` | also span names, i.e. the LangGraph node names. Span kinds (`LLM`/`CHAIN`/`TOOL`) replace them, so the trace keeps its shape |
 | `full` | also tool names |
 
@@ -328,4 +328,6 @@ The effective level is the **higher** of the two, so a replaced `config.yaml` ca
 
 - **LangChain / LangGraph** — automatically, through OpenInference: token counts, prompts, completions and tool calls.
 - **Agent Executor** — one root `invoke_agent <AgentName>` span per request, carrying the conversation and task ids, continuing an incoming trace when there is one.
-- **Call Agent Node** — a `CLIENT` span around the remote call, injecting `traceparent` into the outgoing message.
+- **Call Agent Node** — a `CLIENT` span around the remote call, injecting `traceparent` into the outgoing message. It also records what only the caller sees: the request text (`input.value`), the last answer text (`output.value`) and the final A2A state (`bat.a2a.task_state`, e.g. `TASK_STATE_INPUT_REQUIRED`). A failed remote task or a broken stream sets the span's status to `ERROR`, with the reason as its description.
+
+The local file output (`type: local`) writes each span's status description and events too, so a failed step says why, not just that it failed.

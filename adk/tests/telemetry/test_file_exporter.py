@@ -107,3 +107,41 @@ def test_exporter_returns_success():
             assert result is SpanExportResult.SUCCESS
         finally:
             exporter.shutdown()
+
+
+def test_span_to_dict_keeps_the_error_message_and_events():
+    """The status says a step failed; only its description and the exception
+    event say why -- which is what a reader of the file needs."""
+    span = _fake_span(status_name="ERROR")
+    span.status.description = "TimeoutError: operator did not answer"
+    span.events = [
+        SimpleNamespace(
+            name="exception",
+            timestamp=1_500,
+            attributes={
+                "exception.type": "TimeoutError",
+                "exception.message": "operator did not answer",
+            },
+        )
+    ]
+
+    d = _span_to_dict(span)
+
+    assert d["status_description"] == "TimeoutError: operator did not answer"
+    assert d["events"] == [
+        {
+            "name": "exception",
+            "time": 1_500,
+            "attributes": {
+                "exception.type": "TimeoutError",
+                "exception.message": "operator did not answer",
+            },
+        }
+    ]
+
+
+def test_span_to_dict_without_an_error_has_no_description_or_events():
+    d = _span_to_dict(_fake_span())
+
+    assert d["status_description"] is None
+    assert d["events"] == []

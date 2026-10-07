@@ -22,6 +22,13 @@ What is kept at the ``content`` level:
 - token counts, span kind, hierarchy and timing: cost accounting and the
   eval engine depend on them. These survive at *every* level.
 
+Two more kinds of content are masked here because no ``hide_*`` flag reaches
+them: ``input.value`` / ``output.value`` on the ADK's own spans (what one
+agent asked another, and the answer), and error text -- a span's status
+description and its exception events' message and stack trace, which can quote
+the very values ``content`` hides. The exception *type* and the ERROR status
+survive: they say that and how a step failed, not what it was handling.
+
 Span (graph node) names and tool names sit at higher privacy levels because
 they are identity rather than content, and blanking them costs trace
 readability (and, for tool names, the eval engine's tool-call metrics). See
@@ -30,8 +37,9 @@ readability (and, for tool names, the eval engine's tool-call metrics). See
 
 from typing import Dict, Optional, Sequence
 
-from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace import Event, ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.trace import Status
 
 from .privacy import TelemetryPrivacy
 
@@ -48,6 +56,14 @@ _CONTENT_MARKERS = (
     "tool.json_schema",
     "tool_call.function.arguments",
 )
+
+# Generic span input/output, matched exactly. OpenInference's own spans already
+# have them masked by TraceConfig (hide_inputs/hide_outputs); the ADK's manual
+# spans do not go through it.
+_IO_KEYS = frozenset({"input.value", "output.value"})
+
+# Exception event attributes that carry the error's text.
+_ERROR_TEXT_KEYS = frozenset({"exception.message", "exception.stacktrace"})
 
 # Attribute holding the OpenInference span kind (LLM / CHAIN / TOOL / ...).
 # Reused as the replacement span name so redacted traces keep their shape.
@@ -90,13 +106,23 @@ def redact_attributes(
         return {}
 
     def _redact(key: str, value: object) -> object:
-        if _is_tool_content(key):
+        if _is_tool_content(key) or key in _IO_KEYS:
             return REDACTED
         if hide_tool_names and _is_tool_name(key):
             return REDACTED
         return value
 
     return {key: _redact(key, value) for key, value in attributes.items()}
+
+
+def _redact_error_text(event: Event) -> Event:
+    """``event`` with its exception message and stack trace masked."""
+    attributes = dict(event.attributes or {})
+    if not _ERROR_TEXT_KEYS & attributes.keys():
+        return event
+    for key in _ERROR_TEXT_KEYS & attributes.keys():
+        attributes[key] = REDACTED
+    return Event(event.name, attributes, timestamp=event.timestamp)
 
 
 class RedactingSpanExporter(SpanExporter):
@@ -119,11 +145,16 @@ class RedactingSpanExporter(SpanExporter):
 
     def _redact(self, span: ReadableSpan) -> ReadableSpan:
         attributes = dict(span.attributes or {})
+        events = span.events
+        status = span.status
         if self._privacy.hides_content:
             attributes = redact_attributes(
                 attributes,
                 hide_tool_names=self._privacy.hides_tool_names,
             )
+            events = [_redact_error_text(event) for event in span.events]
+            if status is not None and status.description:
+                status = Status(status.status_code, REDACTED)
 
         name = span.name
         if self._privacy.hides_span_names:
@@ -138,10 +169,10 @@ class RedactingSpanExporter(SpanExporter):
             parent=span.parent,
             resource=span.resource,
             attributes=attributes,
-            events=span.events,
+            events=events,
             links=span.links,
             kind=span.kind,
-            status=span.status,
+            status=status,
             start_time=span.start_time,
             end_time=span.end_time,
             instrumentation_scope=span.instrumentation_scope,

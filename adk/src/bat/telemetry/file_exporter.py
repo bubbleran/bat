@@ -29,6 +29,21 @@ def _span_to_dict(span: ReadableSpan) -> Dict[str, Any]:
         "status": (
             span.status.status_code.name if span.status is not None else None
         ),
+        # Why a failed span failed: its status description and exception
+        # events (type, message). The status alone only says that it did.
+        "status_description": (
+            getattr(span.status, "description", None)
+            if span.status is not None
+            else None
+        ),
+        "events": [
+            {
+                "name": event.name,
+                "time": event.timestamp,  # unix nanoseconds
+                "attributes": dict(event.attributes or {}),
+            }
+            for event in (getattr(span, "events", None) or ())
+        ],
     }
 
 

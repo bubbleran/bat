@@ -25,6 +25,11 @@ OP_EXECUTE_TOOL = "execute_tool"
 # no longer carried inside the A2A message.
 BAT_TASK_ID = "bat.a2a.task_id"
 
+# Final A2A state of a call to another agent (a TaskState name, e.g.
+# "TASK_STATE_INPUT_REQUIRED"), set on CallAgentNode's CLIENT span next to what
+# was asked and what came back (INPUT_VALUE / OUTPUT_VALUE).
+BAT_A2A_TASK_STATE = "bat.a2a.task_state"
+
 # OpenInference/Phoenix session grouping. Each turn (and each interrupt/resume)
 # is a separate request -> a separate trace; setting session.id to the A2A
 # context id lets Phoenix group all of a conversation's traces under one
@@ -45,3 +50,8 @@ OPENINFERENCE_LLM_TOKEN_COMPLETION = "llm.token_count.completion"
 OPENINFERENCE_LLM_TOKEN_TOTAL = "llm.token_count.total"
 OPENINFERENCE_LLM_MODEL_NAME = "llm.model_name"
 OPENINFERENCE_TOOL_NAME = "tool.name"
+
+# Generic span input/output (OpenInference convention; Phoenix shows them as a
+# span's Input and Output). Content: redacted from the `content` level up.
+INPUT_VALUE = "input.value"
+OUTPUT_VALUE = "output.value"

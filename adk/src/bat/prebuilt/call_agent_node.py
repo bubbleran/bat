@@ -4,6 +4,7 @@ import uuid
 from typing import Any, AsyncIterable, Callable, Dict, Literal, Optional, Type
 
 from a2a.client import ClientConfig, create_client
+from a2a.helpers import get_message_text
 from a2a.types import (
     AgentCard,
     AgentInterface,
@@ -20,7 +21,7 @@ from typing_extensions import override
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState, AgentTaskResult, AgentTaskStatus
 from ..logging import create_logger
-from ..telemetry import SpanKind, inject_context
+from ..telemetry import SpanKind, inject_context, mark_span_error
 from ..telemetry import attributes as attrs
 from ..telemetry import get_tracer as _get_tracer
 from .prebuilt_workflow import PrebuiltWorkflow
@@ -605,7 +606,11 @@ class CallAgentNode(PrebuiltWorkflow):
 
         Token usage and tool calls of the called agent are captured through its
         own OpenTelemetry spans (correlated to this call by the shared
-        ``trace_id``), not extracted from the A2A messages here.
+        ``trace_id``), not extracted from the A2A messages here. What only the
+        caller sees is recorded on the CLIENT span: the request
+        (``input.value``), the last answer text (``output.value``) and the
+        final A2A state (``bat.a2a.task_state``); a failed remote task or a
+        broken stream sets the span's status to ERROR.
 
         Args:
             agent_card (AgentCard): The agent card of the target agent,
@@ -627,6 +632,7 @@ class CallAgentNode(PrebuiltWorkflow):
         )
         span.set_attribute(attrs.GEN_AI_OPERATION_NAME, attrs.OP_INVOKE_AGENT)
         span.set_attribute(attrs.GEN_AI_AGENT_NAME, agent_card.name)
+        span.set_attribute(attrs.INPUT_VALUE, get_message_text(message))
         # Propagate the trace to the called agent through message metadata.
         _inject_traceparent(message, span)
 
@@ -638,13 +644,32 @@ class CallAgentNode(PrebuiltWorkflow):
             ),
         )
         stream = client.send_message(SendMessageRequest(message=message))
+        answer = ""
+        state: Optional[TaskState] = None
         try:
             async for chunk in stream:
+                atr = AgentTaskResult.from_send_message_stream(chunk)
+                state = atr.task_status
+                # A closing status often carries no text: it must not erase
+                # the answer that came before it.
+                if atr.content:
+                    answer = atr.content
                 yield chunk
 
         except Exception as e:
             logger.error(f"consume_agent_stream: Streaming failed: {e}")
             span.record_exception(e)
+            mark_span_error(span, f"{type(e).__name__}: {e}")
             raise
         finally:
+            # Also reached when the caller stops reading at the first
+            # terminal chunk, which is what the worker does.
+            if answer:
+                span.set_attribute(attrs.OUTPUT_VALUE, answer)
+            if state is not None:
+                span.set_attribute(
+                    attrs.BAT_A2A_TASK_STATE, TaskState.Name(state)
+                )
+                if state == TaskState.TASK_STATE_FAILED:
+                    mark_span_error(span, answer or "remote task failed")
             span.end()

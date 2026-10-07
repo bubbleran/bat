@@ -10,10 +10,11 @@ logger = create_logger(__name__, "debug")
 
 try:
     from opentelemetry import propagate, trace
-    from opentelemetry.trace import SpanKind
+    from opentelemetry.trace import SpanKind, Status, StatusCode
 except ImportError:  # pragma: no cover - exercised only without the extra
     propagate = None  # type: ignore[assignment]
     trace = None  # type: ignore[assignment]
+    Status = StatusCode = None  # type: ignore[assignment,misc]
 
     class SpanKind:  # type: ignore[no-redef]
         """Minimal stand-in so callers can reference SpanKind anywhere."""
@@ -241,6 +242,18 @@ def shutdown_telemetry() -> None:
     _initialized = False
     with contextlib.suppress(Exception):
         provider.shutdown()
+
+
+def mark_span_error(span: Any, description: str) -> None:
+    """Set ``span``'s status to ERROR, saying why.
+
+    A span that recorded an exception is not failed until its status says
+    so, and the status is what trace readers (the eval engine, Phoenix) key
+    off. A no-op without the telemetry extra, like the spans themselves.
+    """
+    if Status is None:
+        return
+    span.set_status(Status(StatusCode.ERROR, description))
 
 
 def get_tracer(name: str) -> Any:
