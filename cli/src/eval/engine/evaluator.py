@@ -2,93 +2,127 @@ from __future__ import annotations
 
 from typing import Any
 
-from .contracts import EpisodeVerdict, ExpectedToolCall, TaskExpected
+from .contracts import AgentStep, EpisodeResult, EpisodeVerdict, TaskExpected
+from .trajectory import all_steps
 
 
 def _is_subset(expected: Any, actual: Any) -> bool:
     if isinstance(expected, dict):
-        if not isinstance(actual, dict):
-            return False
-        for key, value in expected.items():
-            if key not in actual or not _is_subset(value, actual[key]):
-                return False
-        return True
-
+        return isinstance(actual, dict) and all(
+            key in actual and _is_subset(value, actual[key])
+            for key, value in expected.items()
+        )
     if isinstance(expected, list):
-        if not isinstance(actual, list) or len(expected) > len(actual):
+        if not isinstance(actual, list):
             return False
-        used = [False] * len(actual)
-        for expected_item in expected:
-            matched = False
-            for idx, actual_item in enumerate(actual):
-                if used[idx]:
-                    continue
-                if _is_subset(expected_item, actual_item):
-                    used[idx] = True
-                    matched = True
-                    break
-            if not matched:
+        remaining = list(actual)
+        for item in expected:
+            matches = [
+                i for i, a in enumerate(remaining) if _is_subset(item, a)
+            ]
+            if not matches:
                 return False
+            del remaining[matches[0]]
         return True
-
     return expected == actual
 
 
-def _count_matches(
-    expected: ExpectedToolCall, observed: list[dict[str, Any]]
-) -> int:
-    total = 0
-    for call in observed:
-        if call.get("name") != expected.name:
-            continue
-        args = call.get("args") if isinstance(call.get("args"), dict) else {}
-        if _is_subset(expected.args_subset, args):
-            total += 1
-    return total
+def _called(label: str, count: int, times: int) -> tuple[bool, str]:
+    ok = count >= times
+    return ok, f"{label}: called {count}×" + (
+        "" if ok else f", expected ≥{times}×"
+    )
 
 
-class EpisodeEvaluator:
-    def evaluate(
-        self,
-        status: str,
-        output_text: str,
-        tool_calls: list[dict[str, Any]],
-        expected: TaskExpected,
-    ) -> EpisodeVerdict:
-        checks: list[tuple[bool, str]] = []
+def _at_most(label: str, value: int, limit: int) -> tuple[bool, str]:
+    ok = value <= limit
+    return ok, f"{label}: {value}" + (
+        "" if ok else f", expected at most {limit}"
+    )
 
-        if expected.status is not None:
-            ok = status == expected.status
-            reason = (
+
+def _name(step: Any) -> str:
+    for field in ("name", "agent", "model", "span"):
+        if getattr(step, field, None):
+            return f"{step.kind} {getattr(step, field)}"
+    return f"{step.kind} {step.kind}"
+
+
+def verdict(episode: EpisodeResult, expected: TaskExpected) -> EpisodeVerdict:
+    """Every expectation of the task, checked; passed only if all hold."""
+    checks: list[tuple[bool, str]] = []
+    status = episode.final_status
+    if expected.status is not None:
+        ok = status == expected.status
+        checks.append(
+            (
+                ok,
                 f"status: '{status}'"
                 if ok
-                else f"status: got '{status}', expected '{expected.status}'"
+                else f"status: got '{status}', expected '{expected.status}'",
             )
-            checks.append((ok, reason))
+        )
 
-        phrases = expected.output_must_contain or []
-        n = len(phrases)
-        for i, phrase in enumerate(phrases):
-            label = f"output[{i}]" if n > 1 else "output"
-            ok = phrase in output_text
-            reason = (
-                f"{label}: contains '{phrase}'"
-                if ok
-                else f"{label}: missing '{phrase}'"
+    phrases = expected.output_must_contain or []
+    for index, phrase in enumerate(phrases):
+        label = f"output[{index}]" if len(phrases) > 1 else "output"
+        ok = phrase in episode.final_output
+        checks.append(
+            (ok, f"{label}: {'contains' if ok else 'missing'} '{phrase}'")
+        )
+
+    trajectory = episode.trace.trajectory
+    if expected.needs_spans and not trajectory.found:
+        checks.append(
+            (
+                False,
+                "trace: no spans found for this conversation -- is "
+                "telemetry on, and written where the eval reads it?",
             )
-            checks.append((ok, reason))
-
-        for exp_call in expected.tool_calls:
-            count = _count_matches(exp_call, tool_calls)
-            ok = count >= exp_call.times
-            label = f"tool_call:{exp_call.name}"
-            reason = (
-                f"{label}: called {count}×"
-                if ok
-                else f"{label}: called {count}×, expected ≥{exp_call.times}×"
+        )
+    elif expected.needs_spans:
+        steps = all_steps(trajectory)
+        for call in expected.tool_calls:
+            count = sum(
+                1
+                for made in episode.trace.tool_calls
+                if made["name"] == call.name
+                and _is_subset(call.args_subset, made["args"])
             )
-            checks.append((ok, reason))
+            checks.append(_called(f"tool_call:{call.name}", count, call.times))
+        for call in expected.agent_calls:
+            count = sum(
+                1
+                for step in steps
+                if isinstance(step, AgentStep) and step.agent == call.agent
+            )
+            checks.append(
+                _called(f"agent_call:{call.agent}", count, call.times)
+            )
+        totals = trajectory.totals
+        if expected.max_model_calls is not None:
+            checks.append(
+                _at_most(
+                    "model calls", totals.model_calls, expected.max_model_calls
+                )
+            )
+        if expected.max_tokens is not None:
+            used = totals.tokens_in + totals.tokens_out
+            checks.append(_at_most("tokens", used, expected.max_tokens))
+        if expected.no_errors:
+            failed = [step for step in steps if step.error]
+            shown = "; ".join(f"{_name(s)}: {s.error}" for s in failed[:3])
+            more = f" (+{len(failed) - 3} more)" if len(failed) > 3 else ""
+            checks.append(
+                (
+                    not failed,
+                    f"errors: {len(failed)} failed steps -- {shown}{more}"
+                    if failed
+                    else "errors: none",
+                )
+            )
 
-        overall = all(ok for ok, _ in checks) if checks else True
-        reason = "; ".join(r for _, r in checks)
-        return EpisodeVerdict(passed=overall, reason=reason)
+    return EpisodeVerdict(
+        passed=all(ok for ok, _ in checks),
+        reason="; ".join(reason for _, reason in checks),
+    )

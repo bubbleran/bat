@@ -4,13 +4,13 @@ import asyncio
 import contextlib
 import json
 import os
-import re
 import signal
 import socket
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from string import Template
+from unittest.mock import patch
 from urllib.parse import urlparse
 
 import typer
@@ -20,86 +20,23 @@ from dotenv import dotenv_values
 from project import (
     AgentTarget,
     ProjectError,
+    fail,
+    privacy_floors,
     resolve_agent_target,
     unwired_agent_warning,
 )
 
-from .engine.contracts import JudgeSpec
+from .engine.contracts import EvalConfig, JudgeSpec
 from .engine.eval_config import (
-    default_eval_yaml,
-    default_tasks_json,
+    DEFAULT_EVAL_YAML,
+    DEFAULT_TASKS_JSON,
     load_eval_config,
 )
 from .engine.orchestrator import run_evaluation
 
-# Maps provider name → the env var its SDK reads for the API key.
-_PROVIDER_API_KEY_ENV: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "azure": "AZURE_OPENAI_API_KEY",
-    "cohere": "COHERE_API_KEY",
-    "mistral": "MISTRAL_API_KEY",
-    "groq": "GROQ_API_KEY",
-}
+# The variable each provider's SDK reads its API key from.
+_API_KEY_ENV = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
 
-
-def _inject_judge_api_key(
-    judge: JudgeSpec, agent_root: Path, env: dict[str, str]
-) -> None:
-    """Resolve the judge's API key and inject it into env.
-
-    If judge.api_key_env is set, the agent's .env file is the ONLY source: the CLI
-    reads that variable name from <agent_root>/.env and uses it. Nothing else is
-    consulted (not the shell, not other files).
-
-    If judge.api_key_env is NOT set, fall back to:
-      1. Key already present in env (exported in the shell)
-      2. Key found in the agent's .env file under the provider's standard name
-    """
-    api_key_var = _PROVIDER_API_KEY_ENV.get(judge.provider.lower())
-    if api_key_var is None:
-        return  # local/no-key provider (e.g. ollama)
-
-    if judge.api_key_env:
-        agent_env_file = agent_root / ".env"
-        if not agent_env_file.exists():
-            typer.secho(
-                f"Warning: judge.api_key_env='{judge.api_key_env}' was set but no .env file "
-                f"exists at {agent_env_file}; the judge will likely fail when called.",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
-            return
-        agent_dotenv = dotenv_values(agent_env_file)
-        raw_value = agent_dotenv.get(judge.api_key_env)
-        value = (raw_value or "").strip()
-        if not value:
-            typer.secho(
-                f"Warning: judge.api_key_env='{judge.api_key_env}' was set but the variable is "
-                f"missing or empty in {agent_env_file}; the judge will likely fail when called.",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
-            return
-        env[api_key_var] = value
-        return
-
-    if api_key_var in env:
-        return  # already available from the shell
-
-    agent_env_file = agent_root / ".env"
-    if agent_env_file.exists():
-        agent_dotenv = dotenv_values(agent_env_file)
-        if api_key_var in agent_dotenv:
-            env[api_key_var] = agent_dotenv[api_key_var]  # type: ignore[assignment]
-
-
-_ENV_VAR_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_SIMPLE_ENV_REF = re.compile(r"^\$([A-Za-z_][A-Za-z0-9_]*)$")
-_BRACED_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-
-
-#: Shared by the three eval commands that act on one agent.
 _AGENT_ARGUMENT = typer.Argument(
     None,
     metavar="[AGENT]",
@@ -112,291 +49,157 @@ _AGENT_ARGUMENT = typer.Argument(
 
 
 def _resolve_target(agent: str | None = None) -> AgentTarget:
-    """The agent this command acts on, standalone or inside a blueprint.
-
-    The two shapes disagree on where the project is, where the config lives
-    and how the agent is started; :mod:`project` owns that difference so the
-    commands below only have to ask.
-    """
     try:
         return resolve_agent_target(Path.cwd(), agent)
     except ProjectError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
 
-def _agent_url_from_config(config_path: Path) -> str:
-    """Build the URL the eval connects to from the agent's own ``config.yaml``.
+def _load_config(target: AgentTarget) -> EvalConfig:
+    path = target.agent_dir / "eval" / "eval.yaml"
+    if not path.exists():
+        raise typer.BadParameter(
+            "Missing ./eval/eval.yaml. Run 'bat eval init' first."
+        )
+    try:
+        return load_eval_config(target.agent_dir, path)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
-    The agent binds to ``endpoint.url`` + ``endpoint.port`` (see
-    ``AgentApplication``); the eval reads the *same* values so it connects
-    exactly where the agent listens, instead of overriding them. Missing
-    values fall back to the same defaults the agent uses
-    (``http://localhost`` / ``9900``).
-    """
-    data: dict[str, Any] = {}
-    if config_path.exists():
-        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            data = loaded
-    endpoint = data.get("endpoint") or {}
-    url = endpoint.get("url") or "http://localhost"
-    port = endpoint.get("port") or 9900
-    if not url.startswith(("http://", "https://")):
+
+def _refuse_redacted_spans(target: AgentTarget) -> None:
+    """Stop when the agent's privacy floor redacts the spans the eval reads."""
+    name = target.agent_name or target.project_root.name
+    for floor in privacy_floors(target):
+        if floor.level is None:
+            typer.secho(
+                "Warning: can't read the telemetry privacy floor at "
+                f"{floor.location}.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+        elif floor.level != "none":
+            fail(
+                f"Can't evaluate {name}: its telemetry privacy floor is "
+                f'"{floor.level}" ({floor.location}), which redacts the spans '
+                'the eval reads. Set telemetry_privacy_floor="none" there '
+                "while you evaluate."
+            )
+
+
+def _agent_url(config_path: Path) -> str:
+    """Where the agent listens: its config.yaml's endpoint, or the SDK's
+    defaults."""
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    endpoint = config.get("endpoint") or {}
+    url = str(endpoint.get("url") or "http://localhost").rstrip("/")
+    if "://" not in url:
         url = "http://" + url
-    return f"{url.rstrip('/')}:{port}"
-
-
-def _patch_agent_config(
-    config_path: Path, overrides: Mapping[str, Any]
-) -> str | None:
-    """Merge ``overrides`` into the agent's ``./config.yaml`` for one run.
-
-    The agent reads ``config.yaml`` as the source of truth for telemetry; the
-    eval injects per-run values (enable the local file span exporter at the
-    per-run path) by patching that file. Returns the original file contents
-    (or ``None`` if absent) so the caller can restore it via
-    :func:`_restore_agent_config`.
-    """
-    original = (
-        config_path.read_text(encoding="utf-8")
-        if config_path.exists()
-        else None
-    )
-    data: dict[str, Any] = {}
-    if original is not None:
-        loaded = yaml.safe_load(original)
-        if isinstance(loaded, dict):
-            data = loaded
-    for key, value in overrides.items():
-        data[key] = value
-    config_path.write_text(
-        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
-    )
-    return original
-
-
-def _restore_agent_config(config_path: Path, original: str | None) -> None:
-    """Restore ``config.yaml`` to the contents captured by ``_patch_agent_config``."""
-    if original is None:
-        config_path.unlink(missing_ok=True)
-    else:
-        config_path.write_text(original, encoding="utf-8")
+    return f"{url}:{endpoint.get('port') or 9900}"
 
 
 @contextlib.contextmanager
-def _temporary_env(overrides: Mapping[str, str]) -> Iterator[None]:
-    original_values: dict[str, str | None] = {}
+def _spans_written_to(config_path: Path, spans_file: Path):
+    """The agent's config.yaml, for the run, exporting its spans to
+    spans_file and nowhere else."""
+    original = config_path.read_text(encoding="utf-8")
+    config = yaml.safe_load(original) or {}
+    config["telemetry"] = {
+        "output": [{"type": "local", "file_path": str(spans_file)}]
+    }
+    config_path.write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
     try:
-        for key, value in overrides.items():
-            original_values[key] = os.environ.get(key)
-            os.environ[key] = value
         yield
     finally:
-        for key, original in original_values.items():
-            if original is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = original
+        config_path.write_text(original, encoding="utf-8")
 
 
-def _run_eval_orchestrator(
-    *,
-    agent_url: str,
-    model_provider: str,
-    model: str,
-    dataset: Path,
-    output_dir: Path,
-    task_id: str,
-    k: int,
-    run_name: str,
-    qualitative: bool,
-    env: Mapping[str, str],
-    spans_dir: str | None = None,
-) -> None:
-    with _temporary_env(env):
-        asyncio.run(
-            run_evaluation(
-                agent_url=agent_url,
-                model=model,
-                model_provider=model_provider,
-                input_path=dataset,
-                run_name=run_name,
-                task_id=task_id,
-                enable_scoring=True,
-                enable_qualitative_eval=qualitative,
-                k=k,
-                out_dir=str(output_dir),
-                spans_dir=spans_dir,
-            )
-        )
+def _with_vars(env: dict[str, str], extra: dict[str, str]) -> dict[str, str]:
+    """env plus extra, whose values may refer to env as $VAR or ${VAR}."""
+    return {
+        **env,
+        **{
+            key: Template(value).safe_substitute(env)
+            for key, value in extra.items()
+        },
+    }
 
 
-def _find_agent_python(agent_root: Path) -> Path | None:
-    candidates = [
-        agent_root / ".venv" / "bin" / "python",
-        agent_root / ".venv" / "Scripts" / "python.exe",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def _resolve_env_value(
-    raw_value: str,
-    env: Mapping[str, str],
-    *,
-    section_name: str,
-    env_key: str,
-) -> str:
-    simple_match = _SIMPLE_ENV_REF.fullmatch(raw_value.strip())
-    if simple_match:
-        ref_name = simple_match.group(1)
-        resolved = env.get(ref_name)
-        if resolved is None:
-            raise typer.BadParameter(
-                f"{section_name}.env.{env_key} references missing environment variable: {ref_name}"
-            )
-        return resolved
-
-    missing_refs: list[str] = []
-
-    def _substitute(match: re.Match[str]) -> str:
-        ref_name = match.group(1)
-        resolved = env.get(ref_name)
-        if resolved is None:
-            missing_refs.append(ref_name)
-            return ""
-        return resolved
-
-    rendered = _BRACED_ENV_REF.sub(_substitute, raw_value)
-    if missing_refs:
-        refs = ", ".join(sorted(set(missing_refs)))
-        raise typer.BadParameter(
-            f"{section_name}.env.{env_key} references missing environment variable(s): {refs}"
-        )
-
-    return rendered
-
-
-def _apply_env_overrides(
-    env: dict[str, str],
-    overrides: dict[str, str],
-    *,
-    section_name: str,
-) -> None:
-    for key, value in overrides.items():
-        env_key = key.strip()
-        if not env_key:
-            continue
-        if not _ENV_VAR_PATTERN.fullmatch(env_key):
-            raise typer.BadParameter(
-                f"{section_name}.env contains invalid variable name: {env_key}"
-            )
-        env[env_key] = _resolve_env_value(
-            value,
-            env,
-            section_name=section_name,
-            env_key=env_key,
-        )
-
-
-def _parse_agent_url(agent_url: str) -> tuple[str, int, str]:
-    parsed = urlparse(agent_url.strip())
-    if not parsed.scheme or not parsed.hostname:
-        raise typer.BadParameter(
-            "The agent's config.yaml endpoint must resolve to a full URL, "
-            "for example: http://127.0.0.1:9900"
-        )
-
-    port = parsed.port
-    if port is None:
-        if parsed.scheme == "https":
-            port = 443
-        elif parsed.scheme == "http":
-            port = 80
+def _judge_env(judge: JudgeSpec, env: dict[str, str]) -> dict[str, str]:
+    """env, with the judge's API key where its provider reads it, and the
+    judge's own variables."""
+    env = dict(env)
+    key_var = _API_KEY_ENV.get(judge.provider)
+    if judge.api_key_env and key_var:
+        if env.get(judge.api_key_env):
+            env[key_var] = env[judge.api_key_env]
         else:
-            raise typer.BadParameter(
-                "The agent's config.yaml endpoint URL must use http or https"
+            typer.secho(
+                f"Warning: judge.api_key_env='{judge.api_key_env}' is not set "
+                "in the shell or the project's .env; the judge will likely "
+                "fail.",
+                fg=typer.colors.YELLOW,
+                err=True,
             )
-
-    base_url = f"{parsed.scheme}://{parsed.hostname}"
-    return parsed.hostname, port, base_url
+    return _with_vars(env, judge.env)
 
 
 def _wait_for_agent_port(
-    agent_url: str,
-    timeout_s: int,
-    process: subprocess.Popen | None,
+    agent_url: str, timeout_s: int, process: subprocess.Popen
 ) -> None:
-    host, port, _ = _parse_agent_url(agent_url)
+    url = urlparse(agent_url)
     deadline = time.time() + timeout_s
-
     while time.time() < deadline:
-        if process is not None and process.poll() is not None:
+        if process.poll() is not None:
             raise typer.BadParameter(
-                f"Agent process exited before becoming ready (exit code: {process.returncode})."
+                "Agent process exited before becoming ready "
+                f"(exit code: {process.returncode})."
             )
         try:
-            with socket.create_connection((host, port), timeout=1.0):
-                return
+            socket.create_connection(
+                (url.hostname, url.port or 80), 1.0
+            ).close()
+            return
         except OSError:
             time.sleep(0.2)
-
     raise typer.BadParameter(
         f"Agent did not become ready at {agent_url} within {timeout_s} seconds."
     )
 
 
-def _start_agent_process(
-    target: AgentTarget, env: dict[str, str]
-) -> subprocess.Popen:
-    """Start the agent from wherever ``uv run .`` works for its shape.
-
-    Inside a blueprint that is the blueprint root, the agent is named as an
-    argument, and CONFIG_PATH has to point at the agent's own config -- the
-    SDK would otherwise read the blueprint's shared one.
-    """
-    try:
-        return subprocess.Popen(
-            target.run_command,
-            cwd=target.project_root,
-            env={**env, **target.run_env},
-            # Own session/process group so teardown can signal the whole tree:
-            # `uv run .` forks the actual agent server as a child, and signaling
-            # only `uv` would orphan that server (leaking its port).
-            start_new_session=True,
+def _why_it_stopped(target: AgentTarget, code: int, log_path: Path) -> str:
+    """The agent's own last words, from its log, and what to do about a
+    remote agent or MCP server it requires that doesn't answer."""
+    log = log_path.read_text(encoding="utf-8", errors="replace").strip()
+    last = log.splitlines()[-1].strip() if log else ""
+    name = target.agent_name or target.project_root.name
+    reason = f"{name} stopped before it was ready (exit code {code})"
+    if last:
+        reason += f":\n    {last}"
+    if "agent card" in last or "MCP server" in last:
+        config = target.config_path.relative_to(target.project_root)
+        reason += (
+            "\n  It can't reach a remote agent or MCP server it requires: "
+            f"start it first, or mark it `required: false` in {config}."
         )
-    except FileNotFoundError as exc:
-        raise typer.BadParameter(
-            "Cannot execute 'uv run'. Ensure uv is installed and available in PATH."
-        ) from exc
-
-
-def _signal_agent_tree(process: subprocess.Popen, sig: int) -> None:
-    """Send ``sig`` to the agent's whole process group, falling back to the
-    launched process alone if the group can't be addressed (e.g. non-POSIX)."""
-    try:
-        os.killpg(os.getpgid(process.pid), sig)
-    except (ProcessLookupError, PermissionError, OSError, AttributeError):
-        with contextlib.suppress(ProcessLookupError, OSError):
-            process.send_signal(sig)
+    return reason + f"\n  Agent log: {log_path}"
 
 
 def _stop_agent_process(process: subprocess.Popen, timeout_s: int) -> None:
-    if process.poll() is not None:
-        return
-
-    _signal_agent_tree(process, signal.SIGTERM)
-    try:
-        process.wait(timeout=timeout_s)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-
-    _signal_agent_tree(process, signal.SIGKILL)
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        process.wait(timeout=timeout_s)
+    """SIGTERM the agent's process group, then SIGKILL it if it lingers:
+    `uv run` forks the server, so signaling uv alone would orphan it."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if process.poll() is not None:
+            return
+        with contextlib.suppress(OSError):
+            os.killpg(os.getpgid(process.pid), sig)
+        try:
+            process.wait(timeout=timeout_s)
+            return
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def eval_init(
@@ -408,295 +211,151 @@ def eval_init(
         help="Overwrite eval/eval.yaml and eval/input/tasks.json if they already exist.",
     ),
 ) -> None:
-    target = _resolve_target(agent)
-    agent_root = target.agent_dir
-
-    eval_dir = agent_root / "eval"
-    input_dir = eval_dir / "input"
-    output_dir = eval_dir / "output"
-
-    input_dir.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    eval_yaml_path = eval_dir / "eval.yaml"
-    tasks_path = input_dir / "tasks.json"
-
-    if eval_yaml_path.exists() and not force:
-        typer.secho(
-            f"{eval_yaml_path} already exists. Use --force to overwrite.",
-            fg=typer.colors.YELLOW,
-        )
-    else:
-        eval_yaml_path.write_text(default_eval_yaml(), encoding="utf-8")
-        typer.secho(f"Created {eval_yaml_path}", fg=typer.colors.GREEN)
-
-    if tasks_path.exists() and not force:
-        typer.secho(
-            f"{tasks_path} already exists. Use --force to overwrite.",
-            fg=typer.colors.YELLOW,
-        )
-    else:
-        tasks_path.write_text(default_tasks_json(), encoding="utf-8")
-        typer.secho(f"Created {tasks_path}", fg=typer.colors.GREEN)
-
+    eval_dir = _resolve_target(agent).agent_dir / "eval"
+    (eval_dir / "input").mkdir(parents=True, exist_ok=True)
+    (eval_dir / "output").mkdir(parents=True, exist_ok=True)
+    for path, content in (
+        (eval_dir / "eval.yaml", DEFAULT_EVAL_YAML),
+        (eval_dir / "input" / "tasks.json", DEFAULT_TASKS_JSON),
+    ):
+        if path.exists() and not force:
+            typer.secho(
+                f"{path} already exists. Use --force to overwrite.",
+                fg=typer.colors.YELLOW,
+            )
+        else:
+            path.write_text(content, encoding="utf-8")
+            typer.secho(f"Created {path}", fg=typer.colors.GREEN)
     typer.secho(
         f"Evaluation scaffold ready in {eval_dir}", fg=typer.colors.GREEN
     )
 
 
-def _print_eval_show(cfg) -> None:
-    judge_model = (
+def eval_show(agent: str | None = _AGENT_ARGUMENT) -> None:
+    cfg = _load_config(_resolve_target(agent))
+    judge = (
         f"{cfg.judge.provider}:{cfg.judge.model}"
-        if cfg.judge is not None
+        if cfg.judge
         else "not configured"
     )
-
-    typer.secho("============================", fg=typer.colors.BLUE)
+    rule = "============================"
+    typer.secho(rule, fg=typer.colors.BLUE)
     typer.secho("  EVALUATION CONFIGURATION", fg=typer.colors.BLUE, bold=True)
-    typer.secho("============================", fg=typer.colors.BLUE)
-
-    typer.secho("Dataset", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
-    typer.echo(f"     : {cfg.dataset}")
-
-    typer.secho("k", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
-    typer.echo(f"           : {cfg.k}")
-
-    typer.secho("Qualitative", fg=typer.colors.BRIGHT_BLUE, bold=True, nl=False)
-    typer.echo(f" : {'yes' if cfg.qualitative else 'no'}")
-
-    typer.secho("", nl=True)
-    typer.secho("Models:", fg=typer.colors.CYAN, bold=True)
-    for idx, model in enumerate(cfg.models, start=1):
-        typer.echo(f"  [{idx}] {model.provider}:{model.model}")
-
-    typer.secho("", nl=True)
-    typer.secho("Judge model", fg=typer.colors.MAGENTA, bold=True, nl=False)
-    typer.echo(f" : {judge_model}")
-    typer.secho("============================", fg=typer.colors.BLUE)
-
-
-def eval_show(agent: str | None = _AGENT_ARGUMENT) -> None:
-    target = _resolve_target(agent)
-    agent_root = target.agent_dir
-
-    eval_yaml_path = agent_root / "eval" / "eval.yaml"
-    if not eval_yaml_path.exists():
-        raise typer.BadParameter(
-            "Missing ./eval/eval.yaml. Run 'bat eval init' first."
-        )
-
-    try:
-        cfg = load_eval_config(agent_root, eval_yaml_path)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
-    _print_eval_show(cfg)
+    typer.secho(rule, fg=typer.colors.BLUE)
+    typer.echo(f"Dataset     : {cfg.dataset}")
+    typer.echo(f"k           : {cfg.k}")
+    typer.echo(f"Qualitative : {'yes' if cfg.qualitative else 'no'}")
+    typer.echo("\nModels:")
+    for index, model in enumerate(cfg.models, start=1):
+        typer.echo(f"  [{index}] {model.provider}:{model.model}")
+    typer.echo(f"\nJudge model : {judge}")
+    typer.secho(rule, fg=typer.colors.BLUE)
 
 
 def eval_run(agent: str | None = _AGENT_ARGUMENT) -> None:
     target = _resolve_target(agent)
-    agent_root = target.agent_dir
-
-    # Only this command starts the agent, so only here does a dispatcher
-    # that rejects the selector matter -- and it would otherwise surface as
-    # a startup timeout rather than as its cause.
     warning = unwired_agent_warning(target)
     if warning is not None:
         typer.secho(f"Warning: {warning}", fg=typer.colors.YELLOW, err=True)
-
-    eval_yaml_path = agent_root / "eval" / "eval.yaml"
-    if not eval_yaml_path.exists():
-        raise typer.BadParameter(
-            "Missing ./eval/eval.yaml. Run 'bat eval init' first."
-        )
-
-    try:
-        cfg = load_eval_config(agent_root, eval_yaml_path)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
+    _refuse_redacted_spans(target)
+    cfg = _load_config(target)
     if not cfg.dataset.exists():
         raise typer.BadParameter(f"Dataset not found: {cfg.dataset}")
 
-    cfg.output_dir.mkdir(parents=True, exist_ok=True)
+    run_id = time.strftime("%Y%m%d_%H%M%S")
+    out_dir = cfg.output_dir / run_id
+    agent_url = _agent_url(target.config_path)
+    judge = cfg.judge if cfg.qualitative else None
+    # As under `make <agent>`: the project's .env, the shell winning.
+    dotenv = dotenv_values(target.project_root / ".env")
+    env = {k: v for k, v in dotenv.items() if v is not None} | dict(os.environ)
+    judge_env = _judge_env(judge, env) if judge else env
 
-    agent_python = _find_agent_python(target.project_root)
-    if agent_python is None:
-        raise typer.BadParameter(
-            "No agent python found at .venv/bin/python. Create the agent virtual environment first."
-        )
-
-    task_id = time.strftime("%Y%m%d_%H%M%S")
     typer.secho(
-        f"Running evaluation with {len(cfg.models)} model(s). task_id={task_id}",
+        f"Running evaluation with {len(cfg.models)} model(s). task_id={run_id}",
         fg=typer.colors.CYAN,
     )
-
-    # The agent's endpoint is its own config.yaml's responsibility; the eval
-    # reads it (rather than patching it) and connects there.
-    agent_url = _agent_url_from_config(target.config_path)
-
-    failed_models: list[tuple[str, str]] = []
-
-    for idx, model_cfg in enumerate(cfg.models):
-        typer.secho(
-            f"- {model_cfg.provider}:{model_cfg.model}", fg=typer.colors.CYAN
-        )
-
-        # Model selection rides on env vars: the agent lets MODEL /
-        # MODEL_PROVIDER / BASE_URL override the config.yaml `model` section, so
-        # the eval can sweep models without rewriting config per model.
-        server_env = os.environ.copy()
-        server_env["MODEL_PROVIDER"] = model_cfg.provider
-        server_env["MODEL"] = model_cfg.model
-
-        if model_cfg.base_url:
-            server_env["BASE_URL"] = model_cfg.base_url
-        else:
-            server_env.pop("BASE_URL", None)
-
-        # Per-run telemetry spans directory: the agent writes ``agent.jsonl``
-        # here and the eval reads every ``*.jsonl`` in it, grouping spans by
-        # trace_id. For multi-agent runs, point each remote sub-agent's local
-        # output (telemetry.output[].file_path) at a distinct file in this same
-        # directory (the shared trace_id, carried by the propagated W3C
-        # traceparent, ties them together).
-        spans_dir = (cfg.output_dir / task_id / f"spans-{idx}").resolve()
+    failed: list[str] = []
+    for index, model in enumerate(cfg.models):
+        label = f"{model.provider}:{model.model}"
+        typer.secho(f"- {label}", fg=typer.colors.CYAN)
+        # The agent reads MODEL / MODEL_PROVIDER / BASE_URL over its config.
+        agent_env = {
+            **env,
+            "MODEL_PROVIDER": model.provider,
+            "MODEL": model.model,
+        }
+        agent_env.pop("BASE_URL", None)
+        if model.base_url:
+            agent_env["BASE_URL"] = model.base_url
+        agent_env = _with_vars(agent_env, model.env) | target.run_env
+        spans_dir = out_dir / f"spans-{index}"
         spans_dir.mkdir(parents=True, exist_ok=True)
-        spans_dir_str = str(spans_dir)
-
-        _apply_env_overrides(
-            server_env,
-            model_cfg.env,
-            section_name=f"models[{idx}]",
-        )
-
-        # Telemetry is read from config.yaml (not env), so patch in for this
-        # run a single local (JSONL file) span exporter at the per-run path --
-        # the eval reconstructs usage/tool-calls from these files and never
-        # needs a remote collector. The endpoint is NOT patched: the agent
-        # binds to its own config.yaml and the eval reads it. Always restored
-        # in the `finally` below, even if the agent fails to start.
-        original_config = _patch_agent_config(
-            target.config_path,
-            {
-                "telemetry": {
-                    "output": [
-                        {
-                            "type": "local",
-                            "file_path": str(spans_dir / "agent.jsonl"),
-                        }
-                    ],
-                },
-            },
-        )
-
-        process: subprocess.Popen | None = None
+        log_path = out_dir / f"agent-{index}.log"
+        process = None
         try:
-            process = _start_agent_process(target, server_env)
-            _wait_for_agent_port(
-                agent_url,
-                timeout_s=cfg.agent_startup_timeout_s,
-                process=process,
-            )
-
-            runner_env = server_env.copy()
-            if cfg.qualitative:
-                if cfg.judge is None:
-                    raise typer.BadParameter(
-                        "When evaluation.qualitative is true, judge.provider and judge.model are required"
+            with (
+                _spans_written_to(
+                    target.config_path, spans_dir / "agent.jsonl"
+                ),
+                log_path.open("w", encoding="utf-8") as log,
+            ):
+                # Its own process group, so teardown reaches the forked server.
+                process = subprocess.Popen(
+                    target.run_command,
+                    cwd=target.project_root,
+                    env=agent_env,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                _wait_for_agent_port(
+                    agent_url, cfg.agent_startup_timeout_s, process
+                )
+                with patch.dict(os.environ, judge_env):
+                    asyncio.run(
+                        run_evaluation(
+                            agent_url=agent_url,
+                            model=label,
+                            dataset=cfg.dataset,
+                            out_dir=out_dir,
+                            run_name=cfg.run_name,
+                            k=cfg.k,
+                            span_paths=[
+                                str(spans_dir),
+                                *map(str, cfg.extra_spans),
+                            ],
+                            judge=judge,
+                        )
                     )
-
-                runner_env["JUDGE_PROVIDER"] = cfg.judge.provider
-                runner_env["JUDGE_MODEL"] = cfg.judge.model
-                if cfg.judge.base_url:
-                    runner_env["JUDGE_BASE_URL"] = cfg.judge.base_url
-                else:
-                    runner_env.pop("JUDGE_BASE_URL", None)
-
-                for prompt_key in (
-                    "relevance",
-                    "task_completion",
-                    "hallucination",
-                    "tool_call",
-                ):
-                    env_name = f"JUDGE_PROMPT_{prompt_key.upper()}"
-                    text = cfg.judge.prompts.get(prompt_key)
-                    if text:
-                        runner_env[env_name] = text
-                    else:
-                        runner_env.pop(env_name, None)
-
-                _inject_judge_api_key(
-                    cfg.judge, target.project_root, runner_env
-                )
-
-                _apply_env_overrides(
-                    runner_env,
-                    cfg.judge.env,
-                    section_name="judge",
-                )
-            else:
-                runner_env.pop("JUDGE_PROVIDER", None)
-                runner_env.pop("JUDGE_MODEL", None)
-                runner_env.pop("JUDGE_BASE_URL", None)
-                for prompt_key in (
-                    "relevance",
-                    "task_completion",
-                    "hallucination",
-                    "tool_call",
-                ):
-                    runner_env.pop(f"JUDGE_PROMPT_{prompt_key.upper()}", None)
-
-            _run_eval_orchestrator(
-                agent_url=agent_url,
-                model_provider=model_cfg.provider,
-                model=model_cfg.model,
-                dataset=cfg.dataset,
-                output_dir=cfg.output_dir,
-                task_id=task_id,
-                k=cfg.k,
-                run_name=cfg.run_name,
-                qualitative=cfg.qualitative,
-                env=runner_env,
-                spans_dir=spans_dir_str,
-            )
         except Exception as exc:
-            # One model's failure (startup timeout, orchestrator error, ...)
-            # must not abort the whole sweep: record it and move on. Teardown
-            # still runs in the `finally` below. KeyboardInterrupt is a
-            # BaseException, so Ctrl-C still stops the run.
-            label = f"{model_cfg.provider}:{model_cfg.model}"
-            failed_models.append((label, str(exc)))
+            # One model failing must not abort the sweep; Ctrl-C still does.
+            reason = str(exc)
+            if process is not None and process.poll() is not None:
+                reason = _why_it_stopped(target, process.returncode, log_path)
+            failed.append(label)
             typer.secho(
-                f"  Model {label} failed: {exc}",
+                f"  Model {label} failed: {reason}",
                 fg=typer.colors.RED,
                 err=True,
             )
         finally:
             if process is not None:
-                _stop_agent_process(
-                    process, timeout_s=cfg.agent_shutdown_timeout_s
-                )
-            _restore_agent_config(target.config_path, original_config)
+                _stop_agent_process(process, cfg.agent_shutdown_timeout_s)
 
-    completed = len(cfg.models) - len(failed_models)
-    output_path = cfg.output_dir / task_id
-    if failed_models:
+    if not failed:
         typer.secho(
-            f"Evaluation finished: {completed}/{len(cfg.models)} model(s) "
-            f"completed, {len(failed_models)} failed. Output: {output_path}",
-            fg=typer.colors.YELLOW,
+            f"Evaluation completed. Output: {out_dir}", fg=typer.colors.GREEN
         )
-        for label, err in failed_models:
-            typer.secho(f"  - {label}: {err}", fg=typer.colors.RED, err=True)
-        if completed == 0:
-            raise typer.Exit(code=1)
-    else:
-        typer.secho(
-            f"Evaluation completed. Output: {output_path}",
-            fg=typer.colors.GREEN,
-        )
+        return
+    done = len(cfg.models) - len(failed)
+    typer.secho(
+        f"Evaluation finished: {done}/{len(cfg.models)} model(s) completed, "
+        f"{len(failed)} failed ({', '.join(failed)}). Output: {out_dir}",
+        fg=typer.colors.YELLOW,
+    )
+    if done == 0:
+        raise typer.Exit(code=1)
 
 
 def eval_plot(
@@ -714,29 +373,22 @@ def eval_plot(
     ),
 ) -> None:
     folder = folder.resolve()
-
     if not folder.is_dir():
         raise typer.BadParameter(f"Folder not found: {folder}")
-
-    metrics: dict[str, dict] = {}
-    for sub in sorted(folder.iterdir()):
-        if sub.is_dir():
-            metrics_file = sub / "metrics.json"
-            if metrics_file.exists():
-                with open(metrics_file, encoding="utf-8") as f:
-                    metrics[sub.name] = json.load(f)
-
+    metrics = {
+        run.name: json.loads((run / "metrics.json").read_text(encoding="utf-8"))
+        for run in sorted(folder.iterdir())
+        if (run / "metrics.json").is_file()
+    }
     if not metrics:
         raise typer.BadParameter(
             f"No valid evaluation results found in {folder}. "
             "A sub-folder is a valid run only if it contains a metrics.json file."
         )
-
     typer.secho(
         f"Found {len(metrics)} run(s): {', '.join(metrics)}",
         fg=typer.colors.CYAN,
     )
-
     if filter:
         typer.secho(
             f"Per-task filter active: only task ids containing '{filter}' will be plotted",
@@ -746,10 +398,8 @@ def eval_plot(
     from .engine.plotter import generate_and_save_plots
 
     saved = generate_and_save_plots(metrics, folder, task_filter=filter)
-
     for path in saved:
         typer.secho(f"  {path.relative_to(folder)}", fg=typer.colors.GREEN)
-
     typer.secho(
         f"\nSaved {len(saved)} chart(s) to {folder}",
         fg=typer.colors.GREEN,

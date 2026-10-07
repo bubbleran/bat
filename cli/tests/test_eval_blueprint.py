@@ -13,6 +13,7 @@ import yaml
 from typer.testing import CliRunner
 
 from cli import app
+from eval.commands import _wait_for_agent_port
 from eval.engine.eval_config import EvalConfig, ModelSpec
 
 runner = CliRunner()
@@ -104,10 +105,11 @@ def _patch_eval(monkeypatch, captured: dict, agent: Path) -> None:
             "agent_url", agent_url
         ),
     )
-    monkeypatch.setattr(
-        "eval.commands._run_eval_orchestrator",
-        lambda **kwargs: captured.__setitem__("runner_kwargs", kwargs),
-    )
+
+    async def fake_run_evaluation(**kwargs):
+        captured["runner_kwargs"] = kwargs
+
+    monkeypatch.setattr("eval.commands.run_evaluation", fake_run_evaluation)
 
 
 def test_eval_run_starts_the_blueprint_agent(tmp_path, monkeypatch) -> None:
@@ -214,3 +216,159 @@ def test_eval_run_warns_when_the_dispatcher_does_not_name_the_agent(
     result = runner.invoke(app, ["eval", "run"])
 
     assert "never names 'netops'" in result.output
+
+
+def test_eval_run_hands_the_blueprints_dotenv_to_the_agent(
+    tmp_path, monkeypatch
+) -> None:
+    """`make netops` passes the root .env as UV_ENV_FILE; the eval starts the
+    same agent, so it has to give it the same variables."""
+    agent = _write_blueprint_with_agent(tmp_path)
+    (tmp_path / ".env").write_text(
+        "OPENAI_API_KEY=from-dotenv\n", encoding="utf-8"
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    captured: dict = {}
+    _patch_eval(monkeypatch, captured, agent)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["eval", "run", "netops"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["env"]["OPENAI_API_KEY"] == "from-dotenv"
+
+
+def test_eval_run_lets_the_shell_override_the_dotenv(
+    tmp_path, monkeypatch
+) -> None:
+    """As with uv's env file: a variable already exported wins."""
+    agent = _write_blueprint_with_agent(tmp_path)
+    (tmp_path / ".env").write_text(
+        "OPENAI_API_KEY=from-dotenv\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "from-shell")
+    captured: dict = {}
+    _patch_eval(monkeypatch, captured, agent)
+    monkeypatch.chdir(agent)
+
+    result = runner.invoke(app, ["eval", "run"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["env"]["OPENAI_API_KEY"] == "from-shell"
+
+
+def _write_app(agent: Path, floor: str) -> None:
+    (agent / "app.py").write_text(
+        "from bat.agent import AgentApplication\n"
+        "\n"
+        "def run():\n"
+        f"    AgentApplication(telemetry_privacy_floor={floor}).run()\n",
+        encoding="utf-8",
+    )
+
+
+def test_eval_run_refuses_an_agent_whose_privacy_floor_is_above_none(
+    tmp_path, monkeypatch
+) -> None:
+    """At `full` the spans hide prompts, results and tool names: the run
+    would score answers only, with nothing to say why."""
+    agent = _write_blueprint_with_agent(tmp_path)
+    _write_app(agent, '"full"')
+    captured: dict = {}
+    _patch_eval(monkeypatch, captured, agent)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["eval", "run", "netops"])
+
+    assert result.exit_code == 1
+    assert "Can't evaluate netops" in result.output
+    assert '"full" (netops/app.py:4)' in result.output
+    assert 'telemetry_privacy_floor="none"' in result.output
+    assert "cmd" not in captured  # the agent was never started
+
+
+def test_eval_run_accepts_a_privacy_floor_of_none(
+    tmp_path, monkeypatch
+) -> None:
+    agent = _write_blueprint_with_agent(tmp_path)
+    _write_app(agent, '"none"')
+    captured: dict = {}
+    _patch_eval(monkeypatch, captured, agent)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["eval", "run", "netops"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["cmd"] == ["uv", "run", ".", "netops"]
+
+
+def test_eval_run_warns_when_it_cannot_read_the_privacy_floor(
+    tmp_path, monkeypatch
+) -> None:
+    agent = _write_blueprint_with_agent(tmp_path)
+    _write_app(agent, "FLOOR")
+    captured: dict = {}
+    _patch_eval(monkeypatch, captured, agent)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["eval", "run", "netops"])
+
+    assert result.exit_code == 0, result.output
+    assert "netops/app.py:4" in result.output
+    assert "cmd" in captured
+
+
+# What bat-adk prints last when a required remote agent does not answer.
+CARD_ERROR = (
+    "ValueError: Failed to load and validate agent configuration: Network "
+    "communication error fetching agent card from "
+    "http://localhost:9301/.well-known/agent-card.json: All connection "
+    "attempts failed"
+)
+
+
+def _run_an_agent_that_stops(tmp_path, monkeypatch, last_line: str):
+    """`bat eval run netops` on an agent that prints a traceback and exits."""
+    agent = _write_blueprint_with_agent(tmp_path)
+    _patch_eval(monkeypatch, {}, agent)
+
+    class _Stopped(_FakeProcess):
+        def __init__(self) -> None:
+            self.returncode = 1
+
+    def fake_popen(cmd, cwd, env, stdout, **kwargs):
+        stdout.write(f"Traceback (most recent call last):\n  ...\n{last_line}\n")
+        return _Stopped()
+
+    monkeypatch.setattr("eval.commands.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(
+        "eval.commands._wait_for_agent_port", _wait_for_agent_port
+    )
+    monkeypatch.chdir(tmp_path)
+    return agent, runner.invoke(app, ["eval", "run", "netops"])
+
+
+def test_eval_run_explains_an_agent_that_stops_on_a_missing_dependency(
+    tmp_path, monkeypatch
+) -> None:
+    agent, result = _run_an_agent_that_stops(tmp_path, monkeypatch, CARD_ERROR)
+
+    assert result.exit_code == 1
+    assert "netops stopped before it was ready (exit code 1)" in result.output
+    assert "http://localhost:9301/.well-known/agent-card.json" in result.output
+    assert "`required: false` in netops/config.yaml" in result.output
+    log = agent / "eval" / "output" / "T0" / "agent-0.log"
+    assert str(log) in result.output
+    assert CARD_ERROR in log.read_text(encoding="utf-8")
+
+
+def test_eval_run_reports_any_other_startup_error_without_the_hint(
+    tmp_path, monkeypatch
+) -> None:
+    error = "ModuleNotFoundError: No module named 'netops.src'"
+
+    _, result = _run_an_agent_that_stops(tmp_path, monkeypatch, error)
+
+    assert result.exit_code == 1
+    assert error in result.output
+    assert "required: false" not in result.output

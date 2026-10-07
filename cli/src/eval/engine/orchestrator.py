@@ -1,175 +1,102 @@
 from __future__ import annotations
 
-import argparse
-import asyncio
 import json
-import logging
+import re
+import time
 from pathlib import Path
+from typing import Any
 
-from .adapter import BatA2AAdapter
-from .bench_runner import BenchRunner, RunConfig
-from .contracts import EpisodeResult, TaskSpec
-from .metrics.llm_evaluators import evaluate_episode_quality
-from .metrics.metrics import summarize_episode_metrics
-from .metrics.qualitative_helpers import (
-    build_context_from_events,
-    build_expected_desc,
-    build_user_facts_summary,
-)
+from bat.logging import create_logger
 
-logger = logging.getLogger(__name__)
+from .adapter import run_task
+from .contracts import EpisodeResult, EpisodeVerdict, JudgeSpec, TaskSpec
+from .evaluator import verdict
+from .judge import score
+from .metrics import metrics, summary
+
+logger = create_logger(__name__, level="info")
 
 
-def load_tasks(path: str | Path) -> list[TaskSpec]:
-    dataset_path = Path(path)
+def load_tasks(path: Path) -> list[TaskSpec]:
     try:
-        content = dataset_path.read_text(encoding="utf-8").strip()
-        objects = json.loads(content)
-        if not isinstance(objects, list):
-            raise ValueError(
-                f"Expected a JSON array of task objects in {dataset_path}"
-            )
-        return [TaskSpec.model_validate(obj) for obj in objects]
+        return [
+            TaskSpec.model_validate(task)
+            for task in json.loads(path.read_text(encoding="utf-8"))
+        ]
     except Exception as exc:
-        raise ValueError(
-            f"Dataset not formatted correctly in {dataset_path}"
-        ) from exc
+        raise ValueError(f"Dataset not formatted correctly in {path}") from exc
 
 
-_QUALITATIVE_CONCURRENCY = 8
-
-
-async def _evaluate_qualitative(
-    results: list[EpisodeResult], tasks_by_id: dict[str, TaskSpec]
-) -> None:
-    sem = asyncio.Semaphore(_QUALITATIVE_CONCURRENCY)
-
-    async def _score(episode: EpisodeResult) -> None:
-        task = tasks_by_id.get(episode.task_id)
-        if task is None:
-            return
-        logger.info(
-            f"Evaluating qualitative scores for episode {episode.task_id}"
+async def _attempt(
+    agent_url: str, task: TaskSpec, attempt: int, span_paths: list[str]
+) -> EpisodeResult:
+    try:
+        episode = await run_task(
+            agent_url, task, f"{task.id}__try{attempt}", span_paths
         )
-        query = " -> ".join(task.turns)
-        raw_events = [event.model_dump() for event in episode.trace.events]
-        context = build_context_from_events(raw_events)
-        user_facts = build_user_facts_summary(raw_events)
-        tool_calls = json.dumps(
-            episode.trace.tool_calls, ensure_ascii=False, indent=2
+        episode.verdict = verdict(episode, task.expected)
+    except Exception as exc:
+        # One bad attempt must not abort the run.
+        logger.error("Task '%s' attempt %d failed: %s", task.id, attempt, exc)
+        episode = EpisodeResult(
+            task_id=task.id,
+            final_status="error",
+            final_output=f"<eval error: {exc}>",
+            verdict=EpisodeVerdict(passed=False, reason=f"eval error: {exc}"),
+            aux={"error": str(exc)},
         )
-        expected_desc = build_expected_desc(
-            status=task.expected.status,
-            expected_outcome=task.expected.expected_outcome,
-            output_must_contain=task.expected.output_must_contain,
-            expected_tool_calls=task.expected.tool_calls or None,
+    episode.expected_outcome = task.expected.expected_outcome
+    episode.aux["attempt_index"] = attempt
+    return episode
+
+
+def _write(path: Path, data: Any) -> None:
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _write_episodes(run_dir: Path, episodes: list[EpisodeResult]) -> None:
+    for episode in episodes:
+        name = re.sub(r"[^\w.-]", "_", episode.task_id)
+        attempt = episode.aux["attempt_index"]
+        (run_dir / "episodes" / f"{name}__try{attempt}.json").write_text(
+            episode.model_dump_json(indent=2), encoding="utf-8"
         )
-
-        async with sem:
-            episode.qualitative_scores = await asyncio.to_thread(
-                evaluate_episode_quality,
-                query,
-                episode.final_output,
-                episode.final_status,
-                context,
-                expected_desc,
-                tool_calls,
-                bool(task.expected.tool_calls),
-                user_facts,
-            )
-
-    await asyncio.gather(*(_score(ep) for ep in results))
 
 
 async def run_evaluation(
+    *,
     agent_url: str,
     model: str,
-    model_provider: str,
-    input_path: Path,
-    run_name: str = "benchmark",
-    task_id: str = "",
-    enable_scoring: bool = True,
-    enable_qualitative_eval: bool = False,
-    k: int = 1,
-    out_dir: str = "output",
-    spans_dir: str | None = None,
-) -> None:
-    tasks = load_tasks(input_path)
-    tasks_by_id = {task.id: task for task in tasks}
+    dataset: Path,
+    out_dir: Path,
+    run_name: str,
+    k: int,
+    span_paths: list[str],
+    judge: JudgeSpec | None,
+) -> list[EpisodeResult]:
+    """Run every task k times against the agent, score the episodes, and
+    write them, summary.json and metrics.json under out_dir."""
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+    tasks = load_tasks(dataset)
+    episodes: list[EpisodeResult] = []
+    for task in tasks:
+        for attempt in range(k):
+            episode = await _attempt(agent_url, task, attempt, span_paths)
+            episode.model_name = model
+            episodes.append(episode)
 
-    bench_runner = BenchRunner(
-        adapter=BatA2AAdapter(
-            agent_url=agent_url,
-            spans_dir=spans_dir,
-        ),
-        config=RunConfig(
-            run_name=run_name,
-            out_dir=out_dir,
-            k=k,
-            model=f"{model_provider}:{model}",
-            task_id=task_id,
-        ),
+    run_dir = out_dir / f"{run_name}_{model.replace(':', '-')}"
+    (run_dir / "episodes").mkdir(parents=True, exist_ok=True)
+    # Written before judging too: a slow judge must not cost the episodes.
+    _write_episodes(run_dir, episodes)
+    if judge is not None:
+        score(judge, episodes, {task.id: task for task in tasks})
+        _write_episodes(run_dir, episodes)
+    _write(
+        run_dir / "summary.json", summary(episodes, run_name, model, k, stamp)
     )
-
-    logger.info(f"Running evaluation on dataset: {input_path}")
-    results = await bench_runner.run(tasks)
-    logger.info(f"Evaluation complete. Collected {len(results)} result(s)")
-
-    if enable_qualitative_eval:
-        logger.info("Running qualitative evaluation...")
-        await _evaluate_qualitative(results, tasks_by_id)
-        bench_runner.persist_results(results)
-
-    bench_runner.write_summary(results)
-
-    if not enable_scoring:
-        if bench_runner.run_dir:
-            logger.info(f"Artifacts written to: {bench_runner.run_dir}")
-        return
-
-    metrics = summarize_episode_metrics(results, k=k)
-    if bench_runner.run_dir:
-        (bench_runner.run_dir / "metrics.json").write_text(
-            json.dumps(metrics, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        logger.info(f"Artifacts written to: {bench_runner.run_dir}")
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Run A2A evaluation in the agent environment"
-    )
-    parser.add_argument("--dataset", required=True)
-    parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--agent-url", required=True)
-    parser.add_argument("--model-provider", required=True)
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--task-id", required=True)
-    parser.add_argument("--run-name", default="benchmark")
-    parser.add_argument("--k", type=int, default=1)
-    parser.add_argument("--qualitative", action="store_true")
-    args = parser.parse_args()
-
-    dataset = Path(args.dataset).resolve()
-    output_dir = Path(args.output_dir).resolve()
-
-    asyncio.run(
-        run_evaluation(
-            agent_url=args.agent_url,
-            model=args.model,
-            model_provider=args.model_provider,
-            input_path=dataset,
-            run_name=args.run_name,
-            task_id=args.task_id,
-            enable_scoring=True,
-            enable_qualitative_eval=args.qualitative,
-            k=args.k,
-            out_dir=str(output_dir),
-        )
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    _write(run_dir / "metrics.json", metrics(episodes, k))
+    logger.info(f"Artifacts written to: {run_dir}")
+    return episodes

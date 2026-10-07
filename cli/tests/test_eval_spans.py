@@ -1,16 +1,12 @@
-"""Tests for reconstructing per-episode usage/tool-calls from OTel spans.
-
-These cover ``eval.engine.adapter`` reading a directory of JSON-Lines span
-files and aggregating by ``trace_id`` — including the multi-agent case where a
-remote sub-agent writes its own file but shares the trace via ``traceparent``.
-"""
+"""Reading span files, and the tokens of a conversation spread over them."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from eval.engine.adapter import _aggregate_from_spans, _read_spans_dir
+from eval.engine.adapter import read_spans
+from eval.engine.trajectory import build_trajectory
 
 
 def _write_spans(path: Path, spans: list[dict]) -> None:
@@ -20,20 +16,19 @@ def _write_spans(path: Path, spans: list[dict]) -> None:
     )
 
 
-def _llm_span(trace_id: str, prompt: int, completion: int, **extra) -> dict:
-    span = {
+def _llm_span(trace_id: str, prompt: int, completion: int, cached: int = 0):
+    return {
         "trace_id": trace_id,
         "span_id": f"s{prompt}{completion}",
         "start_time": 1_000,
-        "end_time": 1_000 + 5_000_000_000,  # +5s in nanoseconds
+        "end_time": 2_000,
         "attributes": {
             "openinference.span.kind": "LLM",
             "llm.token_count.prompt": prompt,
             "llm.token_count.completion": completion,
+            "llm.token_count.prompt_details.cache_read": cached,
         },
     }
-    span["attributes"].update(extra)
-    return span
 
 
 def _root_span(trace_id: str, conversation_id: str) -> dict:
@@ -41,7 +36,7 @@ def _root_span(trace_id: str, conversation_id: str) -> dict:
         "trace_id": trace_id,
         "span_id": "root",
         "start_time": 0,
-        "end_time": 1,
+        "end_time": 3_000,
         "attributes": {
             "gen_ai.operation.name": "invoke_agent",
             "gen_ai.conversation.id": conversation_id,
@@ -49,116 +44,48 @@ def _root_span(trace_id: str, conversation_id: str) -> dict:
     }
 
 
-def test_read_spans_dir_missing_directory(tmp_path: Path) -> None:
-    assert _read_spans_dir(str(tmp_path / "does-not-exist")) == []
+def test_read_spans_of_a_missing_directory(tmp_path: Path) -> None:
+    assert read_spans([str(tmp_path / "does-not-exist")]) == []
 
 
-def test_read_spans_dir_merges_multiple_files_and_skips_bad_lines(
-    tmp_path: Path,
-) -> None:
+def test_read_spans_merges_files_and_skips_bad_lines(tmp_path: Path) -> None:
     (tmp_path / "a.jsonl").write_text(
-        json.dumps({"trace_id": "t", "span_id": "1"}) + "\n"
-        "not json\n"  # malformed line is skipped, not fatal
-        "\n",  # blank line ignored
+        json.dumps({"trace_id": "t", "span_id": "1"}) + "\nnot json\n\n",
         encoding="utf-8",
     )
     (tmp_path / "b.jsonl").write_text(
-        json.dumps({"trace_id": "t", "span_id": "2"}) + "\n",
-        encoding="utf-8",
+        json.dumps({"trace_id": "t", "span_id": "2"}) + "\n", encoding="utf-8"
     )
-    # A non-jsonl file is ignored.
     (tmp_path / "ignore.txt").write_text("nope", encoding="utf-8")
 
-    spans = _read_spans_dir(str(tmp_path))
-    assert {s["span_id"] for s in spans} == {"1", "2"}
+    spans = read_spans([str(tmp_path)])
+
+    assert {span["span_id"] for span in spans} == {"1", "2"}
 
 
-def test_aggregate_single_agent(tmp_path: Path) -> None:
-    trace = "trace-aaa"
-    _write_spans(
-        tmp_path / "agent.jsonl",
-        [
-            _root_span(trace, "conv-1"),
-            _llm_span(trace, prompt=10, completion=5),
-            _llm_span(trace, prompt=3, completion=2),
-            {
-                "trace_id": trace,
-                "span_id": "tool-1",
-                "attributes": {
-                    "openinference.span.kind": "TOOL",
-                    "tool.name": "search",
-                    "input.value": json.dumps({"q": "hi"}),
-                },
-            },
-        ],
-    )
-
-    usage, tool_calls, found = _aggregate_from_spans(str(tmp_path), "conv-1")
-
-    assert found is True
-    assert usage["input_tokens"] == 13
-    assert usage["output_tokens"] == 7
-    assert usage["total_tokens"] == 20
-    assert usage["inference_time"] == 10.0  # two 5s LLM spans
-    assert tool_calls == [
-        {"name": "search", "args": {"q": "hi"}, "id": "tool-1"}
-    ]
-
-
-def test_aggregate_not_found_when_conversation_absent(tmp_path: Path) -> None:
-    _write_spans(
-        tmp_path / "agent.jsonl",
-        [_llm_span("trace-x", prompt=10, completion=5)],
-    )
-
-    usage, tool_calls, found = _aggregate_from_spans(str(tmp_path), "conv-1")
-
-    assert found is False
-    assert usage["input_tokens"] == 0
-    assert usage["total_tokens"] == 0
-    assert tool_calls == []
-
-
-def test_aggregate_multi_agent_recomposes_by_trace_id(tmp_path: Path) -> None:
-    """A remote sub-agent's spans live in a separate file but share the
-    trace_id (propagated via traceparent); their tokens must be included."""
-    trace = "trace-shared"
-    # Entry agent: root (carries conversation id) + its own LLM call.
-    _write_spans(
-        tmp_path / "agent.jsonl",
-        [
-            _root_span(trace, "conv-1"),
-            _llm_span(trace, prompt=10, completion=5),
-        ],
-    )
-    # Remote sub-agent: same trace_id, NO conversation id attribute, own file.
-    _write_spans(
-        tmp_path / "subagent.jsonl",
-        [_llm_span(trace, prompt=100, completion=50)],
-    )
-
-    usage, _tool_calls, found = _aggregate_from_spans(str(tmp_path), "conv-1")
-
-    assert found is True
-    assert usage["input_tokens"] == 110
-    assert usage["output_tokens"] == 55
-    assert usage["total_tokens"] == 165
-
-
-def test_aggregate_ignores_other_conversations(tmp_path: Path) -> None:
-    """Spans from a different conversation's trace must not leak in."""
+def test_tokens_count_every_agent_of_the_conversation(tmp_path: Path) -> None:
+    """A called agent writes its own file, but shares the caller's trace;
+    another conversation's trace stays out."""
     _write_spans(
         tmp_path / "agent.jsonl",
         [
             _root_span("trace-1", "conv-1"),
-            _llm_span("trace-1", prompt=10, completion=5),
+            _llm_span("trace-1", prompt=10, completion=5, cached=4),
             _root_span("trace-2", "conv-2"),
             _llm_span("trace-2", prompt=999, completion=999),
         ],
     )
+    _write_spans(
+        tmp_path / "called.jsonl",
+        [_llm_span("trace-1", prompt=100, completion=50, cached=60)],
+    )
 
-    usage, _tool_calls, found = _aggregate_from_spans(str(tmp_path), "conv-1")
+    totals = build_trajectory(
+        read_spans([str(tmp_path)]), "conv-1", ["hi"]
+    ).totals
 
-    assert found is True
-    assert usage["input_tokens"] == 10
-    assert usage["output_tokens"] == 5
+    assert (totals.tokens_in, totals.tokens_out, totals.tokens_cached) == (
+        110,
+        55,
+        64,
+    )

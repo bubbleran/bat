@@ -1,29 +1,34 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from pathlib import Path
 from typing import Any
 
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
-from a2a.helpers import (
-    get_artifact_text,
-    get_message_text,
-    new_text_message,
-)
+from a2a.helpers import get_artifact_text, get_message_text, new_text_message
 from a2a.types import Role, SendMessageRequest, StreamResponse, TaskState
 from bat.logging import create_logger
 from httpx import AsyncClient
 
-from .contracts import EpisodeResult, EpisodeTrace, TaskSpec, TraceEvent
+from .contracts import (
+    EpisodeResult,
+    EpisodeTrace,
+    TaskSpec,
+    TraceEvent,
+    Trajectory,
+)
+from .trajectory import (
+    build_trajectory,
+    count_conversation_roots,
+    tool_calls_from,
+)
 
 logger = create_logger(__name__, level="info")
 
-TERMINAL_STATUSES = {"completed", "error", "input-required"}
-
-
-_TASK_STATE_TO_STR = {
+_STATUS = {
     TaskState.TASK_STATE_SUBMITTED: "working",
     TaskState.TASK_STATE_WORKING: "working",
     TaskState.TASK_STATE_INPUT_REQUIRED: "input-required",
@@ -32,284 +37,122 @@ _TASK_STATE_TO_STR = {
     TaskState.TASK_STATE_CANCELED: "error",
     TaskState.TASK_STATE_REJECTED: "error",
 }
+_FINAL = {"completed", "error", "input-required"}
+_MAX_EVENTS = 200
 
 
-# Span attribute keys emitted by the agent: OpenInference (LLM/tool spans) plus
-# the ADK manual spans. Usage and tool calls are reconstructed from the spans
-# the agent writes to JSON-Lines files (OTEL_TRACES_EXPORTER=file), since they
-# are no longer carried in the A2A message metadata.
-_ATTR_CONVERSATION_ID = "gen_ai.conversation.id"
-_ATTR_TOKEN_PROMPT = "llm.token_count.prompt"
-_ATTR_TOKEN_COMPLETION = "llm.token_count.completion"
-_ATTR_TOKEN_TOTAL = "llm.token_count.total"
-_ATTR_TOKEN_CACHE_READ = "llm.token_count.prompt_details.cache_read"
-_ATTR_SPAN_KIND = "openinference.span.kind"
-_ATTR_TOOL_NAME = "tool.name"
-_ATTR_INPUT_VALUE = "input.value"
-
-
-def _read_spans_dir(directory: str) -> list[dict[str, Any]]:
-    """Read every ``*.jsonl`` span file in ``directory`` into one list.
-
-    A directory (not a single file) so multi-agent runs work: each agent
-    process writes its own span file there, and they are recomposed by
-    ``trace_id`` downstream. Missing directory or unreadable lines are skipped.
-    """
+def read_spans(paths: list[str]) -> list[dict[str, Any]]:
+    """The spans in these files, and in the ``*.jsonl`` of these directories."""
     spans: list[dict[str, Any]] = []
-    base = Path(directory)
-    if not base.is_dir():
-        return spans
-    for span_file in sorted(base.glob("*.jsonl")):
-        try:
-            with open(span_file, encoding="utf-8") as handle:
-                for raw_line in handle:
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-                    try:
-                        spans.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-        except OSError:
-            continue
+    for raw in paths:
+        path = Path(raw)
+        files = sorted(path.glob("*.jsonl")) if path.is_dir() else [path]
+        for file in files:
+            if not file.is_file():
+                continue
+            for line in file.read_text(encoding="utf-8").splitlines():
+                with contextlib.suppress(json.JSONDecodeError):
+                    spans.append(json.loads(line))
     return spans
 
 
-def _tool_call_from_span(
-    span: dict[str, Any], attributes: dict[str, Any]
-) -> dict[str, Any]:
-    name = attributes.get(_ATTR_TOOL_NAME) or attributes.get("gen_ai.tool.name")
-    args: dict[str, Any] = {}
-    raw = attributes.get(_ATTR_INPUT_VALUE)
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                args = parsed
-        except json.JSONDecodeError:
-            pass
-    return {"name": name, "args": args, "id": span.get("span_id")}
-
-
-def _aggregate_from_spans(
-    spans_dir: str, conversation_id: str
-) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
-    """Reconstruct ``(usage, tool_calls, found)`` for one episode from spans.
-
-    Spans are grouped by the trace(s) whose root carries
-    ``gen_ai.conversation.id == conversation_id``. Every span sharing one of
-    those ``trace_id``\\ s is then aggregated — including spans from remote
-    sub-agents, which run in their own process and write their own file but
-    share the ``trace_id`` via the propagated W3C ``traceparent``. This is how
-    multi-agent usage is recomposed across processes.
-
-    ``found`` is False when no span carries the conversation id yet (the agent
-    may not have written the root span); callers can retry to absorb the small
-    write race.
-    """
-    spans = _read_spans_dir(spans_dir)
-    trace_ids = {
-        span.get("trace_id")
-        for span in spans
-        if (span.get("attributes") or {}).get(_ATTR_CONVERSATION_ID)
-        == conversation_id
-    }
-    usage = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "cached_input_tokens": 0,
-        "inference_time": 0.0,
-    }
-    tool_calls: list[dict[str, Any]] = []
-    if not trace_ids:
-        return usage, tool_calls, False
-
-    for span in spans:
-        if span.get("trace_id") not in trace_ids:
-            continue
-        attributes = span.get("attributes") or {}
-        prompt = attributes.get(_ATTR_TOKEN_PROMPT)
-        completion = attributes.get(_ATTR_TOKEN_COMPLETION)
-        if (
-            attributes.get(_ATTR_SPAN_KIND) == "LLM"
-            or prompt is not None
-            or completion is not None
-        ):
-            in_tok = int(prompt or 0)
-            out_tok = int(completion or 0)
-            usage["input_tokens"] += in_tok
-            usage["output_tokens"] += out_tok
-            usage["total_tokens"] += int(
-                attributes.get(_ATTR_TOKEN_TOTAL) or (in_tok + out_tok)
-            )
-            usage["cached_input_tokens"] += int(
-                attributes.get(_ATTR_TOKEN_CACHE_READ) or 0
-            )
-            start, end = span.get("start_time"), span.get("end_time")
-            if isinstance(start, (int, float)) and isinstance(
-                end, (int, float)
-            ):
-                usage["inference_time"] += max(0.0, (end - start) / 1e9)
-
-        if (
-            attributes.get(_ATTR_SPAN_KIND) == "TOOL"
-            or _ATTR_TOOL_NAME in attributes
-        ):
-            tool_calls.append(_tool_call_from_span(span, attributes))
-
-    return usage, tool_calls, True
-
-
-def _extract_status_and_content(
-    chunk: StreamResponse,
-) -> tuple[str | None, str]:
+def _status_and_text(chunk: StreamResponse) -> tuple[str | None, str]:
     if chunk.HasField("message"):
         return "completed", get_message_text(chunk.message)
     if chunk.HasField("artifact_update"):
         return "completed", get_artifact_text(chunk.artifact_update.artifact)
     if chunk.HasField("status_update"):
-        state = chunk.status_update.status.state
-        status = _TASK_STATE_TO_STR.get(state)
-        content = ""
-        if chunk.status_update.status.HasField("message"):
-            content = get_message_text(chunk.status_update.status.message)
-        return status, content
+        status = chunk.status_update.status
+        text = (
+            get_message_text(status.message)
+            if status.HasField("message")
+            else ""
+        )
+        return _STATUS.get(status.state), text
     if chunk.HasField("task"):
-        state = chunk.task.status.state
-        status = _TASK_STATE_TO_STR.get(state)
-        texts = [get_artifact_text(a) for a in chunk.task.artifacts]
-        return status, "\n".join(t for t in texts if t)
+        texts = [
+            get_artifact_text(artifact) for artifact in chunk.task.artifacts
+        ]
+        return _STATUS.get(chunk.task.status.state), "\n".join(
+            t for t in texts if t
+        )
     return None, ""
 
 
-class BatA2AAdapter:
-    def __init__(
-        self,
-        agent_url: str,
-        request_timeout_s: float = 180.0,
-        max_events: int = 200,
-        spans_dir: str | None = None,
-    ) -> None:
-        self.agent_url = agent_url
-        self.request_timeout_s = request_timeout_s
-        self.max_events = max_events
-        # Directory of JSON-Lines span files written by the agent(s)
-        # (OTEL_TRACES_EXPORTER=file); usage and tool calls are reconstructed
-        # from it per episode, grouped by trace_id (multi-agent aware).
-        self.spans_dir = spans_dir
-
-    async def _collect_from_spans(
-        self, conversation_id: str
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        """Aggregate usage/tool-calls for an episode from the spans directory.
-
-        Retries briefly: the agent writes spans synchronously, but the root
-        span (which carries the conversation id) ends just after the response,
-        so it may not be on disk the instant the stream closes.
-        """
-        assert self.spans_dir is not None
-        usage: dict[str, Any] = {}
-        tool_calls: list[dict[str, Any]] = []
-        for _ in range(20):  # up to ~2s
-            usage, tool_calls, found = _aggregate_from_spans(
-                self.spans_dir, conversation_id
-            )
-            if found:
-                return usage, tool_calls
-            await asyncio.sleep(0.1)
-        # Fail-open, but make it visible: no span carried this conversation id,
-        # so usage/tool-calls stay empty. Most likely the agent has telemetry
-        # disabled, or a sub-agent did not inherit the caller's context_id.
+async def _trajectory(
+    paths: list[str], conversation_id: str, turns: list[str]
+) -> Trajectory:
+    """The conversation's trajectory, once each turn's root span is on disk:
+    the last one ends just after the answer is streamed."""
+    spans = read_spans(paths)
+    for _ in range(20):
+        if not paths or count_conversation_roots(spans, conversation_id) >= len(
+            turns
+        ):
+            break
+        await asyncio.sleep(0.1)
+        spans = read_spans(paths)
+    trajectory = build_trajectory(spans, conversation_id, turns)
+    if paths and not trajectory.found:
         logger.warning(
-            "No telemetry spans found for conversation '%s' in %s after "
-            "retries; usage and tool-calls will be empty for this episode.",
+            "No spans found for conversation '%s' in %s: is telemetry on?",
             conversation_id,
-            self.spans_dir,
+            ", ".join(paths),
         )
-        return usage, tool_calls
+    return trajectory
 
-    async def run_task(
-        self, task: TaskSpec, *, thread_id: str
-    ) -> EpisodeResult:
-        t0_perf = time.perf_counter()
-        trace = EpisodeTrace()
 
-        last_status: str | None = None
-        last_content = ""
-
-        async with AsyncClient(timeout=self.request_timeout_s) as httpx_client:
-            resolver = A2ACardResolver(
-                httpx_client=httpx_client, base_url=self.agent_url
-            )
-            agent_card = await resolver.get_agent_card()
-
-            client = ClientFactory(
-                ClientConfig(httpx_client=httpx_client, streaming=True)
-            ).create(card=agent_card)
-
-            try:
-                for turn in task.turns:
-                    turn_started = False
-                    # The final output is the last turn's answer, not an
-                    # earlier turn's left over.
-                    last_content = ""
-                    message = new_text_message(
-                        text=turn,
-                        context_id=thread_id,
-                        role=Role.ROLE_USER,
-                    )
-                    stream = client.send_message(
-                        SendMessageRequest(message=message)
-                    )
-
-                    async for chunk in stream:
-                        status, content = _extract_status_and_content(chunk)
-                        if status is None:
-                            continue
-
-                        if len(trace.events) < self.max_events:
-                            trace.events.append(
-                                TraceEvent(
-                                    t_ms=(time.perf_counter() - t0_perf)
-                                    * 1000.0,
-                                    task_status=status,
-                                    content_preview=content,
-                                    user_input=turn
-                                    if not turn_started
-                                    else None,
-                                )
+async def run_task(
+    agent_url: str, task: TaskSpec, thread_id: str, span_paths: list[str]
+) -> EpisodeResult:
+    """One conversation with the agent, and what its spans say it did."""
+    started = time.perf_counter()
+    trace = EpisodeTrace()
+    status, output = "error", ""
+    async with AsyncClient(timeout=180.0) as http:
+        card = await A2ACardResolver(
+            httpx_client=http, base_url=agent_url
+        ).get_agent_card()
+        client = ClientFactory(
+            ClientConfig(httpx_client=http, streaming=True)
+        ).create(card=card)
+        try:
+            for turn in task.turns:
+                output = ""  # the final output is the last turn's answer
+                user_input: str | None = turn
+                message = new_text_message(
+                    text=turn, context_id=thread_id, role=Role.ROLE_USER
+                )
+                async for chunk in client.send_message(
+                    SendMessageRequest(message=message)
+                ):
+                    chunk_status, text = _status_and_text(chunk)
+                    if chunk_status is None:
+                        continue
+                    if len(trace.events) < _MAX_EVENTS:
+                        trace.events.append(
+                            TraceEvent(
+                                t_ms=(time.perf_counter() - started) * 1000,
+                                task_status=chunk_status,
+                                content_preview=text,
+                                user_input=user_input,
                             )
-                            turn_started = True
+                        )
+                        user_input = None
+                    if chunk_status in _FINAL:
+                        status = chunk_status
+                        # The stream closes on a status with no text.
+                        output = text or output
+        except Exception as exc:
+            status, output = "error", f"{type(exc).__name__}: {exc}"
 
-                        if status in TERMINAL_STATUSES:
-                            last_status = status
-                            # The answer arrives as an artifact and the stream
-                            # then closes on a completed status carrying no
-                            # message: that one must not erase the answer.
-                            if content:
-                                last_content = content
-
-            except Exception as exc:
-                last_status = "error"
-                last_content = f"{type(exc).__name__}: {exc}"
-
-        trace.timings["wall_ms"] = (time.perf_counter() - t0_perf) * 1000.0
-
-        # Usage and tool calls now come from the agent's OpenTelemetry spans
-        # (written to files), not from A2A message metadata.
-        if self.spans_dir:
-            usage, tool_calls = await self._collect_from_spans(thread_id)
-            trace.usage = usage
-            trace.tool_calls = tool_calls
-
-        final_status = last_status or "error"
-        final_output = last_content or ""
-
-        return EpisodeResult(
-            task_id=task.id,
-            final_status=final_status,
-            final_output=final_output,
-            trace=trace,
-            aux={"agent_url": self.agent_url},
-        )
+    trace.wall_ms = (time.perf_counter() - started) * 1000
+    trace.trajectory = await _trajectory(span_paths, thread_id, task.turns)
+    trace.tool_calls = tool_calls_from(trace.trajectory)
+    return EpisodeResult(
+        task_id=task.id,
+        final_status=status,
+        final_output=output,
+        trace=trace,
+        aux={"agent_url": agent_url},
+    )

@@ -1,4 +1,6 @@
+import asyncio
 import json
+import os
 import signal
 from pathlib import Path
 
@@ -251,10 +253,6 @@ def test_eval_run_starts_agent_and_runs_orchestrator(
         assert config_path == eval_yaml
         return config
 
-    def fake_find_agent_python(agent_root: Path) -> Path:
-        assert agent_root == root
-        return Path("/tmp/agent/.venv/bin/python")
-
     def fake_strftime(_fmt: str) -> str:
         return "20260101_000000"
 
@@ -290,13 +288,11 @@ def test_eval_run_starts_agent_and_runs_orchestrator(
         captured["wait_timeout_s"] = timeout_s
         assert process is not None
 
-    def fake_run_eval_orchestrator(**kwargs):  # noqa: ANN003
+    async def fake_run_evaluation(**kwargs):  # noqa: ANN003
         captured["runner_kwargs"] = kwargs
+        captured["judge_mode"] = os.environ.get("JUDGE_MODE")
 
     monkeypatch.setattr("eval.commands.load_eval_config", fake_load_eval_config)
-    monkeypatch.setattr(
-        "eval.commands._find_agent_python", fake_find_agent_python
-    )
     monkeypatch.setattr("eval.commands.time.strftime", fake_strftime)
     monkeypatch.setattr(
         "eval.commands._wait_for_agent_port", fake_wait_for_agent_port
@@ -305,13 +301,11 @@ def test_eval_run_starts_agent_and_runs_orchestrator(
     # Teardown signals the process group; keep it off the real OS in tests.
     monkeypatch.setattr("eval.commands.os.getpgid", lambda pid: pid)
     monkeypatch.setattr("eval.commands.os.killpg", lambda pgid, sig: None)
-    monkeypatch.setattr(
-        "eval.commands._run_eval_orchestrator", fake_run_eval_orchestrator
-    )
+    monkeypatch.setattr("eval.commands.run_evaluation", fake_run_evaluation)
 
     result = runner.invoke(app, ["eval", "run"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
 
     popen_cmd = captured["popen_cmd"]
     assert popen_cmd == ["uv", "run", "."]
@@ -332,24 +326,15 @@ def test_eval_run_starts_agent_and_runs_orchestrator(
 
     runner_kwargs = captured["runner_kwargs"]
     assert runner_kwargs["agent_url"] == "http://127.0.0.1:9900"
-    assert runner_kwargs["model_provider"] == "openai"
-    assert runner_kwargs["model"] == "gpt-4.1-mini"
+    assert runner_kwargs["model"] == "openai:gpt-4.1-mini"
     assert runner_kwargs["dataset"] == dataset.resolve()
-    assert runner_kwargs["output_dir"] == eval_output.resolve()
-    assert runner_kwargs["task_id"] == "20260101_000000"
+    assert runner_kwargs["out_dir"] == eval_output.resolve() / "20260101_000000"
     assert runner_kwargs["k"] == 2
     assert runner_kwargs["run_name"] == "benchmark"
-    assert runner_kwargs["qualitative"] is True
-
-    run_env = runner_kwargs["env"]
-    assert run_env["MODEL_PROVIDER"] == "openai"
-    assert run_env["MODEL"] == "gpt-4.1-mini"
-    assert run_env["BASE_URL"] == "http://model.local"
-    assert run_env["MODEL_ALIAS"] == "gpt-4.1-mini"
-    assert run_env["JUDGE_PROVIDER"] == "ollama"
-    assert run_env["JUDGE_MODEL"] == "judge-model"
-    assert run_env["JUDGE_BASE_URL"] == "http://judge.local"
-    assert run_env["JUDGE_MODE"] == "strict"
+    assert runner_kwargs["judge"] == config.judge
+    # The judge runs in this process, with its own variables set.
+    assert captured["judge_mode"] == "strict"
+    assert "JUDGE_MODE" not in os.environ
 
 
 def _write_eval_yaml_with_prompts(root: Path, prompts_block: str) -> Path:
@@ -588,50 +573,32 @@ def test_eval_plot_survives_null_qualitative_scores(
     assert "metrics_qualitative_metrics.png" in png_names
 
 
-def test_apply_judge_result_records_reasoning_when_score_is_none() -> None:
+def test_a_failed_judge_leaves_its_error_in_the_reasoning(monkeypatch) -> None:
     """EV-M1: a failed judge must leave its error in judge_reasoning."""
-    from concurrent.futures import Future
+    from eval.engine import judge
+    from eval.engine.contracts import EpisodeResult, JudgeSpec, TaskSpec
 
-    from eval.engine.contracts import QualitativeScores
-    from eval.engine.metrics.llm_evaluators import _apply_judge_result
+    def ask(self, rubric, prompt):  # noqa: ANN001
+        if rubric == "relevance":
+            return {"reasoning": "Error: bad api key", "score": None}
+        return {"reasoning": "looks good", "score": 0.75}
 
-    scores = QualitativeScores()
-
-    failed: Future = Future()
-    failed.set_result({"score": None, "reasoning": "Error: bad api key"})
-    _apply_judge_result(
-        scores,
-        failed,
-        score_attr="response_relevance",
-        reasoning_key="relevance",
-        label="Response relevance",
+    monkeypatch.setattr(judge.Judge, "ask", ask)
+    episode = EpisodeResult(
+        task_id="t", final_status="completed", final_output="ok"
     )
+
+    judge.score(
+        JudgeSpec(provider="openai", model="m"),
+        [episode],
+        {"t": TaskSpec(id="t", turns=["hi"])},
+    )
+
+    scores = episode.qualitative_scores
     assert scores.response_relevance is None
     assert scores.judge_reasoning["relevance"] == "Error: bad api key"
-
-    raised: Future = Future()
-    raised.set_exception(RuntimeError("boom"))
-    _apply_judge_result(
-        scores,
-        raised,
-        score_attr="hallucination_score",
-        reasoning_key="hallucination",
-        label="Hallucination",
-    )
-    assert scores.hallucination_score is None
-    assert "boom" in scores.judge_reasoning["hallucination"]
-
-    ok: Future = Future()
-    ok.set_result({"score": 0.75, "reasoning": "looks good"})
-    _apply_judge_result(
-        scores,
-        ok,
-        score_attr="task_completion_quality",
-        reasoning_key="completion",
-        label="Task completion",
-    )
     assert scores.task_completion_quality == 0.75
-    assert scores.judge_reasoning["completion"] == "looks good"
+    assert scores.judge_reasoning["tool_call"].startswith("skipped")
 
 
 def test_load_eval_config_rejects_unsupported_provider(tmp_path) -> None:
@@ -677,8 +644,9 @@ def test_load_eval_config_rejects_unsupported_judge_provider(tmp_path) -> None:
 
 
 def test_judge_client_does_not_inherit_model_base_url(monkeypatch) -> None:
-    """S4-C2: judge base_url comes only from JUDGE_BASE_URL, never BASE_URL."""
-    from eval.engine.metrics import llm_evaluators as le
+    """S4-C2: the judge's base_url is its own, never the model's BASE_URL."""
+    from eval.engine import judge
+    from eval.engine.contracts import JudgeSpec
 
     captured: dict[str, object] = {}
 
@@ -686,19 +654,13 @@ def test_judge_client_does_not_inherit_model_base_url(monkeypatch) -> None:
         def __init__(self, **kwargs) -> None:  # noqa: ANN003
             captured.update(kwargs)
 
-    class _FakeClient:
-        def __init__(self, **kwargs) -> None:  # noqa: ANN003
-            pass
-
-    monkeypatch.setattr(le, "ChatModelClientConfig", _FakeConfig)
-    monkeypatch.setattr(le, "ChatModelClient", _FakeClient)
-    monkeypatch.setattr(le, "_judge_clients", {})
+    monkeypatch.setattr(judge, "ChatModelClientConfig", _FakeConfig)
+    monkeypatch.setattr(judge, "ChatModelClient", lambda **kwargs: None)
     monkeypatch.setenv("BASE_URL", "http://model-under-test:11434")
-    monkeypatch.delenv("JUDGE_BASE_URL", raising=False)
-    monkeypatch.setenv("JUDGE_PROVIDER", "openai")
-    monkeypatch.setenv("JUDGE_MODEL", "gpt-4.1-mini")
 
-    le._get_judge_client("relevance")
+    judge.Judge(JudgeSpec(provider="openai", model="m")).client(
+        "relevance", True
+    )
 
     assert captured["base_url"] is None
 
@@ -727,42 +689,46 @@ def test_stop_agent_process_signals_whole_group(monkeypatch) -> None:
     assert (4242, signal.SIGTERM) in signals
 
 
-def test_bench_runner_isolates_failing_task(tmp_path) -> None:
+def test_one_failing_task_does_not_stop_the_run(tmp_path, monkeypatch) -> None:
     """S4-M6: one task raising is recorded as an error, run still finishes."""
-    import asyncio
+    from eval.engine import orchestrator
+    from eval.engine.contracts import EpisodeResult
 
-    from eval.engine.bench_runner import BenchRunner, RunConfig
-    from eval.engine.contracts import EpisodeResult, EpisodeTrace, TaskSpec
+    async def run_task(agent_url, task, thread_id, span_paths):  # noqa: ANN001
+        if task.id == "boom":
+            raise RuntimeError("kaboom")
+        return EpisodeResult(
+            task_id=task.id, final_status="completed", final_output="ok"
+        )
 
-    class _FakeAdapter:
-        async def run_task(self, task, thread_id):  # noqa: ANN001
-            if task.id == "boom":
-                raise RuntimeError("kaboom")
-            return EpisodeResult(
-                task_id=task.id,
-                final_status="completed",
-                final_output="ok",
-                trace=EpisodeTrace(),
-            )
-
-    tasks = [
-        TaskSpec(id="boom", turns=["x"]),
-        TaskSpec(id="fine", turns=["y"]),
-    ]
-    runner = BenchRunner(
-        _FakeAdapter(),
-        RunConfig(run_name="r", out_dir=str(tmp_path), k=1, model="m"),
+    monkeypatch.setattr(orchestrator, "run_task", run_task)
+    dataset = tmp_path / "tasks.json"
+    dataset.write_text(
+        json.dumps(
+            [{"id": "boom", "turns": ["x"]}, {"id": "fine", "turns": ["y"]}]
+        ),
+        encoding="utf-8",
     )
 
-    results = asyncio.run(runner.run(tasks))
+    results = asyncio.run(
+        orchestrator.run_evaluation(
+            agent_url="http://agent",
+            model="openai:m",
+            dataset=dataset,
+            out_dir=tmp_path,
+            run_name="r",
+            k=1,
+            span_paths=[],
+            judge=None,
+        )
+    )
 
     by_id = {r.task_id: r for r in results}
-    assert len(results) == 2
     assert by_id["boom"].final_status == "error"
-    assert by_id["boom"].verdict is not None
     assert by_id["boom"].verdict.passed is False
     assert "kaboom" in by_id["boom"].aux["error"]
     assert by_id["fine"].final_status == "completed"
+    assert (tmp_path / "r_openai-m" / "metrics.json").is_file()
 
 
 def test_eval_run_continues_after_one_model_fails(
@@ -813,9 +779,6 @@ def test_eval_run_continues_after_one_model_fails(
             raise RuntimeError("agent did not start")
 
     monkeypatch.setattr("eval.commands.load_eval_config", lambda r, c: config)
-    monkeypatch.setattr(
-        "eval.commands._find_agent_python", lambda r: Path("/tmp/x/python")
-    )
     monkeypatch.setattr("eval.commands.time.strftime", lambda fmt: "T0")
     monkeypatch.setattr(
         "eval.commands.subprocess.Popen",
@@ -824,16 +787,17 @@ def test_eval_run_continues_after_one_model_fails(
     monkeypatch.setattr("eval.commands.os.getpgid", lambda pid: pid)
     monkeypatch.setattr("eval.commands.os.killpg", lambda pgid, sig: None)
     monkeypatch.setattr("eval.commands._wait_for_agent_port", fake_wait)
-    monkeypatch.setattr(
-        "eval.commands._run_eval_orchestrator",
-        lambda **kw: ran_models.append(kw["model"]),
-    )
+
+    async def fake_run_evaluation(**kw):  # noqa: ANN003
+        ran_models.append(kw["model"])
+
+    monkeypatch.setattr("eval.commands.run_evaluation", fake_run_evaluation)
 
     monkeypatch.chdir(root)
     result = runner.invoke(app, ["eval", "run"])
 
     # First model failed, but the sweep continued and ran the second.
     assert result.exit_code == 0, result.output
-    assert ran_models == ["m2"]
+    assert ran_models == ["openai:m2"]
     assert "1 failed" in result.output
     assert "openai:m1" in result.output

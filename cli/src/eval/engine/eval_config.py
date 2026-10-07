@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any, get_args
 
@@ -9,323 +8,135 @@ from bat.chat_model_client.config import ModelProvider
 
 from .contracts import EvalConfig, JudgeSpec, ModelSpec
 
-_ENV_VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+PROVIDERS = sorted(get_args(ModelProvider))
+JUDGE_PROMPTS = ("relevance", "task_completion", "hallucination", "tool_call")
 
-# Providers the agent's ChatModelClient actually accepts (a closed Literal in
-# bat-adk). Validated here so a bad provider fails as an upfront config error
-# instead of a late, per-episode ValidationError from the client.
-_VALID_PROVIDERS = frozenset(get_args(ModelProvider))
+DEFAULT_EVAL_YAML = """\
+evaluation:
+  dataset: eval/input/tasks.json
+  output_dir: eval/output
+  agent_startup_timeout_s: 45
+  agent_shutdown_timeout_s: 10
+  k: 1
+  qualitative: false
+  # extra_spans:   # span files of the agents this one calls
+  #   - ../other-agent/spans.jsonl
+
+judge:
+  provider: ollama
+  model: local-judge-model
+  base_url: http://localhost:11434
+  # api_key_env: BAT_JUDGE_API_KEY   # name of the env var holding the judge's API key
+  # mode: full   # outcome: one lenient score from request + final response
+  # max_trajectory_chars: 24000   # of steps shown (~4 chars/token)
+  # prompts:   # agent-specific context added to a judge's rubric
+  #   task_completion: "A draft is not a deployed network."
+
+models:
+  - provider: openai
+    model: your-model-name
+  - provider: ollama
+    model: your-local-model
+    base_url: http://localhost:11434
+"""
+
+DEFAULT_TASKS_JSON = """\
+[
+  {
+    "id": "smoke_test",
+    "turns": [
+      "Describe what you can do in one short paragraph."
+    ],
+    "expected": {
+      "status": "completed",
+      "expected_outcome": "The agent describes its capabilities clearly in one short paragraph."
+    },
+    "meta": {
+      "category": "smoke"
+    }
+  }
+]
+"""
 
 
-def _validate_provider(provider: str, *, field_name: str) -> None:
-    if provider not in _VALID_PROVIDERS:
-        raise ValueError(
-            f"{field_name}.provider '{provider}' is not supported. "
-            f"Valid providers: {', '.join(sorted(_VALID_PROVIDERS))}."
-        )
-
-
-def _to_bool(value: Any, *, default: bool) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
-def _resolve_path(base_dir: Path, raw_path: str | None, fallback: str) -> Path:
-    path_value = raw_path or fallback
-    path = Path(path_value)
-    if path.is_absolute():
-        return path
-    return (base_dir / path).resolve()
-
-
-def _to_optional_str(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _to_positive_int(value: Any, *, field_name: str, default: int) -> int:
-    raw = default if value is None else value
-    try:
-        parsed = int(raw)
-    except Exception as exc:
-        raise ValueError(f"{field_name} must be an integer") from exc
-    if parsed < 1:
-        raise ValueError(f"{field_name} must be >= 1")
-    return parsed
-
-
-def _split_provider_model(value: str, *, field_name: str) -> tuple[str, str]:
-    raw = value.strip()
-    if not raw or ":" not in raw:
-        raise ValueError(
-            f"{field_name} must use '<provider>:<model>' format when provider is omitted"
-        )
-
-    provider, model = raw.split(":", 1)
-    provider = provider.strip()
-    model = model.strip()
+def _spec(raw: Any, where: str) -> dict[str, Any]:
+    """A model or judge entry: a mapping, or a '<provider>:<model>' string."""
+    spec = {"model": raw} if isinstance(raw, str) else dict(raw)
+    provider = spec.get("provider")
+    model = str(spec.get("model") or "")
+    if not provider and ":" in model:
+        provider, model = model.split(":", 1)
     if not provider or not model:
         raise ValueError(
-            f"{field_name} must use '<provider>:<model>' format when provider is omitted"
+            f"{where} needs a provider and a model, or '<provider>:<model>'"
         )
-    return provider, model
+    if provider not in PROVIDERS:
+        raise ValueError(
+            f"{where}.provider '{provider}' is not supported. "
+            f"Valid providers: {', '.join(PROVIDERS)}."
+        )
+    env = spec.get("env") or {}
+    spec.update(
+        provider=provider,
+        model=model,
+        env={
+            key: str(value) for key, value in env.items() if value is not None
+        },
+    )
+    return spec
 
 
-_JUDGE_PROMPT_KEYS = (
-    "relevance",
-    "task_completion",
-    "hallucination",
-    "tool_call",
-)
-_JUDGE_PROMPT_MAX_LEN = 1000
-
-
-def _parse_judge_prompts(raw: Any) -> dict[str, str]:
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise ValueError("judge.prompts must be a mapping")
-
-    unknown = set(raw) - set(_JUDGE_PROMPT_KEYS)
+def _judge(raw: Any) -> JudgeSpec | None:
+    if not raw:
+        return None
+    spec = _spec(raw, "judge")
+    prompts = spec.get("prompts") or {}
+    unknown = sorted(set(prompts) - set(JUDGE_PROMPTS))
     if unknown:
         raise ValueError(
-            f"judge.prompts has unknown key(s) {sorted(unknown)}; "
-            f"allowed: {list(_JUDGE_PROMPT_KEYS)}"
+            f"judge.prompts has unknown key(s) {unknown}; "
+            f"allowed: {list(JUDGE_PROMPTS)}"
         )
-
-    out: dict[str, str] = {}
-    for key in _JUDGE_PROMPT_KEYS:
-        value = raw.get(key)
-        if value is None:
-            continue
-        if not isinstance(value, str):
-            raise ValueError(f"judge.prompts.{key} must be a string")
-        text = value.strip()
-        if not text:
-            continue
-        if len(text) > _JUDGE_PROMPT_MAX_LEN:
+    for key, text in prompts.items():
+        if len(str(text)) > 1000:
             raise ValueError(
-                f"judge.prompts.{key} exceeds the {_JUDGE_PROMPT_MAX_LEN}-character limit "
-                f"(got {len(text)})"
+                f"judge.prompts.{key} exceeds the 1000-character limit "
+                f"(got {len(str(text))})"
             )
-        out[key] = text
-    return out
-
-
-def _parse_env_map(raw: Any, *, section_name: str) -> dict[str, str]:
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise ValueError(
-            f"{section_name}.env must be a mapping of environment variables"
-        )
-
-    parsed: dict[str, str] = {}
-    for key, value in raw.items():
-        env_key = str(key).strip()
-        if not env_key or value is None:
-            continue
-        parsed[env_key] = str(value)
-    return parsed
-
-
-def _parse_model_spec(item: Any, *, section_name: str) -> ModelSpec:
-    if isinstance(item, str):
-        provider, model = _split_provider_model(item, field_name=section_name)
-        _validate_provider(provider, field_name=section_name)
-        return ModelSpec(provider=provider, model=model)
-
-    if not isinstance(item, dict):
-        raise ValueError(
-            f"{section_name} must be either a mapping or '<provider>:<model>' string"
-        )
-
-    provider = _to_optional_str(item.get("provider"))
-    model = _to_optional_str(item.get("model"))
-    base_url = _to_optional_str(item.get("base_url"))
-    env = _parse_env_map(item.get("env"), section_name=section_name)
-
-    if model and not provider and ":" in model:
-        provider, model = _split_provider_model(
-            model, field_name=f"{section_name}.model"
-        )
-
-    if not provider or not model:
-        raise ValueError(
-            f"{section_name} must define at least one valid provider and model (or model as '<provider>:<model>')"
-        )
-
-    _validate_provider(provider, field_name=section_name)
-
-    return ModelSpec(
-        provider=provider,
-        model=model,
-        base_url=base_url,
-        env=env,
-    )
-
-
-def _parse_judge_spec(item: Any) -> JudgeSpec | None:
-    if item is None:
-        return None
-
-    if isinstance(item, str):
-        provider, model = _split_provider_model(item, field_name="judge")
-        _validate_provider(provider, field_name="judge")
-        return JudgeSpec(provider=provider, model=model)
-
-    if not isinstance(item, dict):
-        raise ValueError(
-            "judge must be either a mapping or '<provider>:<model>' string"
-        )
-
-    provider = _to_optional_str(item.get("provider"))
-    model = _to_optional_str(item.get("model"))
-    base_url = _to_optional_str(item.get("base_url"))
-    api_key_env = _to_optional_str(item.get("api_key_env"))
-    env = _parse_env_map(item.get("env"), section_name="judge")
-    prompts = _parse_judge_prompts(item.get("prompts"))
-
-    if not any([provider, model, base_url, api_key_env, env, prompts]):
-        return None
-
-    if api_key_env and not _ENV_VAR_NAME.fullmatch(api_key_env):
-        raise ValueError(
-            f"judge.api_key_env is not a valid environment variable name: {api_key_env}"
-        )
-
-    if model and not provider and ":" in model:
-        provider, model = _split_provider_model(model, field_name="judge.model")
-
-    if not provider or not model:
-        raise ValueError(
-            "judge must define provider and model (or model as '<provider>:<model>')"
-        )
-
-    _validate_provider(provider, field_name="judge")
-
-    return JudgeSpec(
-        provider=provider,
-        model=model,
-        base_url=base_url,
-        api_key_env=api_key_env,
-        env=env,
-        prompts=prompts,
-    )
+    spec["prompts"] = prompts
+    return JudgeSpec(**spec)
 
 
 def load_eval_config(agent_root: Path, config_path: Path) -> EvalConfig:
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict):
-        raise ValueError("eval.yaml must define a mapping at top level")
-
-    evaluation_section = raw.get("evaluation") or {}
-    if not isinstance(evaluation_section, dict):
-        raise ValueError("evaluation section must be a mapping")
-
-    models_raw = raw.get("models") or []
-    if not isinstance(models_raw, list):
-        raise ValueError("models section must be a list")
-
-    models: list[ModelSpec] = []
-    for idx, item in enumerate(models_raw):
-        models.append(_parse_model_spec(item, section_name=f"models[{idx}]"))
-
+    evaluation = raw.get("evaluation") or {}
+    models = [
+        ModelSpec(**_spec(item, f"models[{index}]"))
+        for index, item in enumerate(raw.get("models") or [])
+    ]
     if not models:
         raise ValueError("No valid models configured in eval/eval.yaml")
-
-    dataset = _resolve_path(
-        agent_root, evaluation_section.get("dataset"), "eval/input/tasks.json"
-    )
-    output_dir = _resolve_path(
-        agent_root, evaluation_section.get("output_dir"), "eval/output"
-    )
-    agent_startup_timeout_s = _to_positive_int(
-        evaluation_section.get("agent_startup_timeout_s"),
-        field_name="evaluation.agent_startup_timeout_s",
-        default=45,
-    )
-    agent_shutdown_timeout_s = _to_positive_int(
-        evaluation_section.get("agent_shutdown_timeout_s"),
-        field_name="evaluation.agent_shutdown_timeout_s",
-        default=10,
-    )
-
-    k = int(evaluation_section.get("k", 1))
-    if k < 1:
-        raise ValueError("evaluation.k must be >= 1")
-
-    qualitative = _to_bool(evaluation_section.get("qualitative"), default=False)
-    run_name = (
-        _to_optional_str(evaluation_section.get("run_name")) or "benchmark"
-    )
-
-    judge = _parse_judge_spec(raw.get("judge"))
+    judge = _judge(raw.get("judge"))
+    qualitative = bool(evaluation.get("qualitative"))
     if qualitative and judge is None:
         raise ValueError(
-            "When evaluation.qualitative is true, set judge.provider and judge.model in eval/eval.yaml"
+            "When evaluation.qualitative is true, set judge.provider and "
+            "judge.model in eval/eval.yaml"
         )
-
+    extra_spans = evaluation.get("extra_spans") or []
+    if isinstance(extra_spans, str):
+        extra_spans = [extra_spans]
+    dataset = evaluation.get("dataset") or "eval/input/tasks.json"
+    output_dir = evaluation.get("output_dir") or "eval/output"
     return EvalConfig(
-        dataset=dataset,
-        output_dir=output_dir,
-        agent_startup_timeout_s=agent_startup_timeout_s,
-        agent_shutdown_timeout_s=agent_shutdown_timeout_s,
-        k=k,
+        dataset=(agent_root / dataset).resolve(),
+        output_dir=(agent_root / output_dir).resolve(),
+        agent_startup_timeout_s=evaluation.get("agent_startup_timeout_s", 45),
+        agent_shutdown_timeout_s=evaluation.get("agent_shutdown_timeout_s", 10),
+        k=evaluation.get("k", 1),
         qualitative=qualitative,
-        run_name=run_name,
+        run_name=evaluation.get("run_name") or "benchmark",
         models=models,
         judge=judge,
-    )
-
-
-def default_eval_yaml() -> str:
-    return (
-        "evaluation:\n"
-        "  dataset: eval/input/tasks.json\n"
-        "  output_dir: eval/output\n"
-        "  agent_startup_timeout_s: 45\n"
-        "  agent_shutdown_timeout_s: 10\n"
-        "  k: 1\n"
-        "  qualitative: false\n"
-        "\n"
-        "judge:\n"
-        "  provider: ollama\n"
-        "  model: local-judge-model\n"
-        "  base_url: http://localhost:11434\n"
-        "  # api_key_env: BAT_JUDGE_API_KEY   # name of the env var holding the judge's API key\n"
-        "\n"
-        "models:\n"
-        "  - provider: openai\n"
-        "    model: your-model-name\n"
-        "  - provider: ollama\n"
-        "    model: your-local-model\n"
-        "    base_url: http://localhost:11434\n"
-    )
-
-
-def default_tasks_json() -> str:
-    return (
-        "[\n"
-        "  {\n"
-        '    "id": "smoke_test",\n'
-        '    "turns": [\n'
-        '      "Describe what you can do in one short paragraph."\n'
-        "    ],\n"
-        '    "expected": {\n'
-        '      "status": "completed",\n'
-        '      "expected_outcome": "The agent describes its capabilities clearly in one short paragraph."\n'
-        "    },\n"
-        '    "meta": {\n'
-        '      "category": "smoke"\n'
-        "    }\n"
-        "  }\n"
-        "]\n"
+        extra_spans=[(agent_root / path).resolve() for path in extra_spans],
     )

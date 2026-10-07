@@ -1,212 +1,129 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-
-def _extract_base_task_id(task_id: str) -> str:
-    return re.sub(r"__try\d+$", "", task_id)
-
-
-def _group_episodes_by_task(per_episode: List[dict]) -> Dict[str, List[dict]]:
-    grouped: Dict[str, List[dict]] = {}
-    for episode in per_episode:
-        base_id = _extract_base_task_id(episode["task_id"])
-        grouped.setdefault(base_id, []).append(episode)
-    return grouped
+QUALITATIVE = (
+    ("response_relevance", "Response Relevance", "lightblue"),
+    ("task_completion_quality", "Task Completion", "lightgreen"),
+    ("hallucination_score", "Groundedness", "khaki"),
+)
 
 
-def _average_episodes(episodes: List[dict]) -> dict:
-    if len(episodes) == 1:
-        return episodes[0]
+def _mean(values: list) -> float:
+    values = [value for value in values if value is not None]
+    return sum(values) / len(values) if values else 0
 
-    n = len(episodes)
-    avg_time = sum(ep["time"]["wall_ms"] for ep in episodes) / n
-    avg_prompt = sum(ep["tokens"]["prompt_tokens"] for ep in episodes) / n
-    avg_completion = (
-        sum(ep["tokens"]["completion_tokens"] for ep in episodes) / n
+
+def _grade(score: float) -> str:
+    if score >= 0.8:
+        return "green"
+    if score >= 0.6:
+        return "orange"
+    return "red"
+
+
+def _style(ax, names: list[str], title: str, ylabel: str, ylim=None) -> None:
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_ylabel(ylabel)
+    ax.set_xticks(range(len(names)))
+    ax.set_xticklabels(names, rotation=45, ha="right", fontsize=8)
+    ax.grid(axis="y", alpha=0.3)
+    if ylim:
+        ax.set_ylim(0, ylim)
+
+
+def _labels(ax, bars, values: list, fmt: str) -> None:
+    for bar, value in zip(bars, values, strict=False):
+        if value:
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height(),
+                fmt.format(value),
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+
+def _bars(ax, names: list[str], values: list, fmt: str, color) -> None:
+    bars = ax.bar(range(len(names)), values, color=color, alpha=0.7)
+    _labels(ax, bars, values, fmt)
+
+
+def _tokens(ax, names: list[str], prompt: list, completion: list) -> None:
+    x = range(len(names))
+    ax.bar(x, prompt, label="Prompt Tokens", color="cornflowerblue", alpha=0.8)
+    ax.bar(
+        x,
+        completion,
+        bottom=prompt,
+        label="Completion Tokens",
+        color="lightcoral",
+        alpha=0.8,
     )
-    avg_total = sum(ep["tokens"]["total_tokens"] for ep in episodes) / n
-    success_rate = sum(ep["success"] for ep in episodes) / n
-
-    result = {
-        "task_id": _extract_base_task_id(episodes[0]["task_id"]),
-        "status": episodes[0]["status"],
-        "success": success_rate >= 0.5,
-        "success_rate": success_rate,
-        "attempts": n,
-        "time": {"wall_ms": avg_time},
-        "tokens": {
-            "prompt_tokens": avg_prompt,
-            "completion_tokens": avg_completion,
-            "total_tokens": avg_total,
-        },
-    }
-
-    qual_episodes = [ep for ep in episodes if "qualitative" in ep]
-    if qual_episodes:
-        relevance_vals = [
-            ep["qualitative"]["response_relevance"]
-            for ep in qual_episodes
-            if ep["qualitative"].get("response_relevance") is not None
-        ]
-        completion_vals = [
-            ep["qualitative"]["task_completion_quality"]
-            for ep in qual_episodes
-            if ep["qualitative"].get("task_completion_quality") is not None
-        ]
-        hallucination_vals = [
-            ep["qualitative"]["hallucination_score"]
-            for ep in qual_episodes
-            if ep["qualitative"].get("hallucination_score") is not None
-        ]
-
-        result["qualitative"] = {
-            "response_relevance": sum(relevance_vals) / len(relevance_vals)
-            if relevance_vals
-            else 0,
-            "task_completion_quality": sum(completion_vals)
-            / len(completion_vals)
-            if completion_vals
-            else 0,
-            "hallucination_score": sum(hallucination_vals)
-            / len(hallucination_vals)
-            if hallucination_vals
-            else 0,
-        }
-
-    return result
+    ax.legend(fontsize=8)
 
 
-def _get_per_episode_averages(metrics_data: dict) -> List[dict]:
-    per_episode = metrics_data.get("per_episode", [])
-    if not per_episode:
-        return []
-    grouped = _group_episodes_by_task(per_episode)
-    return [_average_episodes(episodes) for episodes in grouped.values()]
-
-
-def _qual_score(episode: dict, key: str) -> float:
-    """Read a qualitative score from an episode, coalescing missing/null to 0.
-
-    An episode can carry an explicit ``None`` for a qualitative metric (a judge
-    that failed or was not run), and with ``k == 1`` ``_average_episodes`` hands
-    the raw episode through unchanged. ``dict.get(key, 0)`` does NOT substitute
-    the default when the key is present with value ``None`` -- that ``None``
-    would then flow into a matplotlib bar list and raise ``TypeError``, killing
-    ``bat eval plot`` and leaking every open figure.
-    """
-    value = episode.get("qualitative", {}).get(key)
-    return value if value is not None else 0
-
-
-def _plot_comparison(metrics: Dict[str, dict]) -> List[Tuple[str, plt.Figure]]:
-    """Build summary comparison charts across runs. Returns (name, figure) pairs."""
-    if not metrics:
-        return []
-
-    run_names = list(metrics.keys())
-    display_names = list(run_names)
-
-    has_qualitative = any(
-        "qualitative" in m.get("summary", {}) for m in metrics.values()
-    )
-
-    times, prompt_tokens, completion_tokens, total_tokens = [], [], [], []
-    relevance_scores, completion_quality_scores, hallucination_scores = (
-        [],
-        [],
-        [],
-    )
-
-    for name in run_names:
-        summary = metrics[name].get("summary", {})
-        times.append(summary.get("time", {}).get("total_wall_ms", 0) / 1000)
-        tokens = summary.get("tokens", {})
-        prompt_tokens.append(tokens.get("prompt_tokens_total", 0))
-        completion_tokens.append(tokens.get("completion_tokens_total", 0))
-        total_tokens.append(tokens.get("total_tokens_total", 0))
-        qual = summary.get("qualitative", {})
-        relevance_scores.append(
-            qual.get("response_relevance", {}).get("avg", None)
-        )
-        completion_quality_scores.append(
-            qual.get("task_completion_quality", {}).get("avg", None)
-        )
-        hallucination_scores.append(
-            qual.get("hallucination_score", {}).get("avg", None)
-        )
-
-    figures: List[Tuple[str, plt.Figure]] = []
-
-    # 1. Total execution time
-    fig1, ax1 = plt.subplots(figsize=(10, 6))
-    bars1 = ax1.bar(range(len(run_names)), times, color="steelblue", alpha=0.7)
-    ax1.set_xlabel("Run")
-    ax1.set_ylabel("Time (seconds)")
-    ax1.set_title("Total Execution Time", fontsize=14, fontweight="bold")
-    ax1.set_xticks(range(len(run_names)))
-    ax1.set_xticklabels(display_names, rotation=45, ha="right", fontsize=8)
-    ax1.grid(axis="y", alpha=0.3)
-    for bar, val in zip(bars1, times, strict=False):
-        ax1.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height(),
-            f"{val:.1f}s",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-        )
-    fig1.tight_layout()
-    figures.append(("execution_time", fig1))
-
-    # 2. Time vs tokens mirror chart
-    fig2, ax2 = plt.subplots(figsize=(max(10, len(run_names) * 1.2), 7))
-    x2 = range(len(run_names))
-    max_time = max(times) if max(times) > 0 else 1
-    max_tok = max(total_tokens) if max(total_tokens) > 0 else 1
-    times_norm = [t / max_time for t in times]
-    tokens_norm = [-t / max_tok for t in total_tokens]
-    ax2.bar(
-        x2, times_norm, color="steelblue", alpha=0.75, label="Execution Time"
-    )
-    ax2.bar(
-        x2, tokens_norm, color="darkorange", alpha=0.75, label="Total Tokens"
-    )
-    ax2.axhline(0, color="black", linewidth=0.8)
-    for xi, t_n, t_val, tok_n, tok_val in zip(
-        x2, times_norm, times, tokens_norm, total_tokens, strict=False
+def _scores(ax, names: list[str], scores: dict[str, list]) -> None:
+    width = 0.25
+    for offset, (field, label, color) in zip(
+        (-width, 0, width), QUALITATIVE, strict=True
     ):
-        ax2.text(
-            xi,
-            t_n + 0.02,
-            f"{t_val:.1f}s",
+        x = [index + offset for index in range(len(names))]
+        ax.bar(x, scores[field], width, label=label, color=color, alpha=0.8)
+    ax.axhline(y=0.7, color="orange", linestyle="--", alpha=0.3)
+    ax.legend(fontsize=8)
+
+
+def _time_vs_tokens(names: list[str], times: list, totals: list):
+    fig, ax = plt.subplots(figsize=(max(10, len(names) * 1.2), 7))
+    max_time = max(times) or 1
+    max_tokens = max(totals) or 1
+    x = range(len(names))
+    ax.bar(
+        x,
+        [t / max_time for t in times],
+        color="steelblue",
+        alpha=0.75,
+        label="Execution Time",
+    )
+    ax.bar(
+        x,
+        [-t / max_tokens for t in totals],
+        color="darkorange",
+        alpha=0.75,
+        label="Total Tokens",
+    )
+    ax.axhline(0, color="black", linewidth=0.8)
+    for index, (time_s, tokens) in enumerate(zip(times, totals, strict=True)):
+        ax.text(
+            index,
+            time_s / max_time + 0.02,
+            f"{time_s:.1f}s",
             ha="center",
             va="bottom",
             fontsize=8,
             color="steelblue",
         )
-        ax2.text(
-            xi,
-            tok_n - 0.02,
-            f"{tok_val:,}",
+        ax.text(
+            index,
+            -tokens / max_tokens - 0.02,
+            f"{tokens:,}",
             ha="center",
             va="top",
             fontsize=8,
             color="darkorange",
         )
-    ax2.set_xticks(x2)
-    ax2.set_xticklabels(display_names, rotation=45, ha="right", fontsize=8)
-    ax2.set_yticks([-1, -0.5, 0, 0.5, 1])
-    ax2.set_yticklabels(
+    _style(ax, names, "Execution Time ↑  vs  Total Tokens ↓", "")
+    ax.set_yticks([-1, -0.5, 0, 0.5, 1])
+    ax.set_yticklabels(
         [
-            f"max\n({max_tok:,} tok)",
+            f"max\n({max_tokens:,} tok)",
             "50%",
             "0",
             "50%",
@@ -214,352 +131,162 @@ def _plot_comparison(metrics: Dict[str, dict]) -> List[Tuple[str, plt.Figure]]:
         ],
         fontsize=8,
     )
-    ax2.set_title(
-        "Execution Time ↑  vs  Total Tokens ↓", fontsize=14, fontweight="bold"
-    )
-    ax2.legend(fontsize=9)
-    ax2.grid(axis="y", alpha=0.2)
-    fig2.tight_layout()
-    figures.append(("time_vs_total_tokens", fig2))
+    ax.legend(fontsize=9)
+    return fig
 
-    # 3. Token usage stacked
-    fig3, ax3 = plt.subplots(figsize=(10, 6))
-    x3 = range(len(run_names))
-    ax3.bar(
-        x3,
-        prompt_tokens,
-        label="Prompt Tokens",
-        color="cornflowerblue",
-        alpha=0.8,
-    )
-    ax3.bar(
-        x3,
-        completion_tokens,
-        bottom=prompt_tokens,
-        label="Completion Tokens",
-        color="lightcoral",
-        alpha=0.8,
-    )
-    ax3.set_xlabel("Run")
-    ax3.set_ylabel("Token Count")
-    ax3.set_title(
-        "Token Usage (Prompt vs Completion)", fontsize=14, fontweight="bold"
-    )
-    ax3.set_xticks(x3)
-    ax3.set_xticklabels(display_names, rotation=45, ha="right", fontsize=8)
-    ax3.legend()
-    ax3.grid(axis="y", alpha=0.3)
-    fig3.tight_layout()
-    figures.append(("token_usage", fig3))
 
-    # 4. Total tokens
-    fig4, ax4 = plt.subplots(figsize=(10, 6))
-    bars4 = ax4.bar(
-        range(len(run_names)), total_tokens, color="mediumpurple", alpha=0.7
-    )
-    ax4.set_xlabel("Run")
-    ax4.set_ylabel("Total Tokens")
-    ax4.set_title("Total Tokens", fontsize=14, fontweight="bold")
-    ax4.set_xticks(range(len(run_names)))
-    ax4.set_xticklabels(display_names, rotation=45, ha="right", fontsize=8)
-    ax4.grid(axis="y", alpha=0.3)
-    for bar, val in zip(bars4, total_tokens, strict=False):
-        ax4.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height(),
-            f"{val:,}",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-        )
-    fig4.tight_layout()
-    figures.append(("total_tokens", fig4))
+def _run_charts(metrics: dict[str, dict]) -> list[tuple[str, plt.Figure]]:
+    """Charts comparing the runs as a whole."""
+    names = list(metrics)
+    summaries = [data.get("summary", {}) for data in metrics.values()]
+    times = [
+        s.get("time", {}).get("total_wall_ms", 0) / 1000 for s in summaries
+    ]
+    tokens = [s.get("tokens", {}) for s in summaries]
+    prompt = [t.get("prompt_tokens_total", 0) for t in tokens]
+    completion = [t.get("completion_tokens_total", 0) for t in tokens]
+    totals = [t.get("total_tokens_total", 0) for t in tokens]
+    figures = []
 
-    if not has_qualitative:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    _bars(ax, names, times, "{:.1f}s", "steelblue")
+    _style(ax, names, "Total Execution Time", "Time (seconds)")
+    figures.append(("execution_time", fig))
+
+    figures.append(
+        ("time_vs_total_tokens", _time_vs_tokens(names, times, totals))
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    _tokens(ax, names, prompt, completion)
+    _style(ax, names, "Token Usage (Prompt vs Completion)", "Token Count")
+    figures.append(("token_usage", fig))
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    _bars(ax, names, totals, "{:,}", "mediumpurple")
+    _style(ax, names, "Total Tokens", "Total Tokens")
+    figures.append(("total_tokens", fig))
+
+    if not any("qualitative" in s for s in summaries):
         return figures
-
-    # 5. Combined qualitative
-    fig5, ax5 = plt.subplots(figsize=(10, 6))
-    x_pos = range(len(run_names))
-    width = 0.25
-    rel_vals = [v if v is not None else 0 for v in relevance_scores]
-    comp_vals = [v if v is not None else 0 for v in completion_quality_scores]
-    hall_vals = [v if v is not None else 0 for v in hallucination_scores]
-    ax5.bar(
-        [i - width for i in x_pos],
-        rel_vals,
-        width,
-        label="Response Relevance",
-        color="lightblue",
-        alpha=0.8,
-    )
-    ax5.bar(
-        x_pos,
-        comp_vals,
-        width,
-        label="Task Completion",
-        color="lightgreen",
-        alpha=0.8,
-    )
-    ax5.bar(
-        [i + width for i in x_pos],
-        hall_vals,
-        width,
-        label="Groundedness",
-        color="khaki",
-        alpha=0.8,
-    )
-    ax5.set_xlabel("Run")
-    ax5.set_ylabel("Score (0-1)")
-    ax5.set_title(
-        "Qualitative Metrics (LLM Judge)", fontsize=14, fontweight="bold"
-    )
-    ax5.set_xticks(x_pos)
-    ax5.set_xticklabels(display_names, rotation=45, ha="right", fontsize=8)
-    ax5.set_ylim(0, 1.1)
-    ax5.legend(fontsize=8)
-    ax5.grid(axis="y", alpha=0.3)
-    ax5.axhline(y=0.7, color="orange", linestyle="--", alpha=0.3)
-    fig5.tight_layout()
-    figures.append(("qualitative_metrics", fig5))
-
-    # 6–8. Individual qualitative charts
-    for metric_name, vals, title in [
-        ("response_relevance", rel_vals, "Response Relevance"),
-        ("task_completion_quality", comp_vals, "Task Completion Quality"),
-        (
-            "hallucination_score",
-            hall_vals,
-            "Groundedness (Hallucination Score)",
-        ),
-    ]:
+    scores = {
+        field: [
+            (s.get("qualitative", {}).get(field) or {}).get("avg") or 0
+            for s in summaries
+        ]
+        for field, _, _ in QUALITATIVE
+    }
+    fig, ax = plt.subplots(figsize=(10, 6))
+    _scores(ax, names, scores)
+    _style(ax, names, "Qualitative Metrics (LLM Judge)", "Score (0-1)", 1.1)
+    figures.append(("qualitative_metrics", fig))
+    for field, label, _ in QUALITATIVE:
         fig, ax = plt.subplots(figsize=(10, 6))
-        colors = [
-            "green" if s >= 0.8 else "orange" if s >= 0.6 else "red"
-            for s in vals
-        ]
-        bars = ax.bar(range(len(run_names)), vals, color=colors, alpha=0.7)
-        ax.set_xlabel("Run")
-        ax.set_ylabel("Score (0-1)")
-        ax.set_title(title, fontsize=14, fontweight="bold")
-        ax.set_xticks(range(len(run_names)))
-        ax.set_xticklabels(display_names, rotation=45, ha="right", fontsize=8)
-        ax.set_ylim(0, 1.1)
-        ax.grid(axis="y", alpha=0.3)
-        ax.axhline(y=0.8, color="green", linestyle="--", alpha=0.3, linewidth=1)
-        ax.axhline(
-            y=0.6, color="orange", linestyle="--", alpha=0.3, linewidth=1
+        _bars(
+            ax,
+            names,
+            scores[field],
+            "{:.3f}",
+            [_grade(v) for v in scores[field]],
         )
-        for bar, val in zip(bars, vals, strict=False):
-            if val > 0:
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    bar.get_height(),
-                    f"{val:.3f}",
-                    ha="center",
-                    va="bottom",
-                    fontsize=8,
-                )
-        fig.tight_layout()
-        figures.append((metric_name, fig))
-
+        _style(ax, names, label, "Score (0-1)", 1.1)
+        ax.axhline(y=0.8, color="green", linestyle="--", alpha=0.3)
+        ax.axhline(y=0.6, color="orange", linestyle="--", alpha=0.3)
+        figures.append((field, fig))
     return figures
 
 
-def _plot_per_episode_comparison(
-    metrics: Dict[str, dict],
-    task_filter: str | None = None,
-) -> List[Tuple[str, plt.Figure]]:
-    """Build per-task charts comparing all runs. Returns (name, figure) pairs.
+def _per_task(per_episode: list[dict]) -> dict[str, dict]:
+    """Each task's attempts, averaged."""
+    attempts: dict[str, list[dict]] = {}
+    for episode in per_episode:
+        attempts.setdefault(episode["task_id"], []).append(episode)
+    averages = {}
+    for task_id, tries in attempts.items():
+        row = {
+            "wall_ms": _mean([e["time"]["wall_ms"] for e in tries]),
+            "prompt": _mean([e["tokens"]["prompt_tokens"] for e in tries]),
+            "completion": _mean(
+                [e["tokens"]["completion_tokens"] for e in tries]
+            ),
+            "qualitative": any("qualitative" in e for e in tries),
+        }
+        for field, _, _ in QUALITATIVE:
+            row[field] = _mean(
+                [(e.get("qualitative") or {}).get(field) for e in tries]
+            )
+        averages[task_id] = row
+    return averages
 
-    If ``task_filter`` is provided, only tasks whose id contains the substring
-    are plotted.
-    """
-    if not metrics:
-        return []
 
-    tasks_by_model: Dict[str, Dict[str, dict]] = {}
-    all_task_ids: set = set()
-
-    for run_name, data in metrics.items():
-        episodes = _get_per_episode_averages(data)
-        tasks_by_model[run_name] = {ep["task_id"]: ep for ep in episodes}
-        all_task_ids.update(ep["task_id"] for ep in episodes)
-
-    if not all_task_ids:
-        return []
-
-    if task_filter:
-        all_task_ids = {tid for tid in all_task_ids if task_filter in tid}
-        if not all_task_ids:
-            return []
-
-    sorted_tasks = sorted(all_task_ids)
-    model_names = list(metrics.keys())
-    has_qualitative = any(
-        any("qualitative" in ep for ep in _get_per_episode_averages(data))
-        for data in metrics.values()
+def _task_charts(
+    metrics: dict[str, dict], task_filter: str | None
+) -> list[tuple[str, plt.Figure]]:
+    """One chart per task, comparing the runs on it."""
+    runs = {
+        name: _per_task(data.get("per_episode", []))
+        for name, data in metrics.items()
+    }
+    task_ids = sorted(
+        {
+            task_id
+            for tasks in runs.values()
+            for task_id in tasks
+            if not task_filter or task_filter in task_id
+        }
     )
-
-    figures: List[Tuple[str, plt.Figure]] = []
-
-    for task_id in sorted_tasks:
-        task_data = []
-        available_models = []
-        for run_name in model_names:
-            if task_id in tasks_by_model[run_name]:
-                task_data.append(tasks_by_model[run_name][task_id])
-                available_models.append(run_name)
-
-        if not task_data:
-            continue
-
-        display_names = list(available_models)
-        n_plots = 3 if has_qualitative else 2
+    qualitative = any(
+        row["qualitative"] for tasks in runs.values() for row in tasks.values()
+    )
+    figures = []
+    for task_id in task_ids:
+        names = [name for name, tasks in runs.items() if task_id in tasks]
+        rows = [runs[name][task_id] for name in names]
+        count = 3 if qualitative else 2
         fig, axes = plt.subplots(
-            n_plots, 1, figsize=(max(10, len(task_data) * 0.8), 4 * n_plots)
+            count, 1, figsize=(max(10, len(rows) * 0.8), 4 * count)
         )
-        if n_plots == 1:
-            axes = [axes]
-
         fig.suptitle(f"Task: {task_id}", fontsize=14, fontweight="bold")
-
-        # Time
-        times = [ep["time"]["wall_ms"] / 1000 for ep in task_data]
-        axes[0].bar(
-            range(len(display_names)), times, color="steelblue", alpha=0.7
+        _bars(
+            axes[0],
+            names,
+            [row["wall_ms"] / 1000 for row in rows],
+            "{:.1f}s",
+            "steelblue",
         )
-        axes[0].set_ylabel("Time (s)", fontsize=11)
-        axes[0].set_title(
-            "Execution Time by Model", fontsize=12, fontweight="bold"
+        _style(axes[0], names, "Execution Time by Model", "Time (s)")
+        _tokens(
+            axes[1],
+            names,
+            [row["prompt"] for row in rows],
+            [row["completion"] for row in rows],
         )
-        axes[0].set_xticks(range(len(display_names)))
-        axes[0].set_xticklabels(
-            display_names, rotation=45, ha="right", fontsize=10
-        )
-        axes[0].grid(axis="y", alpha=0.3)
-        for bar, val in zip(axes[0].patches, times, strict=False):
-            axes[0].text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height(),
-                f"{val:.1f}s",
-                ha="center",
-                va="bottom",
-                fontsize=9,
+        _style(axes[1], names, "Token Usage by Model", "Tokens")
+        if qualitative:
+            _scores(
+                axes[2],
+                names,
+                {
+                    field: [row[field] for row in rows]
+                    for field, _, _ in QUALITATIVE
+                },
             )
-
-        # Tokens
-        prompt_tokens = [ep["tokens"]["prompt_tokens"] for ep in task_data]
-        completion_tokens = [
-            ep["tokens"]["completion_tokens"] for ep in task_data
-        ]
-        x = range(len(display_names))
-        axes[1].bar(
-            x, prompt_tokens, label="Prompt", color="cornflowerblue", alpha=0.8
-        )
-        axes[1].bar(
-            x,
-            completion_tokens,
-            bottom=prompt_tokens,
-            label="Completion",
-            color="lightcoral",
-            alpha=0.8,
-        )
-        axes[1].set_ylabel("Tokens", fontsize=11)
-        axes[1].set_title(
-            "Token Usage by Model", fontsize=12, fontweight="bold"
-        )
-        axes[1].set_xticks(x)
-        axes[1].set_xticklabels(
-            display_names, rotation=45, ha="right", fontsize=10
-        )
-        axes[1].legend(fontsize=9)
-        axes[1].grid(axis="y", alpha=0.3)
-
-        # Qualitative
-        if has_qualitative:
-            width = 0.25
-            x_pos = range(len(display_names))
-            relevance = [
-                _qual_score(ep, "response_relevance") for ep in task_data
-            ]
-            completion_q = [
-                _qual_score(ep, "task_completion_quality")
-                for ep in task_data
-            ]
-            hallucination = [
-                _qual_score(ep, "hallucination_score") for ep in task_data
-            ]
-            axes[2].bar(
-                [i - width for i in x_pos],
-                relevance,
-                width,
-                label="Relevance",
-                color="lightblue",
-                alpha=0.8,
-            )
-            axes[2].bar(
-                x_pos,
-                completion_q,
-                width,
-                label="Completion",
-                color="lightgreen",
-                alpha=0.8,
-            )
-            axes[2].bar(
-                [i + width for i in x_pos],
-                hallucination,
-                width,
-                label="Groundedness",
-                color="khaki",
-                alpha=0.8,
-            )
-            axes[2].set_ylabel("Score", fontsize=11)
-            axes[2].set_title(
-                "Qualitative Metrics by Model", fontsize=12, fontweight="bold"
-            )
-            axes[2].set_xticks(x_pos)
-            axes[2].set_xticklabels(
-                display_names, rotation=45, ha="right", fontsize=10
-            )
-            axes[2].set_ylim(0, 1.1)
-            axes[2].legend(fontsize=9)
-            axes[2].grid(axis="y", alpha=0.3)
-            axes[2].axhline(y=0.7, color="orange", linestyle="--", alpha=0.3)
-
-        fig.tight_layout()
-        safe_task = (
-            task_id.replace(":", "-").replace("/", "-").replace(" ", "_")
-        )
-        figures.append((f"per_task_{safe_task}", fig))
-
+            _style(axes[2], names, "Qualitative Metrics by Model", "Score", 1.1)
+        safe = task_id.replace(":", "-").replace("/", "-").replace(" ", "_")
+        figures.append((f"per_task_{safe}", fig))
     return figures
 
 
-def _save_figures(
-    figures: List[Tuple[str, plt.Figure]], output_dir: Path
-) -> List[Path]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    saved: List[Path] = []
-    for name, fig in figures:
+def generate_and_save_plots(
+    metrics: dict[str, dict], output_dir: Path, task_filter: str | None = None
+) -> list[Path]:
+    """Save the run charts and the per-task ones (only tasks whose id
+    contains task_filter, when given) as PNGs in output_dir."""
+    saved = []
+    for name, fig in _run_charts(metrics) + _task_charts(metrics, task_filter):
+        fig.tight_layout()
         path = output_dir / f"metrics_{name}.png"
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         saved.append(path)
     return saved
-
-
-def generate_and_save_plots(
-    metrics: Dict[str, dict],
-    output_dir: Path,
-    task_filter: str | None = None,
-) -> List[Path]:
-    """Generate all comparison and per-task charts and save them to output_dir.
-
-    ``task_filter`` is a substring match against ``task_id`` and restricts
-    the per-task charts only. Summary/comparison charts always reflect the
-    full run.
-    """
-    figures = _plot_comparison(metrics)
-    figures += _plot_per_episode_comparison(metrics, task_filter=task_filter)
-    return _save_figures(figures, output_dir)
