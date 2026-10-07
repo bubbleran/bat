@@ -45,7 +45,7 @@ packaging = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["cli", "image_defaults", "project"]
+py-modules = ["cli", "image", "project"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

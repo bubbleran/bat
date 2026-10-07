@@ -5,13 +5,17 @@ import click
 import typer
 from typer.core import TyperGroup
 
-from build.build import build_image
 from create.agent import create_agent_scaffold, write_llm_clients
 from create.blueprint import add_agent_to_blueprint, create_blueprint_scaffold
 from eval.commands import eval_init, eval_plot, eval_run, eval_show
-from project import fail, find_blueprint_root
-from push.push import push_image
-from set.env import set_agent_settings
+from image import build_image, project_dir, push_image
+from project import (
+    ProjectError,
+    fail,
+    find_blueprint_root,
+    resolve_agent_target,
+)
+from set.settings import set_config, set_image
 
 _BANNER = r"""
  ____    _  _____    ____ _     ___
@@ -50,7 +54,9 @@ class BannerGroup(TyperGroup):
 app = typer.Typer(cls=BannerGroup)
 init_app = typer.Typer(help="Create new BAT resources.")
 add_app = typer.Typer(help="Add new components to existing BAT agents.")
-set_app = typer.Typer(help="Set configuration values for existing BAT agents.")
+set_app = typer.Typer(
+    help="Set an agent's config.yaml, or the image settings in the Makefile."
+)
 eval_app = typer.Typer(
     help="Run local evaluation workflows for existing BAT agents."
 )
@@ -60,8 +66,8 @@ app.add_typer(add_app, name="add")
 app.add_typer(set_app, name="set")
 app.add_typer(eval_app, name="eval")
 
-app.command("build", help="Build the Docker image for the agent.")(build_image)
-app.command("push", help="Push the Docker image to a registry.")(push_image)
+app.command("build")(build_image)
+app.command("push")(push_image)
 eval_app.command("init", help="Initialize local evaluation scaffold.")(
     eval_init
 )
@@ -322,17 +328,20 @@ def add_new_agent(
     typer.echo(f"Run it with: make {name.lower()}")
 
 
-@set_app.command("env")
-def set_agent_env(
-    port: int | None = typer.Option(
+@set_app.command("config")
+def set_agent_config(
+    agent: str | None = typer.Argument(
         None,
-        "--port",
-        help="Set endpoint.port in config.yaml.",
+        help=(
+            "The agent to set, inside a blueprint. Default: the agent folder "
+            "you are in."
+        ),
+    ),
+    port: int | None = typer.Option(
+        None, "--port", help="Set endpoint.port in config.yaml."
     ),
     model: str | None = typer.Option(
-        None,
-        "--model",
-        help="Set model.name in config.yaml.",
+        None, "--model", help="Set model.name in config.yaml."
     ),
     model_provider: str | None = typer.Option(
         None,
@@ -340,52 +349,60 @@ def set_agent_env(
         "--model_provider",
         help="Set model.provider in config.yaml.",
     ),
+) -> None:
+    if port is None and model is None and model_provider is None:
+        fail(
+            "Provide at least one option to set: --port, --model, "
+            "--model-provider"
+        )
+    try:
+        target = resolve_agent_target(Path.cwd(), agent)
+    except ProjectError as exc:
+        fail(str(exc))
+
+    updated = set_config(
+        target.agent_dir, port=port, model=model, model_provider=model_provider
+    )
+    typer.secho(
+        f"Updated: {target.config_path.resolve()}", fg=typer.colors.GREEN
+    )
+    typer.echo(f"Keys updated: {', '.join(updated)}")
+
+
+@set_app.command("image")
+def set_image_settings(
     docker_registry: str | None = typer.Option(
         None,
         "--docker-registry",
-        help="Set BAT_DOCKER_REGISTRY in .env for build/push defaults.",
+        help="Set DOCKER_REGISTRY: the registry bat build / bat push use.",
     ),
     repo: str | None = typer.Option(
         None,
         "--repo",
-        help="Set BAT_DOCKER_REPO in .env for build/push defaults.",
+        help="Set REPO: the image repository bat build / bat push use.",
     ),
 ) -> None:
-    current_dir = Path.cwd()
-    config = current_dir / "config.yaml"
-    if not config.is_file():
-        typer.secho(
-            "Current directory must contain config.yaml. Run this command from the root of an existing agent.",
-            fg=typer.colors.RED,
-            err=True,
+    """Set the image settings in the Makefile (the blueprint's, from one of
+    its agent folders), where make reads them as well as bat build."""
+    if docker_registry is None and repo is None:
+        fail("Provide at least one option to set: --docker-registry, --repo")
+
+    makefile = project_dir(Path.cwd()) / "Makefile"
+    if not makefile.is_file():
+        fail(
+            f"No Makefile in {makefile.parent}: pass --docker-registry and "
+            "--repo to bat build and bat push instead."
         )
-        raise typer.Exit(code=1)
-
-    if all(
-        value is None
-        for value in [port, model, model_provider, docker_registry, repo]
-    ):
-        typer.secho(
-            "Provide at least one option to set: --port, --model, --model-provider, --docker-registry, --repo",
-            fg=typer.colors.RED,
-            err=True,
+    try:
+        updated = set_image(
+            makefile, docker_registry=docker_registry, repo=repo
         )
-        raise typer.Exit(code=1)
+    except ValueError as exc:
+        fail(str(exc))
 
-    written, updated_keys = set_agent_settings(
-        current_dir,
-        port=port,
-        model=model,
-        model_provider=model_provider,
-        docker_registry=docker_registry,
-        repo=repo,
-    )
+    typer.secho(f"Updated: {makefile.resolve()}", fg=typer.colors.GREEN)
+    typer.echo(f"Keys updated: {', '.join(updated)}")
 
-    typer.secho(
-        f"Updated: {', '.join(str(p.resolve()) for p in written)}",
-        fg=typer.colors.GREEN,
-    )
-    typer.echo(f"Keys updated: {', '.join(updated_keys)}")
 
 def main() -> None:
     app()
