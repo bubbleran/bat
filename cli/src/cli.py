@@ -9,6 +9,7 @@ from create.agent import create_agent_scaffold, write_llm_clients
 from create.blueprint import add_agent_to_blueprint, create_blueprint_scaffold
 from eval.commands import eval_init, eval_plot, eval_run, eval_show
 from image import build_image, project_dir, push_image
+from manifests.commands import generate_aifabric, generate_composition_model
 from project import (
     ProjectError,
     fail,
@@ -60,11 +61,13 @@ set_app = typer.Typer(
 eval_app = typer.Typer(
     help="Run local evaluation workflows for existing BAT agents."
 )
+manifests_app = typer.Typer(help="Generate cluster manifests for a blueprint.")
 
 app.add_typer(init_app, name="init")
 app.add_typer(add_app, name="add")
 app.add_typer(set_app, name="set")
 app.add_typer(eval_app, name="eval")
+app.add_typer(manifests_app, name="manifests")
 
 app.command("build")(build_image)
 app.command("push")(push_image)
@@ -78,6 +81,8 @@ eval_app.command("show", help="Show the resolved evaluation configuration.")(
 eval_app.command(
     "plot", help="Generate metric charts from an evaluation output folder."
 )(eval_plot)
+manifests_app.command("aifabric")(generate_aifabric)
+manifests_app.command("composition-model")(generate_composition_model)
 
 _CLIENTS_EXAMPLE = "reformulator,planner,executor"
 
