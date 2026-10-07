@@ -105,6 +105,8 @@ class AgentApplication:
                 provider=self._config.model.provider,
                 name=self._config.model.name,
                 base_url=self._config.model.base_url,
+                reasoning_effort=self._config.model.reasoning_effort,
+                service_tier=self._config.model.service_tier,
             )
 
         endpoint = self._config.endpoint
