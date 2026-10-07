@@ -11,7 +11,7 @@ import pytest
 
 # Top-level modules a generated project brings: every test generates them
 # under the same names, so they are imported fresh and forgotten afterwards.
-_GENERATED_MODULES = {"src", "telemetry_floor"}
+_GENERATED_MODULES = {"src"}
 
 
 def _forget(top_level: set[str]) -> None:
@@ -55,18 +55,3 @@ def floor_given_to_the_application(monkeypatch):
 
     yield start
     _forget(touched)
-
-
-@pytest.fixture
-def image_floor():
-    """Read the default of the Dockerfile's TELEMETRY_PRIVACY_FLOOR build arg,
-    the floor every agent in the image is frozen with."""
-
-    def read(project_root: Path) -> str:
-        dockerfile = (project_root / "Dockerfile").read_text(encoding="utf-8")
-        for line in dockerfile.splitlines():
-            if line.startswith("ARG TELEMETRY_PRIVACY_FLOOR="):
-                return line.split("=", 1)[1]
-        raise AssertionError("Dockerfile declares no TELEMETRY_PRIVACY_FLOOR")
-
-    return read

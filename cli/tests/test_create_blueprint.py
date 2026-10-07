@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
+import sys
 import tomllib
+import types
 from pathlib import Path
 
 import pytest
@@ -80,20 +84,161 @@ def test_init_blueprint_installs_pyinstaller_with_the_project(
     assert any(req.startswith("pyinstaller") for req in dev)
 
 
-def test_init_blueprint_dispatcher_has_an_empty_managed_region(
+def _stub_agent(root: Path, name: str) -> None:
+    """An agent folder whose run() prints how it was started."""
+    (root / name).mkdir()
+    (root / name / "agent.json").write_text("{}", encoding="utf-8")
+    (root / name / "__init__.py").write_text(
+        "import os\nimport sys\n\n\ndef run():\n"
+        "    print('ran', __name__, sys.argv)\n"
+        "    print('config', os.environ.get('CONFIG_PATH'))\n",
+        encoding="utf-8",
+    )
+
+
+def _dispatch(
+    root: Path, *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
+    """Run the blueprint's entrypoint the way `uv run . <agent>` does."""
+    base = {k: v for k, v in os.environ.items() if k != "CONFIG_PATH"}
+    return subprocess.run(
+        [sys.executable, "__main__.py", *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        env={**base, **(env or {})},
+    )
+
+
+def _fresh_blueprint(tmp_path: Path, monkeypatch) -> Path:
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "blueprint", "demo"])
+    return tmp_path / "demo"
+
+
+def test_the_dispatcher_runs_the_agent_named_first(
     tmp_path, monkeypatch
 ) -> None:
-    monkeypatch.chdir(tmp_path)
+    """No list of agents to keep in sync: any agent folder can be run, and
+    the rest of the arguments are handed on to it."""
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    _stub_agent(root, "netops")
 
-    runner.invoke(app, ["init", "blueprint", "demo"])
+    result = _dispatch(root, "netops", "--verbose")
 
-    main = (Path("demo") / "__main__.py").read_text(encoding="utf-8")
-    assert "# bat:agents:begin" in main
-    assert "# bat:agents:end" in main
-    assert "APPS: set[str] = set()" in main
-    # The frozen binary needs static imports, so the dispatcher must
-    # never reach for importlib.
-    assert "importlib" not in main
+    assert result.returncode == 0, result.stderr
+    assert "ran netops ['netops', '--verbose']" in result.stdout
+
+
+def test_the_dispatcher_points_the_agent_at_its_own_config(
+    tmp_path, monkeypatch
+) -> None:
+    """`uv run . netops` works on its own: run from the blueprint root, the
+    agent's config is netops/config.yaml, not ./config.yaml."""
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    _stub_agent(root, "netops")
+
+    result = _dispatch(root, "netops")
+
+    assert "config netops/config.yaml" in result.stdout, result.stderr
+
+
+def test_a_config_path_already_set_is_kept(tmp_path, monkeypatch) -> None:
+    """docker-compose.yaml and `bat eval` set CONFIG_PATH themselves."""
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    _stub_agent(root, "netops")
+
+    result = _dispatch(root, "netops", env={"CONFIG_PATH": "/etc/n.yaml"})
+
+    assert "config /etc/n.yaml" in result.stdout, result.stderr
+
+
+def test_a_config_at_the_root_is_left_to_the_sdk(
+    tmp_path, monkeypatch
+) -> None:
+    """The operator mounts the agent's rendered config at /app/config.yaml
+    and sets no CONFIG_PATH: the SDK's ./config.yaml has to stay the one
+    read."""
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    _stub_agent(root, "netops")
+    (root / "config.yaml").write_text("{}", encoding="utf-8")
+
+    result = _dispatch(root, "netops")
+
+    assert "config None" in result.stdout, result.stderr
+
+
+def test_the_dispatcher_lists_the_agents_it_can_run(
+    tmp_path, monkeypatch
+) -> None:
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    _stub_agent(root, "netops")
+    _stub_agent(root, "hermes")
+
+    result = _dispatch(root)
+
+    assert result.returncode == 1
+    assert "Usage: demo <hermes|netops>" in result.stdout
+
+
+def test_the_dispatcher_runs_nothing_that_is_not_an_agent(
+    tmp_path, monkeypatch
+) -> None:
+    """Only a folder with an agent card is an agent: not a stdlib module,
+    not a path."""
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    _stub_agent(root, "netops")
+
+    for name in ("json", "../netops", ""):
+        result = _dispatch(root, name)
+        assert result.returncode == 1, name
+        assert "Usage: demo <netops>" in result.stdout
+
+
+def test_a_fresh_dispatcher_says_there_are_no_agents_yet(
+    tmp_path, monkeypatch
+) -> None:
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+
+    result = _dispatch(root)
+
+    assert result.returncode == 1
+    assert "none yet" in result.stdout
+
+
+def test_the_spec_bundles_every_agent_folder(tmp_path, monkeypatch) -> None:
+    """The dispatcher imports agents by name, which PyInstaller cannot see:
+    the spec finds the agent folders itself and bundles them."""
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    monkeypatch.chdir(root)
+    runner.invoke(app, ["add", "agent", "netops"])
+    runner.invoke(app, ["add", "agent", "hermes"])
+    captured: dict = {}
+
+    def analysis(scripts, **options):
+        captured.update(options)
+        return types.SimpleNamespace(
+            pure=[], scripts=[], binaries=[], datas=[]
+        )
+
+    hooks = types.ModuleType("PyInstaller.utils.hooks")
+    hooks.copy_metadata = lambda distribution: []
+    for name in ("PyInstaller", "PyInstaller.utils"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "PyInstaller.utils.hooks", hooks)
+
+    spec = (root / "demo.spec").read_text(encoding="utf-8")
+    exec(
+        compile(spec, "demo.spec", "exec"),
+        {
+            "Analysis": analysis,
+            "PYZ": lambda *args, **kwargs: None,
+            "EXE": lambda *args, **kwargs: None,
+            "SPECPATH": str(root),
+        },
+    )
+
+    assert sorted(captured["hiddenimports"]) == ["hermes", "netops"]
 
 
 def _make_dry_run(root: Path, target: str) -> str:
@@ -152,40 +297,59 @@ def test_init_blueprint_refuses_a_non_empty_directory(
     assert "already exists" in result.output
 
 
-def test_init_blueprint_image_has_no_floor_by_default(
-    tmp_path, monkeypatch, image_floor
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    runner.invoke(app, ["init", "blueprint", "demo"])
-
-    assert image_floor(Path("demo")) == "none"
+# A template placeholder (``__BLUEPRINT_NAME__``), or one an editor's
+# Markdown formatter turned into bold (``**BLUEPRINT_NAME**``). Python's own
+# dunders (``__main__``) are lowercase, so they do not match.
+_PLACEHOLDER = re.compile(r"(__|\*\*)[A-Z][A-Z_]*[A-Z](__|\*\*)")
 
 
-def test_init_blueprint_sets_one_floor_for_the_whole_image(
-    tmp_path, monkeypatch, image_floor
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(
-        app, ["init", "blueprint", "demo", "--telemetry-privacy", "Content"]
-    )
-
-    assert result.exit_code == 0, result.output
-    assert image_floor(Path("demo")) == "content"
-
-
-def test_init_blueprint_rejects_an_unknown_floor_before_writing(
+def test_no_placeholder_survives_in_a_scaffolded_blueprint(
     tmp_path, monkeypatch
 ) -> None:
-    """A typo must not silently degrade to ``none`` -- the ADK itself falls
-    back to it -- nor leave a half-created blueprint behind."""
     monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "blueprint", "demo"])
+    monkeypatch.chdir(tmp_path / "demo")
+    runner.invoke(app, ["add", "agent", "netops"])
 
-    result = runner.invoke(
-        app, ["init", "blueprint", "demo", "--telemetry-privacy", "secret"]
-    )
+    leftovers = {
+        str(path.relative_to(tmp_path)): _PLACEHOLDER.findall(
+            path.read_text(encoding="utf-8")
+        )
+        for path in (tmp_path / "demo").rglob("*")
+        if path.is_file()
+    }
+
+    assert {name: found for name, found in leftovers.items() if found} == {}
+    readme = (tmp_path / "demo" / "README.md").read_text(encoding="utf-8")
+    assert readme.startswith("# demo\n")
+
+
+def test_a_blueprint_cannot_be_created_inside_a_blueprint(
+    tmp_path, monkeypatch
+) -> None:
+    """Its agents are the folders right below its root, so a blueprint
+    created there would sit among them as a stray project."""
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "blueprint", "demo"])
+    monkeypatch.chdir(tmp_path / "demo")
+
+    result = runner.invoke(app, ["init", "blueprint", "inner"])
 
     assert result.exit_code != 0
-    assert "secret" in result.output
-    assert not Path("demo").exists()
+    assert "inside blueprint 'demo'" in result.output
+    assert not (tmp_path / "demo" / "inner").exists()
+
+
+def test_a_blueprint_cannot_be_created_inside_one_of_its_agents(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "blueprint", "demo"])
+    monkeypatch.chdir(tmp_path / "demo")
+    runner.invoke(app, ["add", "agent", "netops"])
+    monkeypatch.chdir(tmp_path / "demo" / "netops")
+
+    result = runner.invoke(app, ["init", "blueprint", "inner"])
+
+    assert result.exit_code != 0
+    assert not (tmp_path / "demo" / "netops" / "inner").exists()

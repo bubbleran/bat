@@ -3,8 +3,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-import create.agent as create_agent_module
 from cli import app
+from create.rendering import template_files
 
 runner = CliRunner()
 
@@ -16,21 +16,14 @@ def test_create_new_agent_requires_name(tmp_path, monkeypatch) -> None:
     assert result.exit_code != 0
 
 
-def test_static_template_loader_ignores_bytecode_cache(
-    monkeypatch, tmp_path
-) -> None:
+def test_template_files_ignore_bytecode_cache(tmp_path) -> None:
     templates_dir = tmp_path / "templates" / "agent"
     cache_dir = templates_dir / "__pycache__"
     cache_dir.mkdir(parents=True)
     (cache_dir / "README.cpython-313.pyc").write_bytes(b"\xf3\x00\x00\x00")
     (templates_dir / "README.md").write_text("hello\n", encoding="utf-8")
 
-    monkeypatch.setattr(create_agent_module, "TEMPLATES_DIR", templates_dir)
-    monkeypatch.setattr(create_agent_module, "_DYNAMIC_TEMPLATE_FILES", set())
-
-    assert create_agent_module._load_static_templates() == {
-        "README.md": "hello\n"
-    }
+    assert template_files(templates_dir) == ["README.md"]
 
 
 def test_create_new_agent_custom_name(tmp_path, monkeypatch) -> None:
@@ -565,28 +558,31 @@ def test_set_env_requires_at_least_one_option(tmp_path, monkeypatch) -> None:
     assert "Provide at least one option to set" in result.output
 
 
-def test_agent_image_has_no_floor_by_default(
-    tmp_path, monkeypatch, image_floor
+def test_agent_passes_no_floor_by_default(
+    tmp_path, monkeypatch, floor_given_to_the_application
 ) -> None:
+    """Without the flag the floor is AgentApplication's own default: none,
+    and config.yaml alone decides."""
     monkeypatch.chdir(tmp_path)
-
     runner.invoke(app, ["init", "agent", "demo_agent"])
 
-    assert image_floor(Path("demo_agent")) == "none"
+    assert floor_given_to_the_application(tmp_path / "demo_agent") == "none"
 
 
-def test_agent_bakes_the_requested_floor_into_its_image(
-    tmp_path, monkeypatch, image_floor
+def test_agent_passes_the_requested_floor(
+    tmp_path, monkeypatch, floor_given_to_the_application
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
         app,
-        ["init", "agent", "demo_agent", "--telemetry-privacy", "content"],
+        ["init", "agent", "demo_agent", "--privacy", "Content"],
     )
 
     assert result.exit_code == 0, result.output
-    assert image_floor(Path("demo_agent")) == "content"
+    assert floor_given_to_the_application(tmp_path / "demo_agent") == (
+        "content"
+    )
 
 
 def test_agent_rejects_an_unknown_telemetry_floor(
@@ -595,7 +591,7 @@ def test_agent_rejects_an_unknown_telemetry_floor(
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
-        app, ["init", "agent", "demo_agent", "--telemetry-privacy", "secret"]
+        app, ["init", "agent", "demo_agent", "--privacy", "secret"]
     )
 
     assert result.exit_code != 0
@@ -603,23 +599,23 @@ def test_agent_rejects_an_unknown_telemetry_floor(
     assert not Path("demo_agent").exists()
 
 
-def test_agent_run_from_source_has_no_floor(
-    tmp_path, monkeypatch, floor_given_to_the_application
+def test_no_placeholder_survives_in_a_scaffolded_agent(
+    tmp_path, monkeypatch
 ) -> None:
+    """Same guard as for blueprints: an unreplaced placeholder, or one a
+    Markdown formatter mangled into bold, must not reach a new agent."""
+    import re
+
+    placeholder = re.compile(r"(__|\*\*)[A-Z][A-Z_]*[A-Z](__|\*\*)")
     monkeypatch.chdir(tmp_path)
-    runner.invoke(app, ["init", "agent", "demo_agent"])
+    runner.invoke(app, ["init", "agent", "demo_agent", "-c", "planner"])
 
-    assert floor_given_to_the_application(tmp_path / "demo_agent") == "none"
+    leftovers = {
+        str(path.relative_to(tmp_path)): placeholder.findall(
+            path.read_text(encoding="utf-8")
+        )
+        for path in (tmp_path / "demo_agent").rglob("*")
+        if path.is_file()
+    }
 
-
-def test_agent_takes_the_floor_baked_into_its_image(
-    tmp_path, monkeypatch, floor_given_to_the_application
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    runner.invoke(app, ["init", "agent", "demo_agent"])
-    root = tmp_path / "demo_agent"
-    (root / "telemetry_floor.py").write_text(
-        'TELEMETRY_PRIVACY_FLOOR = "full"\n', encoding="utf-8"
-    )
-
-    assert floor_given_to_the_application(root) == "full"
+    assert {name: found for name, found in leftovers.items() if found} == {}

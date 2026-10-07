@@ -1,413 +1,150 @@
+"""Scaffold a standalone agent: one uv project, one agent."""
+
 import re
 from pathlib import Path
-from typing import Literal
 
-from .rendering import render_template
+from project import PRIVACY_LEVELS
 
-# The `bat-adk` floor a scaffolded agent pins. Naming a pre-release is what
-# lets the resolver pick one at all (PEP 440 excludes pre-releases from a
-# specifier that does not mention one). This one emits the OpenTelemetry spans
-# `bat eval` reads token usage and tool calls back from, accepts
-# `telemetry_privacy_floor`, and restores checkpoints through the compiled
-# graph -- which the blueprint image's LANGGRAPH_STRICT_MSGPACK needs, since
-# only the compiled graph's checkpointer knows the state types it may load.
-# Keep in sync with the `bat-adk` floor in cli/pyproject.toml.
+from .rendering import ensure_empty_dir, render, template_files, write_files
+
+# Naming a pre-release lets the resolver pick one at all (PEP 440).
+# Keep in sync with the bat-adk floor in cli/pyproject.toml.
 BAT_ADK_VERSION = "2026.9.29a0"
 
-# Levels accepted by --telemetry-privacy, mirroring bat.telemetry.privacy's
-# ladder. Duplicated as plain strings so the CLI does not need to import the
-# ADK just to validate a flag.
-TELEMETRY_PRIVACY_LEVELS = ("none", "content", "names", "full")
-
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "agent"
-_DYNAMIC_TEMPLATE_FILES = {
-    ".env.template",
-    "agent.json.template",
-    "agent.spec",
-    "config.yaml",
-    "Dockerfile",
-    "Makefile",
-    "llm_client.py.template",
-    "pyproject.toml.template",
-    "src/graph.py",
-    "src/__init__.py",
-    "__main__.py",
-}
+_CLIENT_TEMPLATE = TEMPLATES_DIR / "llm_client.py.template"
 
-# Model providers the ADK ships an extra for (each extra is named after its
-# provider). `langchain` does not bundle the provider integrations, so without
-# the extra the agent cannot build its model at all.
-_PROVIDER_ADK_EXTRAS = frozenset(
-    {"anthropic", "deepseek", "nvidia", "ollama", "openai"}
-)
-
-# Provider -> the env var its SDK reads for the API key. The API key is the only
-# setting that stays in .env; everything else lives in config.yaml.
-_PROVIDER_API_KEY_VAR = {
+# The env var each provider's SDK reads its API key from.
+PROVIDER_API_KEY_VAR = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "nvidia": "API_KEY",
 }
+# Providers bat-adk has an extra (their LangChain integration) for.
+_ADK_EXTRA_PROVIDERS = {*PROVIDER_API_KEY_VAR, "ollama"}
 
-
-def _load_static_templates() -> dict[str, str]:
-    templates: dict[str, str] = {}
-    for template_path in sorted(TEMPLATES_DIR.rglob("*")):
-        if not template_path.is_file():
-            continue
-
-        relative_path = template_path.relative_to(TEMPLATES_DIR).as_posix()
-        if (
-            relative_path in _DYNAMIC_TEMPLATE_FILES
-            or "__pycache__" in template_path.parts
-            or template_path.suffix == ".pyc"
-        ):
-            continue
-
-        templates[relative_path] = template_path.read_text(encoding="utf-8")
-
-    return templates
-
-
-def _render_template(template_file: str, replacements: dict[str, str]) -> str:
-    return render_template(TEMPLATES_DIR, template_file, replacements)
-
-
-def _normalize_name(
-    raw: str, style: Literal["project", "snake", "pascal"]
-) -> str:
-    if style == "pascal":
-        name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", raw)
-        name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
-        name = re.sub(r"[^A-Za-z0-9]+", "_", name)
-        name = re.sub(r"_+", "_", name).strip("_")
-        parts = [part for part in name.split("_") if part]
-        if parts and parts[-1].lower() == "agent":
-            parts = parts[:-1]
-        if not parts:
-            return ""
-        return "".join(part[:1].upper() + part[1:] for part in parts)
-
-    separator = "-" if style == "project" else "_"
-    name = re.sub(r"([A-Z]+)([A-Z][a-z])", rf"\1{separator}\2", raw)
-    name = re.sub(r"([a-z0-9])([A-Z])", rf"\1{separator}\2", name)
-    name = re.sub(r"[^A-Za-z0-9]+", separator, name)
-    collapsed_separator = re.escape(separator)
-    name = re.sub(rf"{collapsed_separator}+", separator, name).strip(separator)
-
-    if style == "project":
-        project_name = (name or "agent").lower()
-        if project_name.endswith("-agent"):
-            project_name = project_name[: -len("-agent")]
-        return project_name or "agent"
-    return name.lower()
-
-
-def _bat_adk_extras(model_provider: str) -> str:
-    """The `bat-adk` extras a scaffolded agent depends on.
-
-    ``telemetry`` is always there: it is what makes the SDK emit spans, and
-    without it ``bat eval`` silently reports zero tokens for every episode.
-    The provider's extra is added when the ADK ships one; an unrecognised
-    provider gets none and its integration has to be installed by hand.
-    """
-    extras = {"telemetry"}
-    provider = model_provider.lower()
-    if provider in _PROVIDER_ADK_EXTRAS:
-        extras.add(provider)
-    return ",".join(sorted(extras))
-
-
-def resolve_telemetry_privacy(telemetry_privacy: str | None) -> str:
-    """The telemetry privacy floor a scaffold bakes into its image.
-
-    It becomes the default of the Dockerfile's ``TELEMETRY_PRIVACY_FLOOR``
-    build arg, which the image freezes into the binary for every agent it
-    carries; ``None`` (no flag) means ``none``, AgentApplication's own
-    default, so config.yaml alone decides.
-
-    Raises:
-        ValueError: If ``telemetry_privacy`` is not a known level. A typo must
-            not silently degrade to ``none`` -- which is what the ADK does
-            with an unknown floor -- since that would ship an agent exporting
-            in the clear exactly when someone meant to lock it down.
-    """
-    if telemetry_privacy is None:
-        return "none"
-    level = telemetry_privacy.strip().lower()
-    if level not in TELEMETRY_PRIVACY_LEVELS:
-        raise ValueError(
-            f"Unknown telemetry privacy level {telemetry_privacy!r}; "
-            f"expected one of {', '.join(TELEMETRY_PRIVACY_LEVELS)}."
-        )
-    return level
-
-
-def _build_pyproject_content(
-    agent_dir_name: str, *, model_provider: str
-) -> str:
-    project_name = _normalize_name(agent_dir_name, "project")
-    return _render_template(
-        "pyproject.toml.template",
-        {
-            "BAT_ADK_EXTRAS": _bat_adk_extras(model_provider),
-            "BAT_ADK_VERSION": BAT_ADK_VERSION,
-            "PROJECT_DESCRIPTION": f"{project_name.upper()} Agent",
-            "PROJECT_NAME": project_name,
-        },
-    )
-
-
-def _build_agent_spec_content(agent_dir_name: str) -> str:
-    return _render_template(
-        "agent.spec",
-        {
-            "PROJECT_NAME": _normalize_name(agent_dir_name, "project"),
-        },
-    )
-
-
-def _build_dockerfile_content(
-    agent_dir_name: str, *, telemetry_privacy: str = "none"
-) -> str:
-    return _render_template(
-        "Dockerfile",
-        {
-            "PROJECT_NAME": _normalize_name(agent_dir_name, "project"),
-            "TELEMETRY_PRIVACY_FLOOR": telemetry_privacy,
-        },
-    )
-
-
-def _build_makefile_content(agent_dir_name: str) -> str:
-    return _render_template(
-        "Makefile",
-        {
-            "AGENT_NAME": agent_dir_name,
-        },
-    )
-
-
-def _agent_class_name(agent_dir_name: str) -> str:
-    return _normalize_name(agent_dir_name, "pascal") or "Agent"
-
-
-def _build_main_content(agent_dir_name: str) -> str:
-    return _render_template(
-        "__main__.py",
-        {
-            "AGENT_CLASS_NAME": _agent_class_name(agent_dir_name),
-        },
-    )
-
-
-def _build_src_init_content(agent_dir_name: str) -> str:
-    return _render_template(
-        "src/__init__.py",
-        {
-            "AGENT_CLASS_NAME": _agent_class_name(agent_dir_name),
-        },
-    )
-
-
-def _build_graph_content(agent_dir_name: str, clients: list[str] | None) -> str:
-    resolved_clients = _resolve_client_specs(clients)
-    agent_class_name = _agent_class_name(agent_dir_name)
-
-    client_imports = "\n".join(
-        f"from .llm_clients.{file_stem} import {class_name}"
-        for file_stem, class_name in resolved_clients
-    )
-
-    setup_blocks: list[str] = []
-
-    for file_stem, class_name in resolved_clients:
-        setup_blocks.append(
-            "\n".join(
-                [
-                    f"        self.{file_stem} = {class_name}(",
-                    "            tools=[],",
-                    "        )",
-                ]
-            )
-        )
-
-    return _render_template(
-        "src/graph.py",
-        {
-            "AGENT_CLASS_NAME": agent_class_name,
-            "CLIENT_IMPORTS": client_imports,
-            "CLIENT_SETUP": "\n\n".join(setup_blocks),
-        },
-    )
-
-
-def _build_agent_json_content(agent_dir_name: str) -> str:
-    return _render_template(
-        "agent.json.template",
-        {
-            "AGENT_NAME": agent_dir_name,
-        },
-    )
-
-
-def _build_config_yaml_content(
-    *,
-    port: int,
-    model: str,
-    model_provider: str,
-) -> str:
-    return _render_template(
-        "config.yaml",
-        {
-            "PORT": str(port),
-            "MODEL": model,
-            "MODEL_PROVIDER": model_provider,
-        },
-    )
-
-
-def _build_env_template_content(
-    *,
-    model_provider: str,
-) -> str:
-    key_var = _PROVIDER_API_KEY_VAR.get(model_provider.lower())
-    api_key_line = (
-        f"{key_var}="
-        if key_var
-        else f"# The '{model_provider}' provider needs no API key."
-    )
-    return _render_template(
-        ".env.template",
-        {
-            "API_KEY_LINE": api_key_line,
-        },
-    )
-
-
-def _build_llm_client_content(class_name: str) -> str:
-    return _render_template(
-        "llm_client.py.template",
-        {
-            "CLASS_NAME": class_name,
-        },
-    )
-
-
-def _resolve_client_specs(clients: list[str] | None) -> list[tuple[str, str]]:
-    if not clients:
-        return [("example_client", "ExampleClient")]
-
-    resolved: list[tuple[str, str]] = []
-    seen: set[str] = set()
-
-    for raw_name in clients:
-        snake_name = _normalize_name(raw_name, "snake")
-        if not snake_name:
-            continue
-
-        file_stem = (
-            snake_name
-            if snake_name.endswith("_client")
-            else f"{snake_name}_client"
-        )
-        if file_stem in seen:
-            continue
-
-        pascal_name = _normalize_name(raw_name, "pascal")
-        if not pascal_name:
-            continue
-        class_name = (
-            pascal_name
-            if pascal_name.endswith("Client")
-            else f"{pascal_name}Client"
-        )
-
-        seen.add(file_stem)
-        resolved.append((file_stem, class_name))
-
-    return resolved or [("example_client", "ExampleClient")]
-
-
-_CLIENT_CLASS_RE = re.compile(r"^class\s+(\w+)\s*\(", re.MULTILINE)
-
-
-def _client_specs_from_dir(llm_clients_dir: Path) -> list[tuple[str, str]]:
-    """Derive (file_stem, class_name) for every client module on disk.
-
-    The class name is read straight from each ``*_client.py`` file's ``class``
-    declaration rather than re-derived from the filename, so it always matches
-    what was actually written (a filename round-trip is lossy: ``rng_client.py``
-    would otherwise map to ``RngClient`` instead of ``RNGClient``). Files that
-    don't define a class (e.g. a hand-added ``utils.py`` helper) are skipped so
-    the generated ``__init__`` never imports a non-existent symbol.
-    """
-    specs: list[tuple[str, str]] = []
-    for path in sorted(llm_clients_dir.glob("*_client.py")):
-        if path.stem == "__init__":
-            continue
-        try:
-            source = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        match = _CLIENT_CLASS_RE.search(source)
-        if not match:
-            continue
-        specs.append((path.stem, match.group(1)))
-    return specs
-
-
-_LLM_CLIENTS_INIT_HEADER = (
+_CLIENTS_INIT_HEADER = (
     "# Auto-generated by bat-cli (init agent / add client); re-exports every\n"
     "# LLM client in this package. Edits may be overwritten on the next run.\n"
 )
+_CLASS = re.compile(r"^class\s+(\w+)\s*\(", re.MULTILINE)
 
 
-def _build_llm_clients_init_content(client_specs: list[tuple[str, str]]) -> str:
-    if not client_specs:
-        return ""
-    lines = [
-        f"from .{file_stem} import {class_name}"
-        for file_stem, class_name in client_specs
-    ]
-    return _LLM_CLIENTS_INIT_HEADER + "\n".join(lines) + "\n"
+def _words(raw: str) -> list[str]:
+    """``raw`` split at case changes and non-alphanumerics: RNGClient ->
+    RNG, Client."""
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", raw)
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", spaced)
+    return re.findall(r"[A-Za-z0-9]+", spaced)
 
 
-def _write_llm_clients(
-    llm_clients_dir: Path,
-    *,
-    clients: list[str] | None,
-    force: bool,
-) -> list[Path]:
-    created: list[Path] = []
-    for file_stem, class_name in _resolve_client_specs(clients):
-        client_path = llm_clients_dir / f"{file_stem}.py"
-        if client_path.exists() and not force:
-            continue
+def _pascal(raw: str) -> str:
+    """``raw`` in PascalCase, without a trailing "agent"."""
+    words = _words(raw)
+    if words and words[-1].lower() == "agent":
+        words.pop()
+    return "".join(word[:1].upper() + word[1:] for word in words)
 
-        client_path.parent.mkdir(parents=True, exist_ok=True)
-        client_path.write_text(
-            _build_llm_client_content(class_name), encoding="utf-8"
+
+def _ensure_suffix(text: str, suffix: str) -> str:
+    return text if text.endswith(suffix) else text + suffix
+
+
+def agent_class_name(raw: str) -> str:
+    return _pascal(raw) or "Agent"
+
+
+def _project_name(raw: str) -> str:
+    words = [word.lower() for word in _words(raw)]
+    if len(words) > 1 and words[-1] == "agent":
+        words.pop()
+    return "-".join(words) or "agent"
+
+
+def bat_adk_extras(model_provider: str) -> str:
+    """``telemetry`` makes the SDK emit the spans `bat eval` reads; the
+    provider's extra brings its LangChain integration."""
+    provider = model_provider.lower()
+    if provider in _ADK_EXTRA_PROVIDERS:
+        return f"{provider},telemetry"
+    return "telemetry"
+
+
+def api_key_line(model_provider: str) -> str:
+    key_var = PROVIDER_API_KEY_VAR.get(model_provider.lower())
+    if key_var:
+        return f"{key_var}="
+    return f"# The '{model_provider}' provider needs no API key."
+
+
+def resolve_telemetry_privacy(level: str | None) -> str:
+    """The ``telemetry_privacy_floor`` a scaffolded agent passes, ``none``
+    by default.
+
+    Raises:
+        ValueError: On an unknown level, which bat-adk would silently read
+            as ``none`` and so export in the clear.
+    """
+    if level is None:
+        return "none"
+    normalized = level.strip().lower()
+    if normalized not in PRIVACY_LEVELS:
+        raise ValueError(
+            f"Unknown telemetry privacy level {level!r}; "
+            f"expected one of {', '.join(PRIVACY_LEVELS)}."
         )
-        created.append(client_path)
+    return normalized
 
-    # Regenerate the package __init__ so it re-exports every client present in
-    # the directory (covers both `bat create` and `bat add client`).
-    init_path = llm_clients_dir / "__init__.py"
-    new_content = _build_llm_clients_init_content(
-        _client_specs_from_dir(llm_clients_dir)
-    )
-    existing_content = (
-        init_path.read_text(encoding="utf-8") if init_path.exists() else None
-    )
-    if new_content != existing_content:
-        init_path.parent.mkdir(parents=True, exist_ok=True)
-        init_path.write_text(new_content, encoding="utf-8")
-        if init_path not in created:
-            created.append(init_path)
 
-    return created
+def _client_specs(clients: list[str] | None) -> dict[str, str]:
+    """File stem -> class name of each LLM client to generate."""
+    specs: dict[str, str] = {}
+    for raw in clients or []:
+        stem, pascal = "_".join(_words(raw)).lower(), _pascal(raw)
+        if stem and pascal:
+            specs.setdefault(
+                _ensure_suffix(stem, "_client"),
+                _ensure_suffix(pascal, "Client"),
+            )
+    return specs or {"example_client": "ExampleClient"}
+
+
+def graph_substitutions(clients: list[str] | None) -> dict[str, str]:
+    specs = _client_specs(clients).items()
+    return {
+        "CLIENT_IMPORTS": "\n".join(
+            f"from .llm_clients.{stem} import {name}" for stem, name in specs
+        ),
+        "CLIENT_SETUP": "\n\n".join(
+            f"        self.{stem} = {name}(\n            tools=[],\n        )"
+            for stem, name in specs
+        ),
+    }
+
+
+def write_llm_clients(
+    directory: Path, *, clients: list[str] | None, force: bool
+) -> list[Path]:
+    """Write the client modules, then the package ``__init__`` re-exporting
+    every client on disk under the class name its file declares."""
+    files = {
+        f"{stem}.py": render(_CLIENT_TEMPLATE, {"CLASS_NAME": name})
+        for stem, name in _client_specs(clients).items()
+    }
+    written = write_files(directory, files, force=force)
+
+    exports = ""
+    for path in sorted(directory.glob("*_client.py")):
+        match = _CLASS.search(path.read_text(encoding="utf-8"))
+        if match:
+            exports += f"from .{path.stem} import {match.group(1)}\n"
+    init = directory / "__init__.py"
+    content = _CLIENTS_INIT_HEADER + exports
+    if not init.is_file() or init.read_text(encoding="utf-8") != content:
+        init.write_text(content, encoding="utf-8")
+        written.append(init)
+    return written
 
 
 def create_agent_scaffold(
@@ -421,135 +158,35 @@ def create_agent_scaffold(
     class_name_source: str | None = None,
     telemetry_privacy: str | None = None,
 ) -> list[Path]:
-    # The State/Graph class names keep the original (pre-lowercasing) casing,
-    # while every directory-derived name follows the lowercase folder name.
-    class_source = (
-        class_name_source if class_name_source is not None else target_dir.name
+    """Write a standalone agent into ``target_dir``. Class names keep the
+    casing of ``class_name_source``; everything else follows the folder."""
+    floor = resolve_telemetry_privacy(telemetry_privacy)
+    ensure_empty_dir(target_dir, force=force)
+
+    project = _project_name(target_dir.name)
+    substitutions = {
+        "AGENT_NAME": target_dir.name,
+        "AGENT_CLASS_NAME": agent_class_name(
+            class_name_source or target_dir.name
+        ),
+        "PROJECT_NAME": project,
+        "PROJECT_DESCRIPTION": f"{project.upper()} Agent",
+        "BAT_ADK_EXTRAS": bat_adk_extras(model_provider),
+        "BAT_ADK_VERSION": BAT_ADK_VERSION,
+        "PORT": str(port),
+        "MODEL": model,
+        "MODEL_PROVIDER": model_provider,
+        "API_KEY_LINE": api_key_line(model_provider),
+        "TELEMETRY_PRIVACY_FLOOR": floor,
+        **graph_substitutions(clients),
+    }
+    files = {
+        name.removesuffix(".template"): render(
+            TEMPLATES_DIR / name, substitutions
+        )
+        for name in template_files(TEMPLATES_DIR)
+        if name != _CLIENT_TEMPLATE.name
+    }
+    return write_files(target_dir, files, force=True) + write_llm_clients(
+        target_dir / "src" / "llm_clients", clients=clients, force=force
     )
-    # Resolved before anything is written: a typo'd level must not leave a
-    # half-created agent behind.
-    telemetry_privacy = resolve_telemetry_privacy(telemetry_privacy)
-
-    if target_dir.exists() and not target_dir.is_dir():
-        raise FileExistsError(
-            f"Target path '{target_dir}' already exists and is not a "
-            "directory. Choose a different agent name or remove the file."
-        )
-
-    if target_dir.is_dir() and any(target_dir.iterdir()) and not force:
-        raise FileExistsError(
-            f"Target directory '{target_dir}' already exists and is not empty. "
-            "Use --force to overwrite files."
-        )
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    created: list[Path] = []
-    for relative_path, content in _load_static_templates().items():
-        file_path = target_dir / relative_path
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if file_path.exists() and not force:
-            continue
-
-        file_path.write_text(content, encoding="utf-8")
-        created.append(file_path)
-
-    pyproject_path = target_dir / "pyproject.toml"
-
-    if force or not pyproject_path.exists():
-        pyproject_path.write_text(
-            _build_pyproject_content(
-                target_dir.name, model_provider=model_provider
-            ),
-            encoding="utf-8",
-        )
-        created.append(pyproject_path)
-
-    agent_json_path = target_dir / "agent.json"
-    if force or not agent_json_path.exists():
-        agent_json_path.write_text(
-            _build_agent_json_content(target_dir.name), encoding="utf-8"
-        )
-        created.append(agent_json_path)
-
-    config_path = target_dir / "config.yaml"
-    if force or not config_path.exists():
-        config_path.write_text(
-            _build_config_yaml_content(
-                port=port,
-                model=model,
-                model_provider=model_provider,
-            ),
-            encoding="utf-8",
-        )
-        created.append(config_path)
-
-    env_path = target_dir / ".env"
-    if force or not env_path.exists():
-        env_path.write_text(
-            _build_env_template_content(model_provider=model_provider),
-            encoding="utf-8",
-        )
-        created.append(env_path)
-
-    agent_spec_path = target_dir / "agent.spec"
-    if force or not agent_spec_path.exists():
-        agent_spec_path.write_text(
-            _build_agent_spec_content(target_dir.name), encoding="utf-8"
-        )
-        created.append(agent_spec_path)
-
-    dockerfile_path = target_dir / "Dockerfile"
-    if force or not dockerfile_path.exists():
-        dockerfile_path.write_text(
-            _build_dockerfile_content(
-                target_dir.name, telemetry_privacy=telemetry_privacy
-            ),
-            encoding="utf-8",
-        )
-        created.append(dockerfile_path)
-
-    makefile_path = target_dir / "Makefile"
-    if force or not makefile_path.exists():
-        makefile_path.write_text(
-            _build_makefile_content(target_dir.name), encoding="utf-8"
-        )
-        created.append(makefile_path)
-
-    graph_path = target_dir / "src" / "graph.py"
-    if force or not graph_path.exists():
-        graph_path.write_text(
-            _build_graph_content(class_source, clients), encoding="utf-8"
-        )
-        created.append(graph_path)
-
-    src_init_path = target_dir / "src" / "__init__.py"
-    if (
-        force
-        or not src_init_path.exists()
-        or not src_init_path.read_text(encoding="utf-8").strip()
-    ):
-        src_init_path.parent.mkdir(parents=True, exist_ok=True)
-        src_init_path.write_text(
-            _build_src_init_content(class_source), encoding="utf-8"
-        )
-        created.append(src_init_path)
-
-    main_path = target_dir / "__main__.py"
-    if force or not main_path.exists():
-        main_path.write_text(
-            _build_main_content(class_source),
-            encoding="utf-8",
-        )
-        created.append(main_path)
-
-    created.extend(
-        _write_llm_clients(
-            target_dir / "src" / "llm_clients",
-            clients=clients,
-            force=force,
-        )
-    )
-
-    return created

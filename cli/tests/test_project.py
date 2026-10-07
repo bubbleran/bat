@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 from project import (
+    PrivacyFloor,
     ProjectError,
     find_blueprint_root,
+    privacy_floors,
     resolve_agent_target,
     unwired_agent_warning,
 )
@@ -49,7 +51,6 @@ def test_standalone_agent_is_its_own_project_root(tmp_path: Path) -> None:
     assert target.project_root == tmp_path
     assert target.agent_dir == tmp_path
     assert target.agent_name is None
-    assert target.is_blueprint is False
     assert target.run_command == ["uv", "run", "."]
     assert target.run_env == {}
     assert target.config_path == tmp_path / "config.yaml"
@@ -65,7 +66,6 @@ def test_blueprint_agent_carries_selector_and_config_path(
     assert target.project_root == tmp_path
     assert target.agent_dir == tmp_path / "netops"
     assert target.agent_name == "netops"
-    assert target.is_blueprint is True
     # Both halves of what the blueprint Makefile does by hand.
     assert target.run_command == ["uv", "run", ".", "netops"]
     assert target.run_env == {"CONFIG_PATH": "netops/config.yaml"}
@@ -215,3 +215,89 @@ def test_standalone_agent_has_no_dispatcher_to_check(tmp_path: Path) -> None:
     _write_standalone(tmp_path)
 
     assert unwired_agent_warning(resolve_agent_target(tmp_path)) is None
+
+
+def test_a_dispatcher_importing_the_named_agent_runs_any_of_them(
+    tmp_path: Path,
+) -> None:
+    """The scaffolded dispatcher names no agent: it imports whichever one
+    the command line names."""
+    _write_blueprint(tmp_path, "netops")
+    (tmp_path / "__main__.py").write_text(
+        "import importlib, sys\n"
+        "importlib.import_module(sys.argv[1]).run()\n",
+        encoding="utf-8",
+    )
+
+    target = resolve_agent_target(tmp_path / "netops")
+
+    assert unwired_agent_warning(target) is None
+
+
+def _app_passing_floor(value: str) -> str:
+    return (
+        "from bat.agent import AgentApplication\n"
+        "\n"
+        "def run():\n"
+        f"    AgentApplication(telemetry_privacy_floor={value}).run()\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "level"),
+    [
+        ('"full"', "full"),
+        ('"Content"', "content"),
+        ("TelemetryPrivacy.NAMES", "names"),
+    ],
+)
+def test_privacy_floor_is_read_from_the_agents_code(
+    tmp_path: Path, value: str, level: str
+) -> None:
+    _write_blueprint(tmp_path, "netops")
+    (tmp_path / "netops" / "app.py").write_text(
+        _app_passing_floor(value), encoding="utf-8"
+    )
+
+    floors = privacy_floors(resolve_agent_target(tmp_path / "netops"))
+
+    assert floors == [PrivacyFloor(location="netops/app.py:4", level=level)]
+
+
+def test_privacy_floor_computed_at_runtime_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    _write_blueprint(tmp_path, "netops")
+    (tmp_path / "netops" / "app.py").write_text(
+        _app_passing_floor("FLOOR"), encoding="utf-8"
+    )
+
+    floors = privacy_floors(resolve_agent_target(tmp_path / "netops"))
+
+    assert floors == [PrivacyFloor(location="netops/app.py:4", level=None)]
+
+
+def test_agent_without_a_floor_has_none_to_report(tmp_path: Path) -> None:
+    _write_blueprint(tmp_path, "netops")
+
+    assert privacy_floors(resolve_agent_target(tmp_path / "netops")) == []
+
+
+def test_privacy_floor_ignores_the_virtualenv_and_tests(
+    tmp_path: Path,
+) -> None:
+    """A standalone agent's directory holds its .venv, with bat-adk's own
+    code in it, and its tests: neither is the agent's floor."""
+    _write_standalone(tmp_path)
+    (tmp_path / "__main__.py").write_text(
+        _app_passing_floor('"none"'), encoding="utf-8"
+    )
+    for folder in (".venv/lib/site-packages/bat", "tests"):
+        (tmp_path / folder).mkdir(parents=True)
+        (tmp_path / folder / "app.py").write_text(
+            _app_passing_floor('"full"'), encoding="utf-8"
+        )
+
+    floors = privacy_floors(resolve_agent_target(tmp_path))
+
+    assert floors == [PrivacyFloor(location="__main__.py:4", level="none")]

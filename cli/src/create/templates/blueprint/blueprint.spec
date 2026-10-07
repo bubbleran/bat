@@ -1,20 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from importlib.metadata import PackageNotFoundError
+from pathlib import Path
 
 from PyInstaller.utils.hooks import copy_metadata
-
-# OpenInference's LangChain instrumentor gates itself on a dependency check that
-# reads the *installed distribution metadata* of langchain-core. PyInstaller
-# bundles modules but not their .dist-info directories, so inside the binary
-# that lookup fails and BaseInstrumentor.instrument() logs
-#     DependencyConflict: requested: "langchain_core >= 0.1.0" but found: "None"
-# and returns without instrumenting anything. Nothing raises, so the agent
-# starts, reports telemetry enabled, and exports only its own invoke_agent
-# spans: no LLM/TOOL spans, no token counts. Shipping the metadata is what
-# makes the auto-instrumentation engage in the frozen build. Distributions
-# that are not installed (another provider's integration, or telemetry when
-# its extra was dropped) are skipped.
 def _metadata(*distributions):
     datas = []
     for distribution in distributions:
@@ -39,16 +28,20 @@ telemetry_metadata = _metadata(
     'langchain-openai',
 )
 
-# No agent files in `datas`: each agent's config.yaml and agent.json are read
-# from the filesystem at runtime (the Dockerfile copies the cards next to the
-# binary), not frozen in. The agents themselves are reached through the static
-# imports in __main__.py, which is what PyInstaller follows.
+# The dispatcher imports agents by name, which PyInstaller cannot follow:
+# every agent folder (an app.py next to its agent.json) is bundled.
+agents = sorted(
+    card.parent.name
+    for card in Path(SPECPATH).glob('*/agent.json')
+    if (card.parent / 'app.py').is_file()
+)
+
 a = Analysis(
 	['__main__.py'],
 	pathex=['.'],
 	binaries=[],
 	datas=telemetry_metadata,
-	hiddenimports=[],
+	hiddenimports=agents,
 	hookspath=[],
 	hooksconfig={},
 	runtime_hooks=[],

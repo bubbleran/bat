@@ -58,20 +58,6 @@ def test_add_agent_config_points_at_its_own_card_and_port(
     assert config["endpoint"]["port"] == 9309
 
 
-def test_add_agent_registers_in_the_dispatcher(tmp_path, monkeypatch) -> None:
-    root = _blueprint(tmp_path, monkeypatch)
-
-    runner.invoke(app, ["add", "agent", "netops"])
-
-    main = (root / "__main__.py").read_text(encoding="utf-8")
-    assert 'APPS: set[str] = {"netops"}' in main
-    # Static and lazy: PyInstaller has to see the import, and it must not run
-    # until the branch is taken.
-    assert '    if app == "netops":' in main
-    assert "        from netops import run" in main
-    assert "importlib" not in main
-
-
 def test_compose_services_share_one_image(tmp_path, monkeypatch) -> None:
     """One binary serves every agent, so every service runs the same image;
     only the command and the config differ."""
@@ -134,8 +120,6 @@ def test_add_agent_registers_an_agent_directory_added_by_hand(
 
     runner.invoke(app, ["add", "agent", "netops"])
 
-    main = (root / "__main__.py").read_text(encoding="utf-8")
-    assert 'APPS: set[str] = {"hermes", "netops"}' in main
     compose = yaml.safe_load((root / "docker-compose.yaml").read_text())
     assert sorted(compose["services"]) == ["hermes", "netops"]
 
@@ -157,8 +141,8 @@ def test_add_agent_leaves_a_nested_project_out_of_the_dispatcher(
 
     runner.invoke(app, ["add", "agent", "netops"])
 
-    main = (root / "__main__.py").read_text(encoding="utf-8")
-    assert 'APPS: set[str] = {"netops"}' in main
+    compose = yaml.safe_load((root / "docker-compose.yaml").read_text())
+    assert sorted(compose["services"]) == ["netops"]
 
 
 def test_add_agent_registers_a_compose_service(tmp_path, monkeypatch) -> None:
@@ -181,12 +165,6 @@ def test_adding_a_second_agent_keeps_the_first(tmp_path, monkeypatch) -> None:
     result = runner.invoke(app, ["add", "agent", "hermes"])
 
     assert result.exit_code == 0, result.output
-
-    main = (root / "__main__.py").read_text(encoding="utf-8")
-    assert 'APPS: set[str] = {"hermes", "netops"}' in main
-    assert main.count("from netops import run") == 1
-    assert main.count("from hermes import run") == 1
-    assert main.count("# bat:agents:begin") == 1
 
     compose = yaml.safe_load((root / "docker-compose.yaml").read_text())
     assert sorted(compose["services"]) == ["hermes", "netops"]
@@ -236,56 +214,87 @@ def test_add_agent_rejects_a_name_that_is_not_importable(
     result = runner.invoke(app, ["add", "agent", "cluster-view"])
 
     assert result.exit_code != 0
+    assert "hyphens are not allowed" in result.output
+    assert "Use 'cluster_view'" in result.output
 
 
-def test_blueprint_agent_run_from_source_has_no_floor(
+def test_add_agent_suggests_a_name_for_one_starting_with_a_digit(
+    tmp_path, monkeypatch
+) -> None:
+    _blueprint(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["add", "agent", "5gcore"])
+
+    assert result.exit_code != 0
+    assert "can't start with a digit" in result.output
+
+
+def test_add_agent_rejects_a_python_keyword(tmp_path, monkeypatch) -> None:
+    """`class` is an identifier, but `from class import run` is a syntax
+    error in the dispatcher."""
+    root = _blueprint(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["add", "agent", "class"])
+
+    assert result.exit_code != 0
+    assert "is a Python keyword" in result.output
+    assert not (root / "class").exists()
+
+
+def test_blueprint_agent_passes_no_floor_by_default(
     tmp_path, monkeypatch, floor_given_to_the_application
 ) -> None:
-    """Outside the image (make, bat eval) nothing is baked in, so
-    config.yaml alone decides."""
     root = _blueprint(tmp_path, monkeypatch)
     runner.invoke(app, ["add", "agent", "netops"])
 
     assert floor_given_to_the_application(root, "netops") == "none"
 
 
-def test_every_blueprint_agent_takes_the_floor_baked_into_the_image(
+def test_each_blueprint_agent_has_its_own_floor(
     tmp_path, monkeypatch, floor_given_to_the_application
 ) -> None:
-    """The Dockerfile writes telemetry_floor.py right before freezing: one
-    floor, and every agent of the binary starts with it."""
+    """The floor is an argument of each agent's AgentApplication, so agents
+    sharing one binary still have their own."""
     root = _blueprint(tmp_path, monkeypatch)
-    runner.invoke(app, ["add", "agent", "netops"])
-    runner.invoke(app, ["add", "agent", "hermes"])
-    (root / "telemetry_floor.py").write_text(
-        'TELEMETRY_PRIVACY_FLOOR = "names"\n', encoding="utf-8"
+    runner.invoke(
+        app, ["add", "agent", "netops", "--privacy", "names"]
     )
+    runner.invoke(app, ["add", "agent", "hermes"])
 
     assert floor_given_to_the_application(root, "netops") == "names"
-    assert floor_given_to_the_application(root, "hermes") == "names"
+    assert floor_given_to_the_application(root, "hermes") == "none"
 
 
-def test_add_agent_refuses_a_blueprint_it_cannot_register_in(
+def test_add_agent_rejects_an_unknown_floor_before_writing(
     tmp_path, monkeypatch
 ) -> None:
-    """A hand-made blueprint (like orama's supervisor) is recognised by its
-    layout, but its __main__.py has no managed region to register the agent
-    in: refuse before writing, not after leaving a half-created agent."""
-    root = tmp_path / "supervisor"
-    root.mkdir()
-    (root / "pyproject.toml").write_text(
-        "[project]\nname='supervisor'\n", encoding="utf-8"
-    )
-    (root / "__main__.py").write_text(
-        'APPS = {"supervisor"}\n', encoding="utf-8"
-    )
-    (root / "docker-compose.yaml").write_text(
-        "services: {}\n", encoding="utf-8"
-    )
-    monkeypatch.chdir(root)
+    root = _blueprint(tmp_path, monkeypatch)
 
-    result = runner.invoke(app, ["add", "agent", "netops"])
+    result = runner.invoke(
+        app, ["add", "agent", "netops", "--privacy", "secret"]
+    )
 
     assert result.exit_code != 0
-    assert "bat:agents" in result.output
+    assert "secret" in result.output
     assert not (root / "netops").exists()
+
+
+def test_add_agent_keeps_the_services_written_by_hand(
+    tmp_path, monkeypatch
+) -> None:
+    """Only the new agent's service is added: other services, and edits to
+    an agent's own, are left as they are."""
+    root = _blueprint(tmp_path, monkeypatch)
+    runner.invoke(app, ["add", "agent", "netops"])
+    compose_path = root / "docker-compose.yaml"
+    compose = yaml.safe_load(compose_path.read_text())
+    compose["services"]["phoenix"] = {"image": "arizephoenix/phoenix"}
+    compose["services"]["netops"]["environment"]["LOG_LEVEL"] = "debug"
+    compose_path.write_text(yaml.safe_dump(compose, sort_keys=False))
+
+    runner.invoke(app, ["add", "agent", "hermes"])
+
+    services = yaml.safe_load(compose_path.read_text())["services"]
+    assert services["phoenix"] == {"image": "arizephoenix/phoenix"}
+    assert services["netops"]["environment"]["LOG_LEVEL"] == "debug"
+    assert list(services) == ["netops", "phoenix", "hermes"]

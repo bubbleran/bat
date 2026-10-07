@@ -4,17 +4,9 @@ from importlib.metadata import PackageNotFoundError
 
 from PyInstaller.utils.hooks import copy_metadata
 
-# OpenInference's LangChain instrumentor gates itself on a dependency check that
-# reads the *installed distribution metadata* of langchain-core. PyInstaller
-# bundles modules but not their .dist-info directories, so inside the binary
-# that lookup fails and BaseInstrumentor.instrument() logs
-#     DependencyConflict: requested: "langchain_core >= 0.1.0" but found: "None"
-# and returns without instrumenting anything. Nothing raises, so the agent
-# starts, reports telemetry enabled, and exports only its own invoke_agent
-# spans: no LLM/TOOL spans, no token counts. Shipping the metadata is what
-# makes the auto-instrumentation engage in the frozen build. Distributions
-# that are not installed (another provider's integration, or telemetry when
-# its extra was dropped) are skipped.
+# PyInstaller bundles modules but not their .dist-info metadata, which
+# OpenInference checks before instrumenting LangChain: without it the binary
+# exports no LLM/tool spans and no token counts. Missing distributions are skipped.
 def _metadata(*distributions):
     datas = []
     for distribution in distributions:

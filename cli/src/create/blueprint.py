@@ -1,255 +1,79 @@
 """Scaffold a blueprint: one uv project holding several agents.
 
-The standalone agent scaffold in :mod:`create.agent` writes a project per
-agent. A blueprint inverts that: the project, the entrypoint, the PyInstaller
-spec and the packaging live once at the root, and each agent is a package
-inside it. ``bat add agent`` fills it in; ``bat init blueprint`` creates it
-empty.
+The project, the dispatcher, the PyInstaller spec and the packaging live once
+at the root; each agent is a package right below it. ``bat init blueprint``
+creates it empty and ``bat add agent`` fills it in.
 """
 
 from __future__ import annotations
 
+import keyword
 from pathlib import Path
 
 import yaml
 
-from project import blueprint_agent_names_on_disk
+from project import blueprint_agents, find_blueprint_root
 
 from .agent import (
-    _PROVIDER_API_KEY_VAR,
     BAT_ADK_VERSION,
-    _agent_class_name,
-    _bat_adk_extras,
-    _build_agent_json_content,
-    _build_graph_content,
-    _build_src_init_content,
-    _write_llm_clients,
+    agent_class_name,
+    api_key_line,
+    bat_adk_extras,
+    graph_substitutions,
     resolve_telemetry_privacy,
+    write_llm_clients,
 )
-from .rendering import render_template
-
-BLUEPRINT_TEMPLATES_DIR = (
-    Path(__file__).resolve().parent / "templates" / "blueprint"
+from .agent import TEMPLATES_DIR as AGENT_TEMPLATES_DIR
+from .rendering import (
+    dump_yaml,
+    ensure_empty_dir,
+    render,
+    template_files,
+    write_files,
 )
 
-AGENTS_BEGIN = "# bat:agents:begin"
-AGENTS_END = "# bat:agents:end"
-
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "blueprint"
+_AGENT_TEMPLATES = ("agent.json.template", "src/__init__.py", "src/graph.py")
 _DEFAULT_PORT = 9900
-
-# Templates copied byte for byte, with no substitution.
-_STATIC_FILES = (".gitignore", ".dockerignore", ".python-version")
-
-
-def _render(template_file: str, replacements: dict[str, str]) -> str:
-    return render_template(
-        BLUEPRINT_TEMPLATES_DIR, template_file, replacements
-    )
-
-
-def _api_key_line(model_provider: str) -> str:
-    key_var = _PROVIDER_API_KEY_VAR.get(model_provider.lower())
-    if key_var:
-        return f"{key_var}=your-api-key-here"
-    return f"# The '{model_provider}' provider needs no API key."
 
 
 def create_blueprint_scaffold(
-    target_dir: Path,
-    *,
-    force: bool = False,
-    model_provider: str = "openai",
-    telemetry_privacy: str | None = None,
+    target_dir: Path, *, force: bool = False, model_provider: str = "openai"
 ) -> list[Path]:
-    """Write an empty blueprint into ``target_dir``.
+    """Write an empty blueprint into ``target_dir``. The provider is set
+    here because its extra lives in the one shared pyproject."""
+    enclosing = find_blueprint_root(target_dir.parent)
+    if enclosing is not None:
+        raise ValueError(
+            f"'{target_dir.parent}' is inside blueprint '{enclosing.name}'. "
+            "A blueprint cannot hold another one: add an agent to it with "
+            "`bat add agent`, or create the blueprint somewhere else."
+        )
+    ensure_empty_dir(target_dir, force=force)
 
-    Empty means no agents: ``bat add agent`` adds those. The provider is fixed
-    here rather than per agent because the extras live in the one shared
-    pyproject, and the telemetry privacy floor because the one image freezes
-    it into the binary every agent runs from. There is no manifest and no
-    blueprint-level config.yaml: the layout is what makes it a blueprint (see
-    :mod:`project`), and each agent carries its own config.
-    """
     name = target_dir.name.lower()
-    # Resolved before anything is written: a typo'd level must not leave a
-    # half-created blueprint behind.
-    telemetry_privacy = resolve_telemetry_privacy(telemetry_privacy)
-
-    if target_dir.exists() and not target_dir.is_dir():
-        raise FileExistsError(
-            f"Target path '{target_dir}' already exists and is not a "
-            "directory. Choose a different blueprint name or remove the file."
-        )
-    if target_dir.is_dir() and any(target_dir.iterdir()) and not force:
-        raise FileExistsError(
-            f"Target directory '{target_dir}' already exists and is not "
-            "empty. Use --force to overwrite files."
-        )
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-
     substitutions = {
         "BLUEPRINT_NAME": name,
         "BLUEPRINT_DESCRIPTION": f"{name.upper()} blueprint",
-        "BAT_ADK_EXTRAS": _bat_adk_extras(model_provider),
+        "BAT_ADK_EXTRAS": bat_adk_extras(model_provider),
         "BAT_ADK_VERSION": BAT_ADK_VERSION,
-        "API_KEY_LINE": _api_key_line(model_provider),
-        "TELEMETRY_PRIVACY_FLOOR": telemetry_privacy,
+        "API_KEY_LINE": api_key_line(model_provider),
     }
-
-    # (written name, template name). The spec is named after the blueprint so
-    # the binary is, too.
-    rendered: list[tuple[str, str]] = [
-        ("pyproject.toml", "pyproject.toml.template"),
-        ("__main__.py", "__main__.py"),
-        ("Makefile", "Makefile"),
-        ("docker-compose.yaml", "docker-compose.yaml"),
-        ("Dockerfile", "Dockerfile"),
-        (f"{name}.spec", "blueprint.spec"),
-        (".env", ".env.template"),
-        ("README.md", "README.md"),
-    ]
-
-    created: list[Path] = []
-    for written_name, template_name in rendered:
-        path = target_dir / written_name
-        if path.exists() and not force:
+    files = {}
+    for template in template_files(TEMPLATES_DIR):
+        if template.startswith("agent/"):
             continue
-        path.write_text(
-            _render(template_name, substitutions), encoding="utf-8"
+        # The spec is named after the blueprint, so the binary is too.
+        output = (
+            f"{name}.spec"
+            if template == "blueprint.spec"
+            else template.removesuffix(".template")
         )
-        created.append(path)
-
-    for static_name in _STATIC_FILES:
-        path = target_dir / static_name
-        if path.exists() and not force:
-            continue
-        path.write_text(
-            (BLUEPRINT_TEMPLATES_DIR / static_name).read_text(
-                encoding="utf-8"
-            ),
-            encoding="utf-8",
-        )
-        created.append(path)
-
-    return created
-
-
-def replace_managed_region(
-    text: str, body: str, *, begin: str = AGENTS_BEGIN, end: str = AGENTS_END
-) -> str:
-    """Return ``text`` with everything between the markers replaced by ``body``.
-
-    The marker lines themselves are kept verbatim, so their trailing comment
-    ("generated by ...") survives, and anything outside them is untouched.
-    """
-    lines = text.splitlines()
-    begin_index: int | None = None
-    end_index: int | None = None
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        if begin_index is None:
-            if stripped.startswith(begin):
-                begin_index = index
-        elif stripped.startswith(end):
-            end_index = index
-            break
-
-    if begin_index is None or end_index is None:
-        raise ValueError(
-            f"Managed region {begin!r}..{end!r} not found: the file no longer "
-            "has the markers `bat add agent` writes between."
-        )
-
-    new_lines = (
-        lines[: begin_index + 1] + body.splitlines() + lines[end_index:]
-    )
-    return "\n".join(new_lines) + "\n"
-
-
-def _dispatcher_region(agent_names: list[str]) -> str:
-    """The dispatcher's APPS set and ``_load``, rebuilt from the agent list.
-
-    Explicit branches with the import inside: PyInstaller follows static
-    imports to decide what to freeze, and keeping each one in its branch means
-    selecting one agent never imports another's dependencies.
-    """
-    if not agent_names:
-        return (
-            "APPS: set[str] = set()\n"
-            "\n"
-            "\n"
-            "def _load(app: str):\n"
-            '    raise SystemExit(f"Unknown agent: {app}")\n'
-        )
-
-    literal = ", ".join(f'"{name}"' for name in agent_names)
-    lines = [f"APPS: set[str] = {{{literal}}}", "", "", "def _load(app: str):"]
-    for index, name in enumerate(agent_names):
-        keyword = "if" if index == 0 else "elif"
-        lines.append(f'    {keyword} app == "{name}":')
-        lines.append(f"        from {name} import run")
-        lines.append("")
-        lines.append("        return run")
-    lines.append('    raise SystemExit(f"Unknown agent: {app}")')
-    return "\n".join(lines) + "\n"
-
-
-def _compose_region(blueprint_root: Path, agent_names: list[str]) -> str:
-    """The compose ``services`` block, rebuilt from the agent list.
-
-    One image for the whole blueprint, tagged once and shared by every
-    service; the service's command is the selector, and CONFIG_PATH names the
-    agent's config the same way the Makefile does. The image carries no
-    config.yaml, so each service mounts its agent's own. ``network_mode:
-    host`` keeps the localhost ports in each config.yaml valid between
-    agents, and is what lets the healthcheck reach the agent's port.
-    """
-    if not agent_names:
-        return "services: {}"
-
-    # Docker image names must be lowercase; a hand-named root may not be.
-    image = f"${{IMAGE_TAG:-{blueprint_root.name.lower()}:dev}}"
-    lines = ["services:"]
-    for name in agent_names:
-        lines.extend(
-            [
-                f"  {name}:",
-                f"    image: {image}",
-                "    build:",
-                "      context: .",
-                "      args:",
-                "        VERSION: ${VERSION:-}",
-                f'    command: ["{name}"]',
-                "    environment:",
-                f"      CONFIG_PATH: {name}/config.yaml",
-                "      LOG_LEVEL: ${LOG_LEVEL:-info}",
-                "    env_file:",
-                "      - .env",
-                "    volumes:",
-                f"      - ./{name}/config.yaml:/app/{name}/config.yaml:ro",
-                "    network_mode: host",
-            ]
-        )
-        port = _agent_port(blueprint_root, name)
-        if port is not None:
-            lines.extend(
-                [
-                    "    healthcheck:",
-                    "      test:",
-                    '        ["CMD-SHELL", '
-                    f'"curl -fsS http://localhost:{port}/ping"]',
-                    "      interval: 5s",
-                    "      timeout: 2s",
-                    "      retries: 5",
-                ]
-            )
-        lines.append("    restart: unless-stopped")
-    return "\n".join(lines)
+        files[output] = render(TEMPLATES_DIR / template, substitutions)
+    return write_files(target_dir, files, force=True)
 
 
 def _agent_port(blueprint_root: Path, name: str) -> int | None:
-    """The port in ``<name>/config.yaml``, or ``None`` when it has none."""
     config_path = blueprint_root / name / "config.yaml"
     if not config_path.is_file():
         return None
@@ -258,35 +82,69 @@ def _agent_port(blueprint_root: Path, name: str) -> int | None:
     return port if isinstance(port, int) else None
 
 
-def _next_free_port(blueprint_root: Path, agent_names: list[str]) -> int:
-    ports = [
-        port
-        for port in (_agent_port(blueprint_root, name) for name in agent_names)
-        if port is not None
-    ]
-    return max(ports) + 1 if ports else _DEFAULT_PORT
+def _compose_service(blueprint_root: Path, name: str) -> dict:
+    """One image for the whole blueprint; the command selects the agent.
 
-
-def _files_without_managed_region(blueprint_root: Path) -> list[str]:
-    """The files ``bat add agent`` registers in that it cannot rewrite.
-
-    A hand-made blueprint is recognised by its layout just the same, but its
-    dispatcher and compose file carry no markers to regenerate between.
+    The image carries no config.yaml, so the service mounts the agent's own;
+    ``network_mode: host`` keeps the localhost ports between agents valid.
     """
-    missing = []
-    for name in ("__main__.py", "docker-compose.yaml"):
-        path = blueprint_root / name
-        text = path.read_text(encoding="utf-8") if path.is_file() else ""
-        if AGENTS_BEGIN not in text or AGENTS_END not in text:
-            missing.append(name)
-    return missing
+    service: dict = {
+        "image": f"${{IMAGE_TAG:-{blueprint_root.name.lower()}:dev}}",
+        "build": {"context": ".", "args": {"VERSION": "${VERSION:-}"}},
+        "command": [name],
+        "environment": {
+            "CONFIG_PATH": f"{name}/config.yaml",
+            "LOG_LEVEL": "${LOG_LEVEL:-info}",
+        },
+        "env_file": [".env"],
+        "volumes": [f"./{name}/config.yaml:/app/{name}/config.yaml:ro"],
+        "network_mode": "host",
+    }
+    port = _agent_port(blueprint_root, name)
+    if port is not None:
+        service["healthcheck"] = {
+            "test": ["CMD-SHELL", f"curl -fsS http://localhost:{port}/ping"],
+            "interval": "5s",
+            "timeout": "2s",
+            "retries": 5,
+        }
+    service["restart"] = "unless-stopped"
+    return service
 
 
-def _rewrite_region(path: Path, body: str) -> None:
-    path.write_text(
-        replace_managed_region(path.read_text(encoding="utf-8"), body),
-        encoding="utf-8",
+def _add_compose_services(
+    blueprint_root: Path, agent: str, *, replace: bool
+) -> Path:
+    """Give every agent without one a compose service (``agent`` a new one
+    on ``replace``); every other service is kept as it is."""
+    path = blueprint_root / "docker-compose.yaml"
+    compose = (
+        yaml.safe_load(path.read_text(encoding="utf-8"))
+        if path.is_file()
+        else None
     )
+    if not isinstance(compose, dict):
+        compose = {"name": blueprint_root.name.lower()}
+    services = compose.get("services") or {}
+    for name in blueprint_agents(blueprint_root):
+        if name not in services or (replace and name == agent):
+            services[name] = _compose_service(blueprint_root, name)
+    compose["services"] = services
+    path.write_text(dump_yaml(compose), encoding="utf-8")
+    return path
+
+
+def _name_problem(name: str) -> str | None:
+    """Why the dispatcher could not ``import`` ``name``, if it could not."""
+    if "-" in name:
+        return f"hyphens are not allowed. Use '{name.replace('-', '_')}'"
+    if name[:1].isdigit():
+        return "it can't start with a digit"
+    if keyword.iskeyword(name):
+        return "it is a Python keyword"
+    if not name.isidentifier():
+        return "use only letters, digits and underscores"
+    return None
 
 
 def add_agent_to_blueprint(
@@ -298,100 +156,58 @@ def add_agent_to_blueprint(
     model_provider: str = "openai",
     clients: list[str] | None = None,
     force: bool = False,
-    class_name_source: str | None = None,
+    telemetry_privacy: str | None = None,
 ) -> list[Path]:
-    """Create agent ``name`` inside ``blueprint_root`` and register it.
-
-    Registration regenerates two managed regions from the agents on disk --
-    the dispatcher's in __main__.py and the services block in
-    docker-compose.yaml -- so an agent directory added by hand is picked up
-    too. The Makefile and the Dockerfile discover agents themselves and need
-    no edit.
+    """Create agent ``name`` in the blueprint. Everything but
+    docker-compose.yaml finds agents by their folder.
 
     Raises:
-        ValueError: If ``name`` is not importable as a Python module, an
-            agent with that name is already registered, or the blueprint has
-            no managed regions to register it in.
+        ValueError: If ``name`` is not importable as a Python module, or an
+            agent with that name already exists.
     """
-    agent_dir_name = name.lower()
-    if not agent_dir_name.isidentifier():
-        raise ValueError(
-            f"'{name}' cannot be an agent name: the directory becomes a "
-            "Python package the blueprint's entrypoint imports, so it must "
-            "be a valid identifier (letters, digits and underscores, not "
-            "starting with a digit)."
-        )
+    directory = name.lower()
+    problem = _name_problem(directory)
+    if problem:
+        raise ValueError(f"'{name}' can't be an agent name: {problem}.")
+    floor = resolve_telemetry_privacy(telemetry_privacy)
 
-    # Checked before anything is written: finding out at registration time
-    # would leave the agent's files behind in a blueprint it never joined.
-    unmanaged = _files_without_managed_region(blueprint_root)
-    if unmanaged:
-        raise ValueError(
-            f"Cannot register an agent in blueprint '{blueprint_root.name}': "
-            f"{' and '.join(unmanaged)} "
-            f"{'has' if len(unmanaged) == 1 else 'have'} no "
-            f"'{AGENTS_BEGIN}' ... '{AGENTS_END}' region to regenerate. "
-            "`bat add agent` extends blueprints created by `bat init "
-            "blueprint`; add the markers to use it here."
-        )
-
-    existing = blueprint_agent_names_on_disk(blueprint_root)
-    if agent_dir_name in existing and not force:
+    existing = blueprint_agents(blueprint_root)
+    if directory in existing and not force:
         raise ValueError(
             f"Blueprint '{blueprint_root.name}' already has an agent named "
-            f"'{agent_dir_name}'."
+            f"'{directory}'."
         )
-
-    resolved_port = (
-        port if port is not None else _next_free_port(blueprint_root, existing)
-    )
-    class_source = class_name_source if class_name_source is not None else name
-
-    agent_dir = blueprint_root / agent_dir_name
-    agent_dir.mkdir(parents=True, exist_ok=True)
-    (agent_dir / "src" / "llm_clients").mkdir(parents=True, exist_ok=True)
+    if port is None:
+        ports = [_agent_port(blueprint_root, agent) for agent in existing]
+        port = max((p for p in ports if p), default=_DEFAULT_PORT - 1) + 1
 
     substitutions = {
-        "AGENT_NAME": agent_dir_name,
-        "AGENT_CLASS_NAME": _agent_class_name(class_source),
+        "AGENT_NAME": directory,
+        "AGENT_CLASS_NAME": agent_class_name(name),
         "BLUEPRINT_NAME": blueprint_root.name,
-        "PORT": str(resolved_port),
+        "PORT": str(port),
         "MODEL": model,
         "MODEL_PROVIDER": model_provider,
+        "TELEMETRY_PRIVACY_FLOOR": floor,
+        **graph_substitutions(clients),
     }
-
-    created: list[Path] = []
-
-    def _write(relative: str, content: str) -> None:
-        path = agent_dir / relative
-        if path.exists() and not force:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        created.append(path)
-
-    _write("__init__.py", _render("agent/__init__.py", substitutions))
-    _write("app.py", _render("agent/app.py", substitutions))
-    _write("config.yaml", _render("agent/config.yaml", substitutions))
-    _write("agent.json", _build_agent_json_content(agent_dir_name))
-    _write("src/__init__.py", _build_src_init_content(class_source))
-    _write("src/graph.py", _build_graph_content(class_source, clients))
-
-    created.extend(
-        _write_llm_clients(
-            agent_dir / "src" / "llm_clients", clients=clients, force=force
+    files = {
+        template.removeprefix("agent/"): render(
+            TEMPLATES_DIR / template, substitutions
         )
-    )
+        for template in template_files(TEMPLATES_DIR)
+        if template.startswith("agent/")
+    }
+    for template in _AGENT_TEMPLATES:
+        files[template.removesuffix(".template")] = render(
+            AGENT_TEMPLATES_DIR / template, substitutions
+        )
 
-    # --- registration -----------------------------------------------------
-    names = blueprint_agent_names_on_disk(blueprint_root)
-
-    main_path = blueprint_root / "__main__.py"
-    _rewrite_region(main_path, _dispatcher_region(names))
-    created.append(main_path)
-
-    compose_path = blueprint_root / "docker-compose.yaml"
-    _rewrite_region(compose_path, _compose_region(blueprint_root, names))
-    created.append(compose_path)
-
-    return created
+    agent_dir = blueprint_root / directory
+    return [
+        *write_files(agent_dir, files, force=force),
+        *write_llm_clients(
+            agent_dir / "src" / "llm_clients", clients=clients, force=force
+        ),
+        _add_compose_services(blueprint_root, directory, replace=force),
+    ]
