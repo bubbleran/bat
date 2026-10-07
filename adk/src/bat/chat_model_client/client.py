@@ -160,6 +160,40 @@ class ChatModelClient:
             and self.config.base_url is None
         ):
             kwargs["use_responses_api"] = True
+        kwargs.update(self._reasoning_effort_kwargs())
+        kwargs.update(self._service_tier_kwargs())
+        return kwargs
+
+    def _reasoning_effort_kwargs(self) -> Dict[str, Any]:
+        """`init_chat_model` arguments for the configured reasoning effort."""
+        kwargs: Dict[str, Any] = {}
+        effort = self.config.reasoning_effort
+        if effort is not None:
+            match self.config.model_provider:
+                case "anthropic" | "openai":
+                    kwargs["reasoning_effort"] = effort
+                case "ollama":
+                    kwargs["reasoning"] = effort
+                case _:
+                    logger.warning(
+                        "reasoning_effort is not supported for provider "
+                        f"{self.config.model_provider}: ignored."
+                    )
+        return kwargs
+
+    def _service_tier_kwargs(self) -> Dict[str, Any]:
+        """`init_chat_model` arguments for the configured service tier."""
+        kwargs: Dict[str, Any] = {}
+        tier = self.config.service_tier
+        if tier is not None:
+            match self.config.model_provider:
+                case "openai":
+                    kwargs["service_tier"] = tier
+                case _:
+                    logger.warning(
+                        "service_tier is not supported for provider "
+                        f"{self.config.model_provider}: ignored."
+                    )
         return kwargs
 
     @property

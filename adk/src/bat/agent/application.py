@@ -40,19 +40,15 @@ class AgentApplication:
     This class sets up an agent application that serves the A2A protocol.
 
     Configuration:
-        Settings are read from ``./config.yaml`` (see :class:`AgentConfig`):
-        - ``endpoint.url`` (required): base URL where the agent is hosted.
-        - ``endpoint.port``: A2A application port. Defaults to 9900.
-        - ``model``: provider/name/base_url for the chat model (the env vars
-          ``MODEL``/``MODEL_PROVIDER``/``BASE_URL`` still override these).
-        - ``telemetry``: OpenTelemetry settings (see :class:`AgentConfig`).
-        - ``agent_card``: path to the agent card JSON. Optional; defaults to
-          ``./agent.json`` (``AGENT_CARD_PATH`` env still works as a fallback).
+        Read from the YAML file at ``CONFIG_PATH`` (default
+        ``./config.yaml``); see :class:`AgentConfig` for its fields.
 
-        Only secrets stay in the environment (API keys, e.g.
-        ``OPENAI_API_KEY``). ``CONFIG_PATH`` (default ``./config.yaml``) and
-        ``AGENT_CARD_DISPLAY`` (default true) are still read from the
-        environment.
+        Environment variables read here:
+        - ``CONFIG_PATH``: path of the config file.
+        - ``AGENT_CARD_PATH``: agent card path, used when config.yaml has no
+          ``agent_card`` (default ``./agent.json``).
+        - ``AGENT_CARD_DISPLAY``: ``1`` (default) prints the agent card at
+          startup.
 
     Attributes
     -------
@@ -82,8 +78,7 @@ class AgentApplication:
     ):
         """Initialize the AgentApplication with the agent's graph and state.
 
-        Everything else -- endpoint, model, agent card, telemetry -- is read
-        from ``config.yaml``; see the class docstring.
+        Everything else is read from config.yaml (see :class:`AgentConfig`).
 
         Args:
             AgentGraphType (Type[AgentGraph]): The class to use to instantiate
@@ -105,6 +100,8 @@ class AgentApplication:
                 provider=self._config.model.provider,
                 name=self._config.model.name,
                 base_url=self._config.model.base_url,
+                reasoning_effort=self._config.model.reasoning_effort,
+                service_tier=self._config.model.service_tier,
             )
 
         endpoint = self._config.endpoint
