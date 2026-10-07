@@ -289,3 +289,45 @@ def test_output_version_is_left_to_the_provider(captured_init_kwargs):
         ),
     )
     assert "output_version" not in captured_init_kwargs
+
+
+# ------------------ Model settings Tests ------------------
+
+
+@pytest.mark.parametrize(
+    "provider, expected",
+    [
+        ("openai", {"reasoning_effort": "low", "service_tier": "flex"}),
+        ("anthropic", {"reasoning_effort": "low"}),
+        ("ollama", {"reasoning": "low"}),
+        ("nvidia", {}),
+    ],
+)
+def test_model_settings_are_named_per_provider(
+    captured_init_kwargs, provider, expected
+):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="some-model",
+            model_provider=provider,
+            reasoning_effort="low",
+            service_tier="flex",
+        ),
+    )
+    sent = {
+        name: captured_init_kwargs[name]
+        for name in ("reasoning_effort", "reasoning", "service_tier")
+        if name in captured_init_kwargs
+    }
+    assert sent == expected
+
+
+def test_unset_model_settings_are_not_sent(captured_init_kwargs):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="gpt-5.2",
+            model_provider="openai",
+        ),
+    )
+    assert "reasoning_effort" not in captured_init_kwargs
+    assert "service_tier" not in captured_init_kwargs
