@@ -37,6 +37,10 @@ class ChatModelClientConfig(BaseModel):
         base_url (str, optional): The base URL for the model provider, required
             for non-OpenAI providers.
         client_name (str, optional): Name for the client.
+        reasoning_effort (str, optional): How much the model reasons before
+            answering, e.g. "low". Sent only to providers that support it.
+        service_tier (str, optional): Processing tier for the requests, e.g.
+            "flex". Sent only to providers that support it.
 
     The class can be instantiated directly or created from environment variables
     using the `load` class method (usually preferred).
@@ -78,6 +82,14 @@ class ChatModelClientConfig(BaseModel):
         default=None,
         description="Name for the client.",
     )
+    reasoning_effort: Optional[str] = Field(
+        default=None,
+        description="How much the model reasons before answering.",
+    )
+    service_tier: Optional[str] = Field(
+        default=None,
+        description="Processing tier for the requests.",
+    )
 
     @classmethod
     def _set_defaults(
@@ -86,17 +98,22 @@ class ChatModelClientConfig(BaseModel):
         provider: Optional[str] = None,
         name: Optional[str] = None,
         base_url: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
+        service_tier: Optional[str] = None,
     ) -> None:
         """Install fallback model settings (typically from config.yaml).
 
         ``load`` uses these only when the corresponding environment variable
         is absent, implementing the precedence ``env > config.yaml`` for the
-        model, provider and base URL.
+        model, provider and base URL. Reasoning effort and service tier have
+        no environment variable.
         """
         cls._config_defaults = {
             "provider": provider,
             "name": name,
             "base_url": base_url,
+            "reasoning_effort": reasoning_effort,
+            "service_tier": service_tier,
         }
 
     @classmethod
@@ -110,6 +127,8 @@ class ChatModelClientConfig(BaseModel):
         model_provider: ModelProvider,
         base_url: Optional[str] = None,
         client_name: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
+        service_tier: Optional[str] = None,
     ):
         """Initialize the ChatModelClientConfig with the provided parameters.
 
@@ -120,12 +139,18 @@ class ChatModelClientConfig(BaseModel):
             base_url (Optional[str]): The base URL for the model provider,
                 required for non-OpenAI providers.
             client_name (Optional[str]): Name for the client.
+            reasoning_effort (Optional[str]): How much the model reasons before
+                answering, e.g. "low".
+            service_tier (Optional[str]): Processing tier for the requests,
+                e.g. "flex".
         """
         super().__init__(
             model=model,
             model_provider=model_provider,
             base_url=base_url,
             client_name=client_name,
+            reasoning_effort=reasoning_effort,
+            service_tier=service_tier,
         )
 
     @classmethod
@@ -142,6 +167,9 @@ class ChatModelClientConfig(BaseModel):
         - `MODEL_PROVIDER`: provider (e.g. openai, ollama); falls back to the
             provider in `MODEL` or `model.provider` from config.yaml.
         - `BASE_URL`: optional base URL; falls back to `model.base_url`.
+
+        `model.reasoning_effort` and `model.service_tier` come from config.yaml
+        only.
 
         Args:
             client_name (Optional[str]): Name for the client.
@@ -190,6 +218,8 @@ class ChatModelClientConfig(BaseModel):
             model_provider=model_provider,
             base_url=base_url,
             client_name=client_name,
+            reasoning_effort=defaults.get("reasoning_effort"),
+            service_tier=defaults.get("service_tier"),
         )
 
     @classmethod
