@@ -44,7 +44,7 @@ from opentelemetry.trace import Status
 from .privacy import TelemetryPrivacy
 
 # Same sentinel OpenInference's TraceConfig writes.
-REDACTED = "__REDACTED__"
+REDACTED = "__BLOCKED__"
 
 
 def _hides(key: str, hide_tool_names: bool) -> bool:
