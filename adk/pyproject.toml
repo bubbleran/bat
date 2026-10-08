@@ -43,7 +43,7 @@ telemetry = [
   "opentelemetry-api>=1.27.0",
   "opentelemetry-sdk>=1.27.0",
   "opentelemetry-exporter-otlp>=1.27.0",
-  "openinference-instrumentation-langchain>=0.1.29",
+  "openinference-instrumentation-langchain>=0.1.68",
   "openinference-instrumentation>=0.1.53",
 ]
 

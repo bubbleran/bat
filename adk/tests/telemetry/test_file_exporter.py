@@ -24,7 +24,6 @@ def _fake_span(
     trace_id=0x1234,
     span_id=0xABCD,
     parent_span_id=None,
-    kind_name="INTERNAL",
     status_name="OK",
     attributes=None,
     start_time=1_000,
@@ -32,12 +31,11 @@ def _fake_span(
 ):
     return SimpleNamespace(
         name=name,
-        kind=SimpleNamespace(name=kind_name) if kind_name else None,
-        status=(
-            SimpleNamespace(status_code=SimpleNamespace(name=status_name))
-            if status_name
-            else None
+        kind=SimpleNamespace(name="INTERNAL"),
+        status=SimpleNamespace(
+            status_code=SimpleNamespace(name=status_name), description=None
         ),
+        events=(),
         start_time=start_time,
         end_time=end_time,
         attributes=attributes or {},
@@ -72,12 +70,9 @@ def test_span_to_dict_hex_widths_and_fields():
     assert d["attributes"] == {"gen_ai.operation.name": "invoke_agent"}
 
 
-def test_span_to_dict_handles_missing_parent_and_kind():
-    span = _fake_span(parent_span_id=None, kind_name=None, status_name=None)
-    d = _span_to_dict(span)
+def test_span_to_dict_handles_missing_parent():
+    d = _span_to_dict(_fake_span(parent_span_id=None))
     assert d["parent_span_id"] is None
-    assert d["kind"] is None
-    assert d["status"] is None
 
 
 def test_exporter_writes_one_json_object_per_line(tmp_path):

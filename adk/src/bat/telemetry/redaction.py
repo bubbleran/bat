@@ -43,48 +43,30 @@ from opentelemetry.trace import Status
 
 from .privacy import TelemetryPrivacy
 
-# Same sentinel OpenInference's TraceConfig writes, so a consumer sees one
-# consistent marker regardless of which layer did the redaction.
+# Same sentinel OpenInference's TraceConfig writes.
 REDACTED = "__REDACTED__"
 
-# Matched as substrings because OpenInference nests these under indexed
-# paths, e.g.
-#   llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments
-_CONTENT_MARKERS = (
-    "tool.description",
-    "tool.parameters",
-    "tool.json_schema",
-    "tool_call.function.arguments",
-)
 
-# Generic span input/output, matched exactly. OpenInference's own spans already
-# have them masked by TraceConfig (hide_inputs/hide_outputs); the ADK's manual
-# spans do not go through it.
-_IO_KEYS = frozenset({"input.value", "output.value"})
+def _hides(key: str, hide_tool_names: bool) -> bool:
+    """True when the value under ``key`` must not leave the process."""
+    if key in (
+        "input.value",
+        "output.value",
+        "exception.message",
+        "exception.stacktrace",
+    ):
+        return True
 
-# Exception event attributes that carry the error's text.
-_ERROR_TEXT_KEYS = frozenset({"exception.message", "exception.stacktrace"})
-
-# Attribute holding the OpenInference span kind (LLM / CHAIN / TOOL / ...).
-# Reused as the replacement span name so redacted traces keep their shape.
-_SPAN_KIND_KEY = "openinference.span.kind"
-
-# Tool identity, redacted only at the `full` level.
-_NAME_MARKERS = (
-    "tool.name",
-    "tool_call.function.name",
-    "gen_ai.tool.name",
-)
-
-
-def _is_tool_content(key: str) -> bool:
-    """True when ``key`` names tool content rather than tool identity."""
-    return any(marker in key for marker in _CONTENT_MARKERS)
-
-
-def _is_tool_name(key: str) -> bool:
-    """True when ``key`` names a tool's identity."""
-    return any(marker in key for marker in _NAME_MARKERS)
+    tool_content = (
+        "tool.description",
+        "tool.parameters",
+        "tool.json_schema",
+        "tool_call.function.arguments",
+    )
+    if any(part in key for part in tool_content):
+        return True
+    tool_names = ("tool.name", "tool_call.function.name")
+    return hide_tool_names and any(part in key for part in tool_names)
 
 
 def redact_attributes(
@@ -92,37 +74,17 @@ def redact_attributes(
     *,
     hide_tool_names: bool = False,
 ) -> Dict[str, object]:
-    """Replace tool attribute values with :data:`REDACTED`.
-
-    Keys are preserved so consumers can still tell *that* a tool span carried
-    a description or arguments, only not what they said.
+    """Replace content values with :data:`REDACTED`, keeping the keys.
 
     Args:
-        attributes (Optional[Dict[str, object]]): The span's attributes.
+        attributes (Optional[Dict[str, object]]): Span or event attributes.
         hide_tool_names (bool): Also redact tool identity (the ``full``
             privacy level).
     """
-    if not attributes:
-        return {}
-
-    def _redact(key: str, value: object) -> object:
-        if _is_tool_content(key) or key in _IO_KEYS:
-            return REDACTED
-        if hide_tool_names and _is_tool_name(key):
-            return REDACTED
-        return value
-
-    return {key: _redact(key, value) for key, value in attributes.items()}
-
-
-def _redact_error_text(event: Event) -> Event:
-    """``event`` with its exception message and stack trace masked."""
-    attributes = dict(event.attributes or {})
-    if not _ERROR_TEXT_KEYS & attributes.keys():
-        return event
-    for key in _ERROR_TEXT_KEYS & attributes.keys():
-        attributes[key] = REDACTED
-    return Event(event.name, attributes, timestamp=event.timestamp)
+    return {
+        key: REDACTED if _hides(key, hide_tool_names) else value
+        for key, value in (attributes or {}).items()
+    }
 
 
 class RedactingSpanExporter(SpanExporter):
@@ -148,17 +110,22 @@ class RedactingSpanExporter(SpanExporter):
         events = span.events
         status = span.status
         if self._privacy.hides_content:
-            attributes = redact_attributes(
-                attributes,
-                hide_tool_names=self._privacy.hides_tool_names,
-            )
-            events = [_redact_error_text(event) for event in span.events]
+            hide = self._privacy.hides_tool_names
+            attributes = redact_attributes(attributes, hide_tool_names=hide)
+            events = [
+                Event(
+                    event.name,
+                    redact_attributes(event.attributes, hide_tool_names=hide),
+                    timestamp=event.timestamp,
+                )
+                for event in span.events
+            ]
             if status is not None and status.description:
                 status = Status(status.status_code, REDACTED)
 
         name = span.name
         if self._privacy.hides_span_names:
-            kind = attributes.get(_SPAN_KIND_KEY)
+            kind = attributes.get("openinference.span.kind")
             name = str(kind) if kind else REDACTED
 
         # Rebuild rather than mutate: ReadableSpan is the exporter-facing

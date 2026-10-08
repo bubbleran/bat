@@ -1,9 +1,9 @@
 import atexit
 import contextlib
 from typing import Any, Dict, Optional
-from .attributes import OPENINFERENCE_PROJECT_NAME
-from .privacy import TelemetryPrivacy
+
 from ..logging import create_logger
+from .attributes import OPENINFERENCE_PROJECT_NAME
 from .config import TelemetryConfig
 
 logger = create_logger(__name__, "debug")
@@ -26,7 +26,6 @@ except ImportError:  # pragma: no cover - exercised only without the extra
         CONSUMER = 4
 
 
-_initialized = False
 _provider = None
 
 
@@ -62,66 +61,20 @@ class _NoopTracer:
         return _NoopSpan()
 
 
-# LangGraph 1.x callback hooks that the OpenInference LangChain tracer
-# (<=0.1.66) does not implement. Calling them raises a noisy AttributeError.
-_LANGGRAPH_CALLBACK_SHIMS = ("on_interrupt", "on_resume")
-
-
-def _patch_openinference_langgraph_callbacks() -> None:
-    """Add no-op LangGraph callbacks to the OpenInference LangChain tracer.
-
-    LangGraph 1.x dispatches ``on_interrupt`` / ``on_resume`` callbacks (fired
-    by human-in-the-loop ``interrupt()`` and its resume), but the OpenInference
-    LangChain instrumentation (<=0.1.66), being a callback handler, does not
-    implement them, which logs a noisy ``AttributeError`` on every interrupt or
-    resume. This shim silences that without affecting behavior; it is a no-op
-    for hooks that already exist or if the internal module layout changes.
-    Remove once OpenInference ships these methods.
-    """
-    try:
-        from openinference.instrumentation.langchain._tracer import (
-            OpenInferenceTracer,
-        )
-
-        for hook in _LANGGRAPH_CALLBACK_SHIMS:
-            if not hasattr(OpenInferenceTracer, hook):
-                setattr(
-                    OpenInferenceTracer,
-                    hook,
-                    lambda self, *args, **kwargs: None,
-                )
-    except Exception:  
-        pass
-
-
-def setup_telemetry(
-    service_name: Optional[str] = None,
-    *,
-    config: Optional[TelemetryConfig] = None,
-) -> bool:
-    """Configure the global tracer provider and auto-instrumentation.
-
-    Idempotent: safe to call multiple times; only the first call has effect.
-
-    Args:
-        service_name (Optional[str]): Unused; telemetry is configured solely
-            via ``config``. Kept for signature compatibility.
-        config (TelemetryConfig): Resolved telemetry settings, built from the
-            ``config.yaml`` ``telemetry`` section by ``AgentApplication``.
+def setup_telemetry(config: Optional[TelemetryConfig] = None) -> bool:
+    """Install the global tracer provider, exporters and LangChain
+    instrumentation. Idempotent.
 
     Returns:
-        bool: ``True`` if telemetry was activated, ``False`` if it is disabled
-            (no outputs configured, or enabled but the ``telemetry`` extra is
-            not installed — in which case a clear error is logged and the agent
-            keeps running without telemetry rather than crashing).
+        bool: ``False`` when telemetry is disabled or the ``telemetry`` extra
+            is missing (logged; the agent keeps running without it).
     """
-    global _initialized, _provider
+    global _provider
 
-    if _initialized:
+    if _provider is not None:
         return True
 
-    cfg = config
-    if cfg is None or not cfg.enabled:
+    if config is None or not config.enabled:
         logger.debug(
             "Telemetry disabled (add a `telemetry.output` entry in "
             "config.yaml to enable)."
@@ -131,14 +84,21 @@ def setup_telemetry(
     try:
         if trace is None:
             raise ImportError
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from openinference.instrumentation import TraceConfig
         from openinference.instrumentation.langchain import (
             LangChainInstrumentor,
         )
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import (
+            BatchSpanProcessor,
+            ConsoleSpanExporter,
+            SimpleSpanProcessor,
+        )
+
         from .file_exporter import JsonFileSpanExporter
         from .redaction import RedactingSpanExporter
     except ImportError:
@@ -149,60 +109,50 @@ def setup_telemetry(
         )
         return False
 
-    resource_attributes = {"service.name": cfg.service_name}
-    if cfg.project_name:
-        resource_attributes[OPENINFERENCE_PROJECT_NAME] = cfg.project_name
-    resource = Resource.create(resource_attributes)
-    provider = TracerProvider(resource=resource)
+    resource_attributes = {"service.name": config.service_name}
+    if config.project_name:
+        resource_attributes[OPENINFERENCE_PROJECT_NAME] = config.project_name
+    provider = TracerProvider(resource=Resource.create(resource_attributes))
 
-    # Attributes TraceConfig cannot reach (tool descriptions, parameter
-    # schemas, tool-call arguments) and span names are redacted here instead,
-    # on the way out, so every destination sees the same redacted span.
-    def _wrap(exp):
-        if cfg.privacy is TelemetryPrivacy.NONE:
-            return exp
-        return RedactingSpanExporter(exp, privacy=cfg.privacy)
+    def _add(processor, exporter):
+        if config.privacy.hides_content:
+            exporter = RedactingSpanExporter(exporter, privacy=config.privacy)
+        provider.add_span_processor(processor(exporter))
 
-    for exporter in cfg.exporters:
-        if exporter.kind == "console":
-            provider.add_span_processor(
-                BatchSpanProcessor(_wrap(ConsoleSpanExporter()))
-            )
+    for spec in config.exporters:
+        if spec.kind == "console":
+            _add(BatchSpanProcessor, ConsoleSpanExporter())
             logger.info("Telemetry: console exporter active.")
-        elif exporter.kind == "file":
-            path = exporter.file_path or "spans.jsonl"
+        elif spec.kind == "file":
             try:
-                provider.add_span_processor(
-                    SimpleSpanProcessor(_wrap(JsonFileSpanExporter(path)))
-                )
+                _add(SimpleSpanProcessor, JsonFileSpanExporter(spec.file_path))
             except OSError as e:
                 logger.error(
                     "Telemetry: cannot open file exporter at %s (%s); "
                     "skipping this destination.",
-                    path,
+                    spec.file_path,
                     e,
                 )
                 continue
-            logger.info("Telemetry: file exporter -> %s.", path)
-        elif exporter.kind == "otlp":
-            otlp_exp = OTLPSpanExporter(endpoint=exporter.traces_endpoint)
-            provider.add_span_processor(BatchSpanProcessor(_wrap(otlp_exp)))
+            logger.info("Telemetry: file exporter -> %s.", spec.file_path)
+        elif spec.kind == "otlp":
+            otlp = OTLPSpanExporter(endpoint=spec.traces_endpoint)
+            _add(BatchSpanProcessor, otlp)
             logger.info(
-                "Telemetry: OTLP exporter -> %s.", exporter.traces_endpoint
+                "Telemetry: OTLP exporter -> %s.", spec.traces_endpoint
             )
 
     logger.info(
-        "Telemetry enabled (%d exporter(s), service=%s).",
-        len(cfg.exporters),
-        cfg.service_name,
+        "Telemetry enabled (%d exporter(s), service=%s, privacy=%s).",
+        len(config.exporters),
+        config.service_name,
+        config.privacy.name.lower(),
     )
 
     trace.set_tracer_provider(provider)
-    _provider = provider
-    atexit.register(shutdown_telemetry)
 
     instrument_kwargs: Dict[str, Any] = {"tracer_provider": provider}
-    if cfg.privacy.hides_content:
+    if config.privacy.hides_content:
         instrument_kwargs["config"] = TraceConfig(
             hide_inputs=True,
             hide_outputs=True,
@@ -210,46 +160,30 @@ def setup_telemetry(
             hide_llm_invocation_parameters=True,
             hide_llm_tools=True,
         )
-    logger.info(
-        "Telemetry: privacy level %s (content=%s, span_names=%s, "
-        "tool_names=%s).",
-        cfg.privacy.name.lower(),
-        cfg.privacy.hides_content,
-        cfg.privacy.hides_span_names,
-        cfg.privacy.hides_tool_names,
-    )
     LangChainInstrumentor().instrument(**instrument_kwargs)
-    _patch_openinference_langgraph_callbacks()
     logger.debug("OpenInference LangChain instrumentation active.")
 
-    _initialized = True
+    _provider = provider
+    atexit.register(shutdown_telemetry)
     return True
 
 
 def shutdown_telemetry() -> None:
-    """Flush and shut down the tracer provider (final span export).
-
-    Forces buffered spans out of the ``BatchSpanProcessor`` and closes the
-    exporters. Registered with ``atexit`` by :func:`setup_telemetry`, but also
-    safe to call explicitly (e.g. from an application shutdown hook or a test).
-    Idempotent and a no-op when telemetry was never initialized.
-    """
-    global _initialized, _provider
-    provider = _provider
-    if provider is None:
+    """Flush buffered spans and close the exporters. Idempotent; registered
+    with ``atexit`` by :func:`setup_telemetry`."""
+    global _provider
+    if _provider is None:
         return
-    _provider = None
-    _initialized = False
     with contextlib.suppress(Exception):
-        provider.shutdown()
+        _provider.shutdown()
+    _provider = None
 
 
 def mark_span_error(span: Any, description: str) -> None:
     """Set ``span``'s status to ERROR, saying why.
 
-    A span that recorded an exception is not failed until its status says
-    so, and the status is what trace readers (the eval engine, Phoenix) key
-    off. A no-op without the telemetry extra, like the spans themselves.
+    Trace readers (the eval engine, Phoenix) key off the status, not the
+    recorded exception. A no-op without the telemetry extra.
     """
     if Status is None:
         return
@@ -257,15 +191,11 @@ def mark_span_error(span: Any, description: str) -> None:
 
 
 def get_tracer(name: str) -> Any:
-    """Return a tracer for ``name``.
+    """Return a tracer for ``name``; a no-op one without the telemetry extra.
 
-    When OpenTelemetry is not installed, returns a no-op tracer. Otherwise it
-    returns OTel's tracer, which is a *proxy*: before :func:`setup_telemetry`
-    installs a provider it produces non-recording spans, and it automatically
-    starts recording once the provider is set. This is what makes a
-    module-level ``tracer = get_tracer(__name__)`` (captured at import time,
-    before ``setup_telemetry`` runs) work -- returning a ``_NoopTracer`` here
-    would cache a dead no-op and silently drop every manual span.
+    OTel's tracer is a proxy that starts recording once
+    :func:`setup_telemetry` installs the provider, so a module-level
+    ``tracer = get_tracer(__name__)`` captured at import time still works.
     """
     if trace is None:
         return _NoopTracer()
@@ -276,14 +206,13 @@ def inject_context(
     carrier: Dict[str, str],
     span: Optional[Any] = None,
 ) -> Dict[str, str]:
-    """Inject a trace context into ``carrier`` (W3C traceparent).
+    """Inject the current trace context, or ``span``'s, into ``carrier``.
 
-    If ``span`` is given, the context built around that span is injected
-    instead of the current context. This matters for async generators that
-    yield across tasks, where the span must not be attached to the ambient
-    context manager (which would break ``contextvars`` detach).
+    Pass ``span`` from async generators that yield across tasks, where
+    attaching it to the ambient context would break the ``contextvars``
+    detach.
     """
-    if _initialized:
+    if _provider is not None:
         ctx = trace.set_span_in_context(span) if span is not None else None
         propagate.inject(carrier, context=ctx)
     return carrier
@@ -291,11 +220,11 @@ def inject_context(
 
 def extract_context(carrier: Dict[str, str]) -> Optional[Any]:
     """Extract a trace context from ``carrier``; ``None`` when unavailable."""
-    if not _initialized or not carrier:
+    if _provider is None or not carrier:
         return None
     return propagate.extract(carrier)
 
 
 def is_enabled() -> bool:
     """Whether telemetry has been successfully initialized."""
-    return _initialized
+    return _provider is not None

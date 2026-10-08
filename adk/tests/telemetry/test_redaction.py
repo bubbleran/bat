@@ -133,10 +133,15 @@ def test_full_level_also_redacts_tool_names():
     """`full` trades the eval engine's tool-call metrics for a hidden
     tool inventory."""
     out = redact_attributes(
-        {"tool.name": "reboot_ran", "llm.token_count.total": 7},
+        {
+            "tool.name": "reboot_ran",
+            "gen_ai.tool.name": "reboot_ran",
+            "llm.token_count.total": 7,
+        },
         hide_tool_names=True,
     )
     assert out["tool.name"] == REDACTED
+    assert out["gen_ai.tool.name"] == REDACTED
     assert out["llm.token_count.total"] == 7
 
 

@@ -8,41 +8,28 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 
-def _hex(value: int, width: int) -> str:
-    return format(value, f"0{width}x")
-
-
 def _span_to_dict(span: ReadableSpan) -> Dict[str, Any]:
     ctx = span.get_span_context()
-    parent = span.parent
     return {
         "name": span.name,
-        "kind": span.kind.name if span.kind is not None else None,
-        "trace_id": _hex(ctx.trace_id, 32),
-        "span_id": _hex(ctx.span_id, 16),
+        "kind": span.kind.name,
+        "trace_id": format(ctx.trace_id, "032x"),
+        "span_id": format(ctx.span_id, "016x"),
         "parent_span_id": (
-            _hex(parent.span_id, 16) if parent is not None else None
+            format(span.parent.span_id, "016x") if span.parent else None
         ),
         "start_time": span.start_time,  # unix nanoseconds
         "end_time": span.end_time,  # unix nanoseconds
-        "attributes": dict(span.attributes or {}),
-        "status": (
-            span.status.status_code.name if span.status is not None else None
-        ),
-        # Why a failed span failed: its status description and exception
-        # events (type, message). The status alone only says that it did.
-        "status_description": (
-            getattr(span.status, "description", None)
-            if span.status is not None
-            else None
-        ),
+        "attributes": dict(span.attributes),
+        "status": span.status.status_code.name,
+        "status_description": span.status.description,
         "events": [
             {
                 "name": event.name,
                 "time": event.timestamp,  # unix nanoseconds
                 "attributes": dict(event.attributes or {}),
             }
-            for event in (getattr(span, "events", None) or ())
+            for event in span.events
         ],
     }
 
@@ -55,7 +42,7 @@ class JsonFileSpanExporter(SpanExporter):
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        self._file = open(path, "a", encoding="utf-8")  
+        self._file = open(path, "a", encoding="utf-8")
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         try:

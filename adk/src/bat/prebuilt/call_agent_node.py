@@ -650,8 +650,6 @@ class CallAgentNode(PrebuiltWorkflow):
             async for chunk in stream:
                 atr = AgentTaskResult.from_send_message_stream(chunk)
                 state = atr.task_status
-                # A closing status often carries no text: it must not erase
-                # the answer that came before it.
                 if atr.content:
                     answer = atr.content
                 yield chunk
