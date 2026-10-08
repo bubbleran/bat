@@ -606,11 +606,7 @@ class CallAgentNode(PrebuiltWorkflow):
 
         Token usage and tool calls of the called agent are captured through its
         own OpenTelemetry spans (correlated to this call by the shared
-        ``trace_id``), not extracted from the A2A messages here. What only the
-        caller sees is recorded on the CLIENT span: the request
-        (``input.value``), the last answer text (``output.value``) and the
-        final A2A state (``bat.a2a.task_state``); a failed remote task or a
-        broken stream sets the span's status to ERROR.
+        ``trace_id``), not extracted from the A2A messages here.
 
         Args:
             agent_card (AgentCard): The agent card of the target agent,
