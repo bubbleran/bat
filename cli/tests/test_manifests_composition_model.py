@@ -57,8 +57,19 @@ def test_each_agent_becomes_a_deployment_mode(tmp_path, monkeypatch) -> None:
         "imageTag": "hub.example.com/demo:1.2.3",
         "args": ["netops"],
         "env": [{"name": "AGENT_CARD_PATH", "value": "netops/agent.json"}],
+        "rules": [],
     }
     assert set(model["deploymentModes"]) == {"hermes", "netops"}
+    # PyYAML writes no comments: the example is added on every run.
+    text = (root / "composition-model.yaml").read_text(encoding="utf-8")
+    assert (
+        "    rules: []\n"
+        "    # Instead, e.g. to read the cluster's networks and terminals:\n"
+        "    # rules:\n"
+        "    #   - apiGroups: [athena.trirematics.io]\n"
+        "    #     resources: [networks, terminals]\n"
+        "    #     verbs: [get, watch]\n"
+    ) in text
     assert "added: hermes, netops" in result.output
     assert "Warning" not in result.output
 

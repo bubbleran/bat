@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from create.rendering import dump_yaml
 from image import registry_of
 
 from .aifabric import (
@@ -89,6 +90,8 @@ def update_composition_model(
             "env": [
                 {"name": "AGENT_CARD_PATH", "value": f"{directory}/agent.json"}
             ],
+            # Where the RBAC rules the agent needs in the cluster go, by hand.
+            "rules": [],
         }
         added.append(mode)
 
@@ -122,3 +125,23 @@ def update_composition_model(
         (key, value) for key, value in document.items() if key not in result
     )
     return ManifestUpdate(result, added, changes, warnings)
+
+
+def render(document: dict[str, Any]) -> str:
+    """``document`` as YAML, with a commented example under each empty
+    ``rules`` list: PyYAML writes no comments, so it is added on every run."""
+    example = (
+        "Instead, e.g. to read the cluster's networks and terminals:",
+        "rules:",
+        "  - apiGroups: [athena.trirematics.io]",
+        "    resources: [networks, terminals]",
+        "    verbs: [get, watch]",
+    )
+    lines: list[str] = []
+    for line in dump_yaml(document).splitlines(keepends=True):
+        lines.append(line)
+        if line.strip() == "rules: []":
+            indent = line[: len(line) - len(line.lstrip())]
+            for comment in example:
+                lines.append(f"{indent}# {comment}\n")
+    return "".join(lines)

@@ -11,11 +11,13 @@ from image import make_variables, plan
 from project import fail, require_blueprint_root
 
 from .aifabric import ManifestUpdate, update_aifabric
-from .composition_model import update_composition_model
+from .composition_model import render, update_composition_model
 
 
 def _update(
-    path: Path, update: Callable[[dict[str, Any] | None], ManifestUpdate]
+    path: Path,
+    update: Callable[[dict[str, Any] | None], ManifestUpdate],
+    render: Callable[[dict[str, Any]], str] = dump_yaml,
 ) -> None:
     """Rewrite the manifest at ``path`` with ``update`` and report what
     changed. PyYAML drops comments, so the leading block, where a manifest
@@ -29,9 +31,7 @@ def _update(
         lambda line: line.startswith("#") or not line.strip(),
         text.splitlines(keepends=True),
     )
-    path.write_text(
-        "".join(header) + dump_yaml(result.document), encoding="utf-8"
-    )
+    path.write_text("".join(header) + render(result.document), encoding="utf-8")
 
     for warning in result.warnings:
         typer.secho(f"Warning: {warning}", fg=typer.colors.YELLOW)
@@ -177,5 +177,6 @@ def generate_composition_model(
             name=name,
             namespace=namespace,
         ),
+        render,
     )
     typer.echo(f"  image: {dry_run.image} (push it: `bat push`, same options)")

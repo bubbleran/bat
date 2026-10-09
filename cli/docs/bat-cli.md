@@ -269,9 +269,15 @@ netops:
   env:
     - name: AGENT_CARD_PATH       # the config.yaml the operator mounts has no agent_card
       value: netops/agent.json
+  rules: []
+  # Instead, e.g. to read the cluster's networks and terminals:
+  # rules:
+  #   - apiGroups: [athena.trirematics.io]
+  #     resources: [networks, terminals]
+  #     verbs: [get, watch]
 ```
 
-The image is the one `bat build` tags with the same `--docker-registry`, `--repo` and `--version` (a dry run of `make build`); one with no registry is flagged, since the cluster can't pull it. Each run adds a mode for the agents that have none (an agent already run by a mode under another name keeps it) and moves every mode built from the blueprint's image — MCP modes included — to the new image, listing each change. Everything else is kept: `rules`, `resources`, `readinessProbe`, extra `env`, `spec.version`, other images' modes, and the leading comment block. RBAC rules are never guessed: add them by hand.
+The image is the one `bat build` tags with the same `--docker-registry`, `--repo` and `--version` (a dry run of `make build`); one with no registry is flagged, since the cluster can't pull it. Each run adds a mode for the agents that have none (an agent already run by a mode under another name keeps it) and moves every mode built from the blueprint's image — MCP modes included — to the new image, listing each change. Everything else is kept: `rules`, `resources`, `readinessProbe`, extra `env`, `spec.version`, other images' modes, and the leading comment block. RBAC rules are never guessed: a new mode gets an empty `rules` list to fill in by hand, with a commented example under it (PyYAML writes no comments, so the example is added again on every run, under each `rules: []`).
 
 ## Evaluation Engine (`eval`)
 
