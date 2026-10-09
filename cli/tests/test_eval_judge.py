@@ -7,6 +7,7 @@ that, and a score off the 0-1 scale must be retried rather than recorded.
 
 from __future__ import annotations
 
+import asyncio
 import http.server
 import json
 import threading
@@ -87,7 +88,7 @@ class _StructuredJudge:
         self.outcomes = list(outcomes)
         self.prompts: list[str] = []
 
-    def invoke(self, message):
+    async def ainvoke(self, message):
         self.prompts.append(message)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
@@ -102,7 +103,7 @@ class _TextJudge:
         self.answers = list(answers)
         self.prompts: list[str] = []
 
-    def invoke(self, message):
+    async def ainvoke(self, message):
         self.prompts.append(message)
         return AIMessage(content=self.answers.pop(0))
 
@@ -127,7 +128,7 @@ def test_the_verdict_schema_bounds_the_score_and_reasons_first() -> None:
 def test_the_verdict_comes_back_structured() -> None:
     judge = _StructuredJudge([JudgeVerdict(reasoning="good", score=0.8)])
 
-    result = _judge(judge).ask("task_completion", "prompt")
+    result = asyncio.run(_judge(judge).ask("task_completion", "prompt"))
 
     assert result == {"reasoning": "good", "score": 0.8}
 
@@ -140,7 +141,7 @@ def test_an_answer_that_does_not_fit_the_schema_is_retried() -> None:
         ]
     )
 
-    result = _judge(judge).ask("task_completion", "prompt")
+    result = asyncio.run(_judge(judge).ask("task_completion", "prompt"))
 
     assert result["score"] == 0.8
     assert len(judge.prompts) == 2
@@ -155,8 +156,8 @@ def test_without_structured_output_the_answer_is_read_as_text() -> None:
     text = _TextJudge([QWEN3_ANSWER, '{"reasoning": "fine", "score": 0.5}'])
     judge = _judge(structured, text)
 
-    first = judge.ask("task_completion", "prompt")
-    second = judge.ask("task_completion", "prompt")
+    first = asyncio.run(judge.ask("task_completion", "prompt"))
+    second = asyncio.run(judge.ask("task_completion", "prompt"))
 
     assert first == {"score": 1.0, "reasoning": "ok"}
     assert second["score"] == 0.5
@@ -168,7 +169,7 @@ def test_a_judge_that_never_scores_properly_leaves_no_score() -> None:
     structured = _StructuredJudge([ValueError("bad"), ValueError("bad")])
     judge = _judge(structured, _TextJudge(['{"score": 9}']))
 
-    result = judge.ask("task_completion", "prompt")
+    result = asyncio.run(judge.ask("task_completion", "prompt"))
 
     assert result["score"] is None
     assert result["reasoning"].startswith("Error: ")
@@ -227,7 +228,7 @@ def test_the_tool_judge_gets_the_calls_in_order_not_their_json(
     the complete list, which a rendering over budget may shorten."""
     prompts: dict[str, str] = {}
 
-    def ask(self, rubric: str, prompt: str) -> dict:
+    async def ask(self, rubric: str, prompt: str) -> dict:
         prompts[rubric] = prompt
         return {"reasoning": "", "score": 1.0}
 
@@ -246,7 +247,9 @@ def test_the_tool_judge_gets_the_calls_in_order_not_their_json(
         expected={"tool_calls": [{"name": "list_networks"}]},
     )
 
-    score(JudgeSpec(provider="openai", model="m"), [episode], {"t": task})
+    asyncio.run(
+        score(JudgeSpec(provider="openai", model="m"), [episode], {"t": task})
+    )
 
     assert (
         "list_networks, check_operator (FAILED), list_networks, "
@@ -262,7 +265,7 @@ def test_the_outcome_judge_sees_only_the_request_and_the_result(
     a step-level expectation against."""
     prompts: dict[str, str] = {}
 
-    def ask(self, rubric: str, prompt: str) -> dict:
+    async def ask(self, rubric: str, prompt: str) -> dict:
         prompts[rubric] = prompt
         return {"reasoning": "done", "score": 0.9}
 
@@ -285,7 +288,7 @@ def test_the_outcome_judge_sees_only_the_request_and_the_result(
     )
     spec = JudgeSpec(provider="openai", model="m", mode="outcome")
 
-    score(spec, [episode], {"t": task})
+    asyncio.run(score(spec, [episode], {"t": task}))
 
     assert list(prompts) == ["task_completion"]
     prompt = prompts["task_completion"]
@@ -298,6 +301,40 @@ def test_the_outcome_judge_sees_only_the_request_and_the_result(
     assert scores.response_relevance is None
     assert scores.hallucination_score is None
     assert scores.judge_reasoning == {"task_completion": "done"}
+
+
+def test_a_cancelled_judging_drops_the_calls_not_started(monkeypatch) -> None:
+    """Ctrl-C cancels the run: it waits for the calls in flight, not for
+    every one queued."""
+    asked: list[str] = []
+
+    async def ask(self, rubric: str, prompt: str) -> dict:
+        asked.append(rubric)
+        await asyncio.sleep(0.2)
+        return {"reasoning": "", "score": 1.0}
+
+    monkeypatch.setattr(Judge, "ask", ask)
+    episodes = [
+        EpisodeResult(task_id="t", final_status="completed", final_output="")
+        for _ in range(20)
+    ]
+
+    async def cancelled() -> None:
+        job = asyncio.create_task(
+            score(
+                JudgeSpec(provider="openai", model="m", mode="outcome"),
+                episodes,
+                {"t": TaskSpec(id="t", turns=["x"])},
+            )
+        )
+        await asyncio.sleep(0.1)
+        job.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await job
+
+    asyncio.run(cancelled())
+
+    assert 0 < len(asked) < 20
 
 
 def _eval_yaml(tmp_path: Path, extra: str) -> Path:
@@ -460,7 +497,7 @@ def test_an_ollama_judge_is_constrained_to_the_verdict_schema(
         "ollama", "qwen3:4b", ['{"reasoning": "grounded", "score": 0.9}']
     )
 
-    result = judge.ask("hallucination", "prompt")
+    result = asyncio.run(judge.ask("hallucination", "prompt"))
 
     assert result == {"reasoning": "grounded", "score": 0.9}
     path, body = server.requests[0]
@@ -480,7 +517,7 @@ def test_an_openai_compatible_judge_is_asked_for_the_verdict_schema(
         path="/v1",
     )
 
-    result = judge.ask("task_completion", "prompt")
+    result = asyncio.run(judge.ask("task_completion", "prompt"))
 
     assert result == {"reasoning": "complete", "score": 1.0}
     path, body = server.requests[0]
@@ -500,7 +537,7 @@ def test_a_server_that_ignores_the_schema_is_read_as_text(
         "ollama", "qwen3:4b", [QWEN3_ANSWER, QWEN3_ANSWER, QWEN3_ANSWER]
     )
 
-    first = judge.ask("relevance", "prompt")
+    first = asyncio.run(judge.ask("relevance", "prompt"))
 
     assert first == {"score": 1.0, "reasoning": "ok"}
     asked_for_schema = ["format" in body for _, body in server.requests]

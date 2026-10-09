@@ -488,7 +488,7 @@ def test_a_failed_judge_leaves_its_error_in_the_reasoning(monkeypatch) -> None:
     from eval.engine import judge
     from eval.engine.contracts import EpisodeResult, JudgeSpec, TaskSpec
 
-    def ask(self, rubric, prompt):
+    async def ask(self, rubric, prompt):
         if rubric == "relevance":
             return {"reasoning": "Error: bad api key", "score": None}
         return {"reasoning": "looks good", "score": 0.75}
@@ -498,10 +498,12 @@ def test_a_failed_judge_leaves_its_error_in_the_reasoning(monkeypatch) -> None:
         task_id="t", final_status="completed", final_output="ok"
     )
 
-    judge.score(
-        JudgeSpec(provider="openai", model="m"),
-        [episode],
-        {"t": TaskSpec(id="t", turns=["hi"])},
+    asyncio.run(
+        judge.score(
+            JudgeSpec(provider="openai", model="m"),
+            [episode],
+            {"t": TaskSpec(id="t", turns=["hi"])},
+        )
     )
 
     scores = episode.qualitative_scores

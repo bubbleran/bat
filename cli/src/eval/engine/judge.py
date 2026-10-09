@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from bat.chat_model_client import ChatModelClient, ChatModelClientConfig
@@ -349,18 +349,19 @@ class Judge:
             )
         return self.clients[rubric, structured]
 
-    def ask(self, rubric: str, prompt: str) -> dict[str, Any]:
+    async def ask(self, rubric: str, prompt: str) -> dict[str, Any]:
         """``{"reasoning", "score"}``; the score is None when it failed."""
         error: Exception | None = None
         if rubric not in self.text_only:
             for _ in range(2):
                 try:
-                    return self.client(rubric, True).invoke(prompt).model_dump()
+                    answer = await self.client(rubric, True).ainvoke(prompt)
+                    return answer.model_dump()
                 except Exception as exc:
                     error = exc
                     logger.warning(f"LLM judge '{rubric}' failed: {exc}")
         try:
-            answer = self.client(rubric, False).invoke(prompt)
+            answer = await self.client(rubric, False).ainvoke(prompt)
             found = _parse_judge_json(answer.text)
             verdict = JudgeVerdict.model_validate({"reasoning": "", **found})
         except Exception as exc:
@@ -427,7 +428,7 @@ def _expected(expected: TaskExpected, *, steps: bool = True) -> str:
     return " ".join(parts) or "No specific expectations defined."
 
 
-def score(
+async def score(
     spec: JudgeSpec, episodes: list[EpisodeResult], tasks: dict[str, TaskSpec]
 ) -> None:
     """Every rubric on every episode, at most 16 judge calls at a time.
@@ -435,39 +436,44 @@ def score(
     outcome = spec.mode == "outcome"
     rubrics = OUTCOME_RUBRICS if outcome else RUBRICS
     judge = Judge(spec)
+    limit = asyncio.Semaphore(16)
+
+    async def ask(rubric: str, prompt: str) -> dict[str, Any]:
+        async with limit:
+            return await judge.ask(rubric, prompt)
+
     asked = []
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        for episode in episodes:
-            task = tasks[episode.task_id]
-            fields = {
-                "query": " -> ".join(task.turns),
-                "response": episode.final_output,
-                "status": episode.final_status,
-                "context": build_judge_context(
-                    episode.trace.trajectory,
-                    episode.trace.events,
-                    spec.max_trajectory_chars,
-                ),
-                "expected_desc": _expected(task.expected, steps=not outcome),
-                "user_facts": "\n".join(f"- {turn}" for turn in task.turns),
-                # Names only: the [tool] lines carry the arguments, but a
-                # rendering over budget may leave some of them out.
-                "tool_calls": ", ".join(
-                    call["name"] + (" (FAILED)" if call.get("error") else "")
-                    for call in episode.trace.tool_calls
+    for episode in episodes:
+        task = tasks[episode.task_id]
+        fields = {
+            "query": " -> ".join(task.turns),
+            "response": episode.final_output,
+            "status": episode.final_status,
+            "context": build_judge_context(
+                episode.trace.trajectory,
+                episode.trace.events,
+                spec.max_trajectory_chars,
+            ),
+            "expected_desc": _expected(task.expected, steps=not outcome),
+            "user_facts": "\n".join(f"- {turn}" for turn in task.turns),
+            # Names only: the [tool] lines carry the arguments, but a
+            # rendering over budget may leave some of them out.
+            "tool_calls": ", ".join(
+                call["name"] + (" (FAILED)" if call.get("error") else "")
+                for call in episode.trace.tool_calls
+            )
+            or "none",
+        }
+        episode.qualitative_scores = QualitativeScores()
+        for rubric, (prompt, _) in rubrics.items():
+            if rubric == "tool_call" and not task.expected.tool_calls:
+                episode.qualitative_scores.judge_reasoning[rubric] = (
+                    "skipped: no tool calls expected for this task"
                 )
-                or "none",
-            }
-            episode.qualitative_scores = QualitativeScores()
-            for rubric, (prompt, _) in rubrics.items():
-                if rubric == "tool_call" and not task.expected.tool_calls:
-                    episode.qualitative_scores.judge_reasoning[rubric] = (
-                        "skipped: no tool calls expected for this task"
-                    )
-                    continue
-                job = pool.submit(judge.ask, rubric, prompt.format(**fields))
-                asked.append((episode.qualitative_scores, rubric, job))
-        for scores, rubric, job in asked:
-            result = job.result()
-            setattr(scores, rubrics[rubric][1], result["score"])
-            scores.judge_reasoning[rubric] = result["reasoning"]
+                continue
+            job = ask(rubric, prompt.format(**fields))
+            asked.append((episode.qualitative_scores, rubric, job))
+    results = await asyncio.gather(*(job for _, _, job in asked))
+    for (scores, rubric, _), result in zip(asked, results, strict=True):
+        setattr(scores, rubrics[rubric][1], result["score"])
+        scores.judge_reasoning[rubric] = result["reasoning"]

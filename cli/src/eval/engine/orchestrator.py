@@ -91,7 +91,7 @@ async def run_evaluation(
     # Written before judging too: a slow judge must not cost the episodes.
     _write_episodes(run_dir, episodes)
     if judge is not None:
-        score(judge, episodes, {task.id: task for task in tasks})
+        await score(judge, episodes, {task.id: task for task in tasks})
         _write_episodes(run_dir, episodes)
     _write(
         run_dir / "summary.json", summary(episodes, run_name, model, k, stamp)
