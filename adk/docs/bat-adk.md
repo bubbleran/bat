@@ -267,13 +267,13 @@ dependencies = ["bat-adk[telemetry]"]   # or bat-adk[all]
 
 ### Turning It On
 
-Everything is configured in `config.yaml`, under `telemetry`. **Telemetry is on as soon as `output` has at least one entry**, and spans fan out to *every* entry, so a run can go to a collector and a file at once.
+Everything is configured in `config.yaml`, under `telemetry`. **Telemetry is on as soon as `output` has at least one entry**, and spans fan out to _every_ entry, so a run can go to a collector and a file at once.
 
 ```yaml
 telemetry:
   # service_name: my-agent    # optional; defaults to the agent card name
   # project_name: my-agent    # optional; Phoenix project (default: "default")
-  privacy: none               # none | content | names | full
+  privacy: none # none | content | names | full
   output:
     - type: remote
       endpoint: http://localhost:6006
@@ -281,11 +281,11 @@ telemetry:
       file_path: spans.jsonl
 ```
 
-| `type` | Destination |
-|---|---|
-| `remote` | OTLP/HTTP collector, e.g. Arize Phoenix. `endpoint` defaults to `http://localhost:6006` |
-| `local` | JSON Lines file, one span per line. `file_path` defaults to `spans.jsonl` |
-| `console` | stdout, for debugging |
+| `type`    | Destination                                                                             |
+| --------- | --------------------------------------------------------------------------------------- |
+| `remote`  | OTLP/HTTP collector, e.g. Arize Phoenix. `endpoint` defaults to `http://localhost:6006` |
+| `local`   | JSON Lines file, one span per line. `file_path` defaults to `spans.jsonl`               |
+| `console` | stdout, for debugging                                                                   |
 
 An unknown `type` is skipped with a warning rather than disabling the whole pipeline.
 
@@ -295,12 +295,10 @@ An unknown `type` is skipped with a warning rather than disabling the whole pipe
 
 By default a span carries prompts, completions and tool definitions in full. `telemetry.privacy` decides how much of that may leave the process. It is a single ordered dial, and each level redacts everything the level below it does:
 
-| Level | Redacts |
-|---|---|
-| `none` | nothing — the default |
-| `content` | prompts, messages, completions, invocation parameters, and every tool's description, parameter schema and call arguments |
-| `names` | also span names, i.e. the LangGraph node names. Span kinds (`LLM`/`CHAIN`/`TOOL`) replace them, so the trace keeps its shape |
-| `full` | also tool names |
+| Level     | Redacts                                                                                                                                                                                                             |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `none`    | nothing — the default                                                                                                                                                                                               |
+| `content` | prompts, messages, completions, invocation parameters, every tool's description, parameter schema and call arguments, what one agent asked another and its answer (`input.value` / `output.value`), and error text. |
 
 Redacted values are replaced with `__REDACTED__` before any exporter sees them; they never leave the process.
 
@@ -328,4 +326,4 @@ The effective level is the **higher** of the two, so a replaced `config.yaml` ca
 
 - **LangChain / LangGraph** — automatically, through OpenInference: token counts, prompts, completions and tool calls.
 - **Agent Executor** — one root `invoke_agent <AgentName>` span per request, carrying the conversation and task ids, continuing an incoming trace when there is one.
-- **Call Agent Node** — a `CLIENT` span around the remote call, injecting `traceparent` into the outgoing message.
+- **Call Agent Node** — a `CLIENT` span around the remote call, injecting `traceparent` into the outgoing message. It also records what only the caller sees: the request text (`input.value`), the last answer text (`output.value`).

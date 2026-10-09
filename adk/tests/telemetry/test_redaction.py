@@ -133,10 +133,15 @@ def test_full_level_also_redacts_tool_names():
     """`full` trades the eval engine's tool-call metrics for a hidden
     tool inventory."""
     out = redact_attributes(
-        {"tool.name": "reboot_ran", "llm.token_count.total": 7},
+        {
+            "tool.name": "reboot_ran",
+            "gen_ai.tool.name": "reboot_ran",
+            "llm.token_count.total": 7,
+        },
         hide_tool_names=True,
     )
     assert out["tool.name"] == REDACTED
+    assert out["gen_ai.tool.name"] == REDACTED
     assert out["llm.token_count.total"] == 7
 
 
@@ -147,3 +152,65 @@ def test_levels_are_cumulative():
     assert TelemetryPrivacy.NAMES.hides_span_names is True
     assert TelemetryPrivacy.NAMES.hides_tool_names is False
     assert TelemetryPrivacy.FULL.hides_tool_names is True
+
+
+def test_inputs_and_outputs_are_content():
+    """What one agent asked another, and what came back, are content."""
+    out = redact_attributes(
+        {
+            "input.value": "Create network lab-1",
+            "output.value": "Draft ready",
+            "gen_ai.agent.name": "Network Operations Agent",
+        }
+    )
+
+    assert out["input.value"] == REDACTED
+    assert out["output.value"] == REDACTED
+    assert out["gen_ai.agent.name"] == "Network Operations Agent"
+
+
+def test_error_messages_are_redacted_as_content():
+    """An exception message can quote the very values `content` hides; its
+    type and the ERROR status are identity and survive."""
+    from opentelemetry.sdk.trace import Event
+    from opentelemetry.trace import Status, StatusCode
+
+    ctx = SpanContext(
+        trace_id=0x1,
+        span_id=0x2,
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    span = ReadableSpan(
+        name="tools",
+        context=ctx,
+        attributes={},
+        kind=SpanKind.INTERNAL,
+        start_time=1,
+        end_time=2,
+        status=Status(StatusCode.ERROR, "invalid band 'n78-secret'"),
+        events=[
+            Event(
+                "exception",
+                {
+                    "exception.type": "ValueError",
+                    "exception.message": "invalid band 'n78-secret'",
+                    "exception.stacktrace": "Traceback ... n78-secret",
+                },
+                timestamp=1,
+            )
+        ],
+    )
+    delegate = _CapturingExporter()
+
+    RedactingSpanExporter(
+        delegate, privacy=TelemetryPrivacy.CONTENT
+    ).export([span])
+
+    out = delegate.spans[0]
+    assert out.status.status_code is StatusCode.ERROR
+    assert out.status.description == REDACTED
+    event = out.events[0]
+    assert event.attributes["exception.type"] == "ValueError"
+    assert event.attributes["exception.message"] == REDACTED
+    assert event.attributes["exception.stacktrace"] == REDACTED

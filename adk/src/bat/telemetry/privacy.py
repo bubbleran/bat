@@ -76,59 +76,38 @@ class TelemetryPrivacy(IntEnum):
 def parse_privacy(value: object) -> TelemetryPrivacy:
     """Coerce a ``config.yaml`` value into a :class:`TelemetryPrivacy`.
 
-    Accepts the level name (case-insensitive, e.g. ``content``) or its
-    ordinal (``1``). ``None`` means "not configured" and maps to
-    :attr:`TelemetryPrivacy.NONE`.
+    Accepts the level name (case-insensitive) or its ordinal; ``None`` means
+    "not configured" and maps to :attr:`TelemetryPrivacy.NONE`.
 
     Raises:
-        ValueError: If ``value`` is neither a known level name nor a valid
-            ordinal. Failing loudly is deliberate: a typo'd privacy level
-            silently falling back to ``none`` would export in the clear
-            exactly when someone was trying to lock the agent down.
+        ValueError: For anything else. A typo'd level must fail loudly, not
+            fall back to ``none`` and export in the clear.
     """
     if value is None:
         return TelemetryPrivacy.NONE
-    if isinstance(value, TelemetryPrivacy):
-        return value
-    if isinstance(value, bool):
-        # `privacy: true` is meaningless on a ladder; refuse rather than
-        # guess which level was meant.
-        raise ValueError(
-            "telemetry.privacy expects a level "
-            f"({_level_names()}), not a boolean."
-        )
-    if isinstance(value, int):
-        try:
-            return TelemetryPrivacy(value)
-        except ValueError:
-            raise ValueError(
-                f"Unknown telemetry privacy level {value!r}; expected one of "
-                f"{_level_names()} (or 0-{max(TelemetryPrivacy).value})."
-            ) from None
     if isinstance(value, str):
-        key = value.strip().upper()
-        if key in TelemetryPrivacy.__members__:
-            return TelemetryPrivacy[key]
-        raise ValueError(
-            f"Unknown telemetry privacy level {value!r}; expected one of "
-            f"{_level_names()}."
-        )
+        name = value.strip().upper()
+        if name in TelemetryPrivacy.__members__:
+            return TelemetryPrivacy[name]
+    # bool is an int, but `privacy: true` names no level.
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value in TelemetryPrivacy
+    ):
+        return TelemetryPrivacy(value)
+    names = ", ".join(level.name.lower() for level in TelemetryPrivacy)
     raise ValueError(
-        f"Unknown telemetry privacy level {value!r}; expected one of "
-        f"{_level_names()}."
+        f"Unknown telemetry privacy level {value!r}; expected one of {names}."
     )
-
-
-def _level_names() -> str:
-    return ", ".join(level.name.lower() for level in TelemetryPrivacy)
 
 
 def resolve_privacy(
     configured: object,
     floor: object = TelemetryPrivacy.NONE,
 ) -> TelemetryPrivacy:
-    """Combine what ``config.yaml`` asked for with the agent's own floor. 
-    Choose the more private of the two.
+    """Combine what ``config.yaml`` asked for with the agent's own floor,
+    choosing the more private of the two.
 
     Args:
         configured (object): The level ``config.yaml`` asked for, as a level
