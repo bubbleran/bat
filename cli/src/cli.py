@@ -158,7 +158,7 @@ def create_new_agent(
         9900, "--port", help="endpoint.port written to config.yaml."
     ),
     model: str = typer.Option(
-        "gpt-4o-mini", "--model", help="model.name written to config.yaml."
+        "gpt-6-luna", "--model", help="model.name written to config.yaml."
     ),
     model_provider: str = typer.Option(
         "openai",
@@ -297,7 +297,7 @@ def add_new_agent(
         ),
     ),
     model: str = typer.Option(
-        "gpt-4o-mini", "--model", help="Model written to the config.yaml."
+        "gpt-6-luna", "--model", help="Model written to the config.yaml."
     ),
     model_provider: str = typer.Option(
         "openai",

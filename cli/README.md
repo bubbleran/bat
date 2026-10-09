@@ -187,7 +187,7 @@ bat init agent my_agent --output-dir .
 bat init agent my_agent --clients reformulator,planner,executor
 
 # set the port/model/provider written to config.yaml
-bat init agent my_agent --port 9900 --model gpt-4o-mini --model-provider openai
+bat init agent my_agent --port 9900 --model gpt-6-luna --model-provider openai
 
 # the lowest telemetry privacy level the agent allows (none|content|names|full)
 bat init agent my_agent --privacy content
@@ -206,7 +206,7 @@ bat add agent netops --clients reformulator,planner,executor
 
 # set the port/model/provider written to netops/config.yaml
 # (without --port: one past the highest port already used)
-bat add agent hermes --port 9901 --model gpt-4o-mini --model-provider openai
+bat add agent hermes --port 9901 --model gpt-6-luna --model-provider openai
 
 # the lowest telemetry privacy level the agent allows (none|content|names|full)
 bat add agent kpi --privacy content
@@ -237,7 +237,7 @@ bat add client planner,executor --force
 blueprint's root:
 
 ```bash
-bat set config --port 8080 --model gpt-4o-mini --model-provider openai
+bat set config --port 8080 --model gpt-6-luna --model-provider openai
 bat set config netops --port 9309
 bat set config netops --model gpt-5-mini --reasoning-effort low --service-tier flex
 ```

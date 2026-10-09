@@ -104,9 +104,9 @@ def test_agents_on_the_same_model_share_one_llm(tmp_path, monkeypatch) -> None:
     fabric = _fabric(root)
     assert fabric["spec"]["llms"] == [
         {
-            "name": "openai-gpt-4o-mini",
+            "name": "openai-gpt-6-luna",
             "provider": "openai",
-            "model": "gpt-4o-mini",
+            "model": "gpt-6-luna",
             "apiKeySecretRef": {
                 "name": "openai-api-key",
                 "key": "OPENAI_API_KEY",
@@ -114,7 +114,7 @@ def test_agents_on_the_same_model_share_one_llm(tmp_path, monkeypatch) -> None:
         }
     ]
     assert {a["internal"]["llm"] for a in fabric["spec"]["agents"]} == {
-        "openai-gpt-4o-mini"
+        "openai-gpt-6-luna"
     }
 
 
@@ -393,7 +393,7 @@ def test_every_change_a_run_makes_is_reported(tmp_path, monkeypatch) -> None:
 
     second = _generate()
 
-    assert "hermes: llm openai-gpt-4o-mini -> openai-gpt-5-6-luna" in (
+    assert "hermes: llm openai-gpt-6-luna -> openai-gpt-5-6-luna" in (
         second.output
     )
     assert "netops: dependencies hermes -> (none)" in second.output
