@@ -6,7 +6,6 @@ from typing import Any
 
 from bat.chat_model_client import ChatModelClient, ChatModelClientConfig
 from bat.logging import create_logger
-from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from .contracts import (
@@ -310,24 +309,14 @@ def _parse_judge_json(text: str) -> dict[str, Any]:
         except ValueError:
             end = start + 1
         else:
-            if isinstance(found, dict):
+            if isinstance(found, dict) and "score" in found:
                 objects.append(found)
         start = text.find("{", end)
     if not objects:
         raise ValueError(
-            f"no JSON object in the judge's answer: {text[:200]!r}"
+            f"no scored JSON object in the judge's answer: {text[:200]!r}"
         )
-    scored = [found for found in objects if "score" in found]
-    return (scored or objects)[-1]
-
-
-def _text(content: Any) -> str:
-    if isinstance(content, list):
-        return "".join(
-            part.get("text", "") if isinstance(part, dict) else str(part)
-            for part in content
-        )
-    return str(content)
+    return objects[-1]
 
 
 class Judge:
@@ -362,21 +351,17 @@ class Judge:
 
     def ask(self, rubric: str, prompt: str) -> dict[str, Any]:
         """``{"reasoning", "score"}``; the score is None when it failed."""
-        message = HumanMessage(content=prompt)
         error: Exception | None = None
         if rubric not in self.text_only:
             for _ in range(2):
                 try:
-                    answer = self.client(rubric, True).invoke(message)
-                    if isinstance(answer, BaseModel):
-                        return answer.model_dump()
-                    return JudgeVerdict.model_validate(answer).model_dump()
+                    return self.client(rubric, True).invoke(prompt).model_dump()
                 except Exception as exc:
                     error = exc
                     logger.warning(f"LLM judge '{rubric}' failed: {exc}")
         try:
-            answer = self.client(rubric, False).invoke(message)
-            found = _parse_judge_json(_text(answer.content))
+            answer = self.client(rubric, False).invoke(prompt)
+            found = _parse_judge_json(answer.text)
             verdict = JudgeVerdict.model_validate({"reasoning": "", **found})
         except Exception as exc:
             logger.error(f"LLM judge '{rubric}' gave no usable score: {exc}")

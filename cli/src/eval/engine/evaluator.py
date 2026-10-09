@@ -63,7 +63,7 @@ def verdict(episode: EpisodeResult, expected: TaskExpected) -> EpisodeVerdict:
             )
         )
 
-    phrases = expected.output_must_contain or []
+    phrases = expected.output_must_contain
     for index, phrase in enumerate(phrases):
         label = f"output[{index}]" if len(phrases) > 1 else "output"
         ok = phrase in episode.final_output

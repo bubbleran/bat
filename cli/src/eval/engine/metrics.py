@@ -3,13 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import EpisodeResult
-
-SCORES = (
-    "response_relevance",
-    "task_completion_quality",
-    "hallucination_score",
-    "tool_call_appropriateness",
-)
+from .judge import RUBRICS
 
 
 def _pct(part: int, whole: int) -> float:
@@ -45,7 +39,7 @@ def _episode(episode: EpisodeResult) -> dict[str, Any]:
 def _scores(episodes: list[EpisodeResult]) -> dict[str, list[float]]:
     values: dict[str, list[float]] = {}
     for episode in episodes:
-        for field in SCORES:
+        for _, field in RUBRICS.values():
             value = getattr(episode.qualitative_scores, field, None)
             if value is not None:
                 values.setdefault(field, []).append(value)

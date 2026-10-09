@@ -69,7 +69,7 @@ async def run_evaluation(
     *,
     agent_url: str,
     model: str,
-    dataset: Path,
+    tasks: list[TaskSpec],
     out_dir: Path,
     run_name: str,
     k: int,
@@ -79,7 +79,6 @@ async def run_evaluation(
     """Run every task k times against the agent, score the episodes, and
     write them, summary.json and metrics.json under out_dir."""
     stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
-    tasks = load_tasks(dataset)
     episodes: list[EpisodeResult] = []
     for task in tasks:
         for attempt in range(k):

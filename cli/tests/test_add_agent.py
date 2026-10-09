@@ -108,8 +108,8 @@ def test_compose_healthcheck_probes_the_agents_port(
 def test_add_agent_registers_an_agent_directory_added_by_hand(
     tmp_path, monkeypatch
 ) -> None:
-    """The agents on disk are the registry: one created without the CLI is
-    wired in the next time the dispatcher is regenerated."""
+    """The agents on disk are the registry: one created without the CLI gets
+    a compose service when the next agent is added."""
     root = _blueprint(tmp_path, monkeypatch)
     hermes = root / "hermes"
     hermes.mkdir()
@@ -128,7 +128,7 @@ def test_add_agent_leaves_a_nested_project_out_of_the_dispatcher(
     tmp_path, monkeypatch
 ) -> None:
     """A directory with its own pyproject.toml is a separate project (like
-    automation's cluster-view); importing it from the dispatcher would fail."""
+    automation's cluster-view), not one of the blueprint's agents."""
     root = _blueprint(tmp_path, monkeypatch)
     nested = root / "cluster_view"
     nested.mkdir()
@@ -157,8 +157,6 @@ def test_add_agent_registers_a_compose_service(tmp_path, monkeypatch) -> None:
 
 
 def test_adding_a_second_agent_keeps_the_first(tmp_path, monkeypatch) -> None:
-    """The failure mode of a marker rewrite is dropping or duplicating what
-    was already there, so add two and check every registry."""
     root = _blueprint(tmp_path, monkeypatch)
 
     runner.invoke(app, ["add", "agent", "netops"])
@@ -230,8 +228,6 @@ def test_add_agent_suggests_a_name_for_one_starting_with_a_digit(
 
 
 def test_add_agent_rejects_a_python_keyword(tmp_path, monkeypatch) -> None:
-    """`class` is an identifier, but `from class import run` is a syntax
-    error in the dispatcher."""
     root = _blueprint(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["add", "agent", "class"])

@@ -33,12 +33,10 @@ from .rendering import (
 )
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "blueprint"
-_AGENT_TEMPLATES = ("agent.json.template", "src/__init__.py", "src/graph.py")
-_DEFAULT_PORT = 9900
 
 
 def create_blueprint_scaffold(
-    target_dir: Path, *, force: bool = False, model_provider: str = "openai"
+    target_dir: Path, *, force: bool, model_provider: str
 ) -> list[Path]:
     """Write an empty blueprint into ``target_dir``. The provider is set
     here because its extra lives in the one shared pyproject."""
@@ -51,7 +49,7 @@ def create_blueprint_scaffold(
         )
     ensure_empty_dir(target_dir, force=force)
 
-    name = target_dir.name.lower()
+    name = target_dir.name
     substitutions = {
         "BLUEPRINT_NAME": name,
         "BLUEPRINT_DESCRIPTION": f"{name.upper()} blueprint",
@@ -63,20 +61,16 @@ def create_blueprint_scaffold(
     for template in template_files(TEMPLATES_DIR):
         if template.startswith("agent/"):
             continue
+        output = template.removesuffix(".template")
         # The spec is named after the blueprint, so the binary is too.
-        output = (
-            f"{name}.spec"
-            if template == "blueprint.spec"
-            else template.removesuffix(".template")
-        )
+        if template == "blueprint.spec":
+            output = f"{name}.spec"
         files[output] = render(TEMPLATES_DIR / template, substitutions)
     return write_files(target_dir, files, force=True)
 
 
 def _agent_port(blueprint_root: Path, name: str) -> int | None:
     config_path = blueprint_root / name / "config.yaml"
-    if not config_path.is_file():
-        return None
     data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     port = (data.get("endpoint") or {}).get("port")
     return port if isinstance(port, int) else None
@@ -118,11 +112,9 @@ def _add_compose_services(
     """Give every agent without one a compose service (``agent`` a new one
     on ``replace``); every other service is kept as it is."""
     path = blueprint_root / "docker-compose.yaml"
-    compose = (
-        yaml.safe_load(path.read_text(encoding="utf-8"))
-        if path.is_file()
-        else None
-    )
+    compose = None
+    if path.is_file():
+        compose = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(compose, dict):
         compose = {"name": blueprint_root.name.lower()}
     services = compose.get("services") or {}
@@ -151,12 +143,12 @@ def add_agent_to_blueprint(
     blueprint_root: Path,
     name: str,
     *,
-    port: int | None = None,
-    model: str = "gpt-4o-mini",
-    model_provider: str = "openai",
-    clients: list[str] | None = None,
-    force: bool = False,
-    telemetry_privacy: str | None = None,
+    port: int | None,
+    model: str,
+    model_provider: str,
+    clients: list[str] | None,
+    force: bool,
+    telemetry_privacy: str | None,
 ) -> list[Path]:
     """Create agent ``name`` in the blueprint. Everything but
     docker-compose.yaml finds agents by their folder.
@@ -179,7 +171,7 @@ def add_agent_to_blueprint(
         )
     if port is None:
         ports = [_agent_port(blueprint_root, agent) for agent in existing]
-        port = max((p for p in ports if p), default=_DEFAULT_PORT - 1) + 1
+        port = max((p for p in ports if p), default=9899) + 1
 
     substitutions = {
         "AGENT_NAME": directory,
@@ -192,13 +184,10 @@ def add_agent_to_blueprint(
         **graph_substitutions(clients),
     }
     files = {
-        template.removeprefix("agent/"): render(
-            TEMPLATES_DIR / template, substitutions
-        )
-        for template in template_files(TEMPLATES_DIR)
-        if template.startswith("agent/")
+        template: render(TEMPLATES_DIR / "agent" / template, substitutions)
+        for template in template_files(TEMPLATES_DIR / "agent")
     }
-    for template in _AGENT_TEMPLATES:
+    for template in ("agent.json.template", "src/__init__.py", "src/graph.py"):
         files[template.removesuffix(".template")] = render(
             AGENT_TEMPLATES_DIR / template, substitutions
         )

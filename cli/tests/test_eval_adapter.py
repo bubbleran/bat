@@ -143,7 +143,7 @@ def test_each_episode_carries_its_trajectory(monkeypatch) -> None:
     result = _probe(monkeypatch, str(FIXTURE))
 
     trajectory = result.trace.trajectory
-    assert trajectory is not None and trajectory.found is True
+    assert trajectory.found is True
     assert [turn.user for turn in trajectory.turns] == PROBE_TURNS
     assert trajectory.totals.agent_calls == 2
 
@@ -192,5 +192,4 @@ def test_without_a_spans_directory_the_trajectory_is_not_found(
 ) -> None:
     result = _probe(monkeypatch)
 
-    assert result.trace.trajectory is not None
     assert result.trace.trajectory.found is False

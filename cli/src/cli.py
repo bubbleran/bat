@@ -1,7 +1,6 @@
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-import click
 import typer
 from typer.core import TyperGroup
 
@@ -13,7 +12,7 @@ from manifests.commands import generate_aifabric, generate_composition_model
 from project import (
     ProjectError,
     fail,
-    find_blueprint_root,
+    require_blueprint_root,
     resolve_agent_target,
 )
 from set.settings import set_config, set_image
@@ -25,17 +24,12 @@ _BANNER = r"""
 | |_) / ___ \| |   | |___| |___ | |
 |____/_/   \_\_|    \____|_____|___|
 """
-_BANNER_COLORS = (51, 45, 39, 63, 99, 135)
-_MOTD = (
-    "Welcome to BubbleRAN Agentic Toolkit CLI tool.\n\n"
-    "Scaffold, build, push, and evaluate BAT agents from one place.\n"
-)
 
 
 def _gradient(line: str) -> str:
     if not line:
         return ""
-    colors = _BANNER_COLORS
+    colors = (51, 45, 39, 63, 99, 135)
     return (
         "".join(
             f"\033[38;5;{colors[i * len(colors) // len(line)]}m{char}"
@@ -48,7 +42,10 @@ def _gradient(line: str) -> str:
 class BannerGroup(TyperGroup):
     def format_help(self, ctx, formatter):
         art = "\n".join(_gradient(line) for line in _BANNER.splitlines())
-        click.echo(f"{art}\n\n{_MOTD}")
+        typer.echo(
+            f"{art}\n\nWelcome to BubbleRAN Agentic Toolkit CLI tool.\n\n"
+            "Scaffold, build, push, and evaluate BAT agents from one place.\n"
+        )
         super().format_help(ctx, formatter)
 
 
@@ -301,15 +298,7 @@ def add_new_agent(
         False, "--force", "-f", help="Overwrite existing files for this agent."
     ),
 ) -> None:
-    blueprint_root = find_blueprint_root(Path.cwd())
-    if blueprint_root is None:
-        fail(
-            "Not inside a blueprint. Run this command from a blueprint's "
-            "root (a folder with pyproject.toml and __main__.py, and no "
-            "agent.json) or from one of its agent directories, or create one "
-            "with `bat init blueprint`."
-        )
-
+    blueprint_root = require_blueprint_root()
     name = _directory_name(name)
     try:
         created = add_agent_to_blueprint(
@@ -409,9 +398,5 @@ def set_image_settings(
     typer.echo(f"Keys updated: {', '.join(updated)}")
 
 
-def main() -> None:
-    app()
-
-
 if __name__ == "__main__":
-    main()
+    app()

@@ -8,20 +8,10 @@ import yaml
 
 from create.rendering import dump_yaml
 from image import make_variables, plan
-from project import fail, find_blueprint_root
+from project import fail, require_blueprint_root
 
 from .aifabric import ManifestUpdate, update_aifabric
 from .composition_model import update_composition_model
-
-
-def _blueprint_root() -> Path:
-    root = find_blueprint_root(Path.cwd())
-    if root is None:
-        fail(
-            "Not inside a blueprint. Run this command from a blueprint's "
-            "root or from one of its agent directories."
-        )
-    return root
 
 
 def _update(
@@ -32,7 +22,7 @@ def _update(
     is documented, is carried over by hand."""
     text = path.read_text(encoding="utf-8") if path.is_file() else ""
     try:
-        result = update(yaml.safe_load(text) if text.strip() else None)
+        result = update(yaml.safe_load(text))
     except (ValueError, yaml.YAMLError) as exc:
         fail(f"{path}: {exc}")
     header = takewhile(
@@ -98,7 +88,7 @@ def generate_aifabric(
     MCP servers) and keeps what was written by hand, and other blueprints'
     agents.
     """
-    root = _blueprint_root()
+    root = require_blueprint_root()
     _update(
         output or root / "aifabric.yaml",
         partial(
@@ -161,7 +151,7 @@ def generate_composition_model(
     modes at that image; RBAC rules, resources, probes, env and MCP modes
     written by hand are kept.
     """
-    root = _blueprint_root()
+    root = require_blueprint_root()
     dry_run = plan(
         "build", root, make_variables(docker_registry, repo, version)
     )

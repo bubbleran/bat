@@ -1,16 +1,4 @@
-"""The CompositionModel of a blueprint: one deployment mode per agent.
-
-The orama operator runs an internal agent of an AIFabric from the deployment
-mode its ``model`` names (``<CompositionModel>/<mode>``): the image, the
-arguments, the environment, the RBAC rules. A blueprint is one image whose
-dispatcher runs the agent its first argument names, so each agent is a mode
-with that argument, and with ``AGENT_CARD_PATH``: the config.yaml the
-operator mounts has no ``agent_card``.
-
-Every run adds a mode for each agent that has none, and points every mode
-built from the blueprint's image at the image given. Everything else is
-written by hand and kept: rules, resources, probes, extra env, MCP modes.
-"""
+"""The CompositionModel of a blueprint: one deployment mode per agent."""
 
 from __future__ import annotations
 
@@ -64,12 +52,11 @@ def update_composition_model(
     }
 
     ours = deployable_agents(blueprint_root, warnings)
-    runs = {
-        directory: mode
-        for mode, desc in reversed(modes.items())
-        if desc.get("kind") != "mcp"
-        for directory in agents_run_by(desc)
-    }
+    runs: dict[str, str] = {}
+    for mode, desc in modes.items():
+        if desc.get("kind") != "mcp":
+            for directory in agents_run_by(desc):
+                runs.setdefault(directory, mode)
     # The blueprint's image is the one its agents' modes ran, under whatever
     # repository it was pushed to before.
     repositories = {_repository(image)} | {
@@ -98,6 +85,7 @@ def update_composition_model(
             "name": mode,
             "imageTag": image,
             "args": [directory],
+            # The config.yaml the operator mounts has no agent_card.
             "env": [
                 {"name": "AGENT_CARD_PATH", "value": f"{directory}/agent.json"}
             ],
@@ -113,7 +101,7 @@ def update_composition_model(
 
     old_metadata = document.get("metadata") or {}
     metadata = merged_metadata(
-        existing,
+        old_metadata,
         changes,
         name=name
         or old_metadata.get("name")

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
-from a2a.helpers import get_artifact_text, get_message_text, new_text_message
+from a2a.helpers import get_stream_response_text, new_text_message
 from a2a.types import Role, SendMessageRequest, StreamResponse, TaskState
 from bat.logging import create_logger
 from httpx import AsyncClient
@@ -21,24 +21,13 @@ from .contracts import (
     Trajectory,
 )
 from .trajectory import (
+    TASK_STATES,
     build_trajectory,
-    count_conversation_roots,
+    conversation_roots,
     tool_calls_from,
 )
 
 logger = create_logger(__name__, level="info")
-
-_STATUS = {
-    TaskState.TASK_STATE_SUBMITTED: "working",
-    TaskState.TASK_STATE_WORKING: "working",
-    TaskState.TASK_STATE_INPUT_REQUIRED: "input-required",
-    TaskState.TASK_STATE_COMPLETED: "completed",
-    TaskState.TASK_STATE_FAILED: "error",
-    TaskState.TASK_STATE_CANCELED: "error",
-    TaskState.TASK_STATE_REJECTED: "error",
-}
-_FINAL = {"completed", "error", "input-required"}
-_MAX_EVENTS = 200
 
 
 def read_spans(paths: list[str]) -> list[dict[str, Any]]:
@@ -56,27 +45,14 @@ def read_spans(paths: list[str]) -> list[dict[str, Any]]:
     return spans
 
 
-def _status_and_text(chunk: StreamResponse) -> tuple[str | None, str]:
-    if chunk.HasField("message"):
-        return "completed", get_message_text(chunk.message)
-    if chunk.HasField("artifact_update"):
-        return "completed", get_artifact_text(chunk.artifact_update.artifact)
+def _status(chunk: StreamResponse) -> str | None:
     if chunk.HasField("status_update"):
-        status = chunk.status_update.status
-        text = (
-            get_message_text(status.message)
-            if status.HasField("message")
-            else ""
-        )
-        return _STATUS.get(status.state), text
+        return TASK_STATES.get(TaskState.Name(chunk.status_update.status.state))
     if chunk.HasField("task"):
-        texts = [
-            get_artifact_text(artifact) for artifact in chunk.task.artifacts
-        ]
-        return _STATUS.get(chunk.task.status.state), "\n".join(
-            t for t in texts if t
-        )
-    return None, ""
+        return TASK_STATES.get(TaskState.Name(chunk.task.status.state))
+    if chunk.HasField("message") or chunk.HasField("artifact_update"):
+        return "completed"
+    return None
 
 
 async def _trajectory(
@@ -86,9 +62,8 @@ async def _trajectory(
     the last one ends just after the answer is streamed."""
     spans = read_spans(paths)
     for _ in range(20):
-        if not paths or count_conversation_roots(spans, conversation_id) >= len(
-            turns
-        ):
+        roots = conversation_roots(spans, conversation_id)
+        if not paths or len(roots) >= len(turns):
             break
         await asyncio.sleep(0.1)
         spans = read_spans(paths)
@@ -108,7 +83,8 @@ async def run_task(
     """One conversation with the agent, and what its spans say it did."""
     started = time.perf_counter()
     trace = EpisodeTrace()
-    status, output = "error", ""
+    status = "error"
+    output = ""
     async with AsyncClient(timeout=180.0) as http:
         card = await A2ACardResolver(
             httpx_client=http, base_url=agent_url
@@ -126,10 +102,11 @@ async def run_task(
                 async for chunk in client.send_message(
                     SendMessageRequest(message=message)
                 ):
-                    chunk_status, text = _status_and_text(chunk)
+                    chunk_status = _status(chunk)
                     if chunk_status is None:
                         continue
-                    if len(trace.events) < _MAX_EVENTS:
+                    text = get_stream_response_text(chunk)
+                    if len(trace.events) < 200:
                         trace.events.append(
                             TraceEvent(
                                 t_ms=(time.perf_counter() - started) * 1000,
@@ -139,12 +116,13 @@ async def run_task(
                             )
                         )
                         user_input = None
-                    if chunk_status in _FINAL:
+                    if chunk_status in ("completed", "error", "input-required"):
                         status = chunk_status
                         # The stream closes on a status with no text.
                         output = text or output
         except Exception as exc:
-            status, output = "error", f"{type(exc).__name__}: {exc}"
+            status = "error"
+            output = f"{type(exc).__name__}: {exc}"
 
     trace.wall_ms = (time.perf_counter() - started) * 1000
     trace.trajectory = await _trajectory(span_paths, thread_id, task.turns)

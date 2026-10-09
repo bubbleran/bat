@@ -7,9 +7,9 @@ import yaml
 from bat.chat_model_client.config import ModelProvider
 
 from .contracts import EvalConfig, JudgeSpec, ModelSpec
+from .judge import RUBRICS
 
 PROVIDERS = sorted(get_args(ModelProvider))
-JUDGE_PROMPTS = ("relevance", "task_completion", "hallucination", "tool_call")
 
 DEFAULT_EVAL_YAML = """\
 evaluation:
@@ -91,11 +91,11 @@ def _judge(raw: Any) -> JudgeSpec | None:
         return None
     spec = _spec(raw, "judge")
     prompts = spec.get("prompts") or {}
-    unknown = sorted(set(prompts) - set(JUDGE_PROMPTS))
+    unknown = sorted(set(prompts) - set(RUBRICS))
     if unknown:
         raise ValueError(
             f"judge.prompts has unknown key(s) {unknown}; "
-            f"allowed: {list(JUDGE_PROMPTS)}"
+            f"allowed: {list(RUBRICS)}"
         )
     for key, text in prompts.items():
         if len(str(text)) > 1000:

@@ -1,10 +1,5 @@
 """`bat manifests composition-model`: one deployment mode per agent of a
-blueprint, running the image `bat build` tags.
-
-The orama operator runs an AIFabric's internal agent from the mode its
-`model` names; each run adds the agents that have no mode and points the
-blueprint's modes at the image, keeping what was written by hand.
-"""
+blueprint, running the image `bat build` tags."""
 
 from __future__ import annotations
 
@@ -24,13 +19,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 IMAGE_FLAGS = ("--docker-registry", "hub.example.com", "--version", "1.2.3")
-
-
-@pytest.fixture(autouse=True)
-def _no_image_settings(monkeypatch) -> None:
-    """make reads DOCKER_REGISTRY, REPO and VERSION from the environment."""
-    for name in ("DOCKER_REGISTRY", "REPO", "VERSION"):
-        monkeypatch.delenv(name, raising=False)
 
 
 def _blueprint(tmp_path: Path, monkeypatch) -> Path:

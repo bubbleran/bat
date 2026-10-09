@@ -1,16 +1,6 @@
-"""The AIFabric of a blueprint, from its agents' config.yaml files.
-
-The orama operator renders each internal agent's config.yaml from an
-AIFabric: ``model`` from the agent's entry in ``llms``, ``remote-agents``
-from its dependencies, ``mcp-servers`` from ``mcp``, ``telemetry`` from
-``telemetry``. This module goes the other way.
-
-Every run refreshes, for the blueprint's own agents, what their configs say
--- the LLM, the dependencies, the MCP servers -- and keeps everything else:
-what was written by hand (roles, ``chattable``, a deployment mode, secret
-names, pull secrets, the telemetry collector) and the entries of agents from
-other blueprints, since one AIFabric often deploys several.
-"""
+"""The AIFabric of a blueprint, from its agents' config.yaml files (the
+orama operator renders those from it). Hand edits and other blueprints'
+agents are kept: one AIFabric often deploys several."""
 
 from __future__ import annotations
 
@@ -28,8 +18,6 @@ from project import AgentTarget, blueprint_agents, unwired_agent_warning
 
 API_VERSION = "orama.trirematics.io/v1"
 KIND = "AIFabric"
-
-_LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 
 
 @dataclass
@@ -49,13 +37,12 @@ def check_kind(existing: dict[str, Any] | None, kind: str) -> None:
 
 
 def merged_metadata(
-    existing: dict[str, Any] | None, changes: list[str], **values: str
+    metadata: dict[str, Any], changes: list[str], **values: str
 ) -> dict[str, Any]:
-    """``existing``'s metadata with ``values`` set, recording each change
-    to an existing file."""
-    metadata = dict((existing or {}).get("metadata") or {})
+    """``metadata`` with ``values`` set, recording each change."""
+    metadata = dict(metadata)
     for key, value in values.items():
-        if existing is not None and metadata.get(key) != value:
+        if metadata.get(key) != value:
             changes.append(f"metadata.{key} {metadata.get(key)} -> {value}")
         metadata[key] = value
     return metadata
@@ -70,7 +57,8 @@ def kubernetes_name(text: str) -> str:
 
 
 def _is_local(url: str | None) -> bool:
-    return not url or (urlsplit(url).hostname or "") in _LOCAL_HOSTS
+    hosts = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+    return urlsplit(url or "").hostname in hosts
 
 
 def _url_problem(url: str | None) -> str | None:
@@ -111,7 +99,7 @@ def update_aifabric(
     *,
     name: str | None = None,
     namespace: str | None = None,
-    image_pull_secrets: list[str] | None = None,
+    image_pull_secrets: list[str],
     telemetry_endpoint: str | None = None,
 ) -> ManifestUpdate:
     """The AIFabric for ``blueprint_root``, built on ``existing`` if given.
@@ -196,12 +184,6 @@ def update_aifabric(
                 _set_or_drop(internal, key, value)
             entry["internal"] = internal
 
-    old_secrets = spec.get("imagePullSecrets") or []
-    secrets = [dict(entry) for entry in old_secrets]
-    for secret in image_pull_secrets or []:
-        if all(entry.get("name") != secret for entry in secrets):
-            secrets.append({"name": secret})
-
     telemetry = _telemetry(
         ours, spec.get("telemetry"), telemetry_endpoint, warnings
     )
@@ -220,11 +202,11 @@ def update_aifabric(
         for server in servers
         if server.get("name") not in known_servers
     ]
-    changes += [
-        f"new image pull secret {secret.get('name')}"
-        for secret in secrets
-        if secret not in old_secrets
-    ]
+    secrets = [dict(entry) for entry in spec.get("imagePullSecrets") or []]
+    for secret in image_pull_secrets:
+        if all(entry.get("name") != secret for entry in secrets):
+            secrets.append({"name": secret})
+            changes.append(f"new image pull secret {secret}")
 
     new_spec = {
         "imagePullSecrets": secrets,
@@ -239,7 +221,7 @@ def update_aifabric(
     )
     old_metadata = document.get("metadata") or {}
     metadata = merged_metadata(
-        existing,
+        old_metadata,
         changes,
         name=name
         or old_metadata.get("name")
@@ -378,9 +360,11 @@ def _llm_for(
 
     taken = {llm.get("name") for llm in llms}
     base_name = kubernetes_name(f"{provider}-{model}")
-    llm_name, suffix = base_name, 2
+    llm_name = base_name
+    suffix = 1
     while llm_name in taken:
-        llm_name, suffix = f"{base_name}-{suffix}", suffix + 1
+        suffix += 1
+        llm_name = f"{base_name}-{suffix}"
     entry: dict[str, Any] = {
         "name": llm_name,
         "provider": provider,
@@ -482,13 +466,8 @@ def _telemetry(
     endpoint: str | None,
     warnings: list[str],
 ) -> dict[str, Any] | None:
-    """spec.telemetry: the given endpoint, else the file's, else the agents'.
-
-    A local collector (the Phoenix of a dev machine) cannot be reached from
-    the cluster, so it is not copied in. ``telemetry.privacy`` is flagged:
-    the operator does not render it, so on the cluster only the floor in
-    the agent's code applies.
-    """
+    """spec.telemetry: the given endpoint, else the file's, else the
+    agents' first one the cluster can reach."""
     endpoints: list[str] = []
     projects: list[str] = []
     for agent in ours:
@@ -508,20 +487,20 @@ def _telemetry(
         if project and project not in projects:
             projects.append(project)
 
-    telemetry = dict(existing) if existing else None
+    telemetry = dict(existing or {})
     if endpoint:
-        telemetry = {**(telemetry or {}), "endpoint": endpoint}
-    elif telemetry is None:
+        telemetry["endpoint"] = endpoint
+    elif not telemetry:
         remote = [url for url in endpoints if not _url_problem(url)]
         if remote:
-            telemetry = {"endpoint": remote[0]}
+            telemetry["endpoint"] = remote[0]
         elif endpoints:
             warnings.append(
                 f"The agents export telemetry to {', '.join(endpoints)}, "
                 "which the cluster cannot reach; pass --telemetry-endpoint "
                 "<collector URL> to set spec.telemetry."
             )
-    if telemetry is not None and "projectName" not in telemetry and projects:
+    if telemetry and "projectName" not in telemetry and projects:
         telemetry["projectName"] = projects[0]
         if len(projects) > 1:
             warnings.append(
@@ -529,4 +508,4 @@ def _telemetry(
                 f"({', '.join(projects)}); a fabric has one, so a shared "
                 f"trace would fragment. projectName is set to '{projects[0]}'."
             )
-    return telemetry
+    return telemetry or None

@@ -1,5 +1,4 @@
 from bat.chat_model_client import ChatModelClient, ChatModelClientConfig
-from langchain_core.messages import HumanMessage
 
 
 class __CLASS_NAME__(ChatModelClient):
@@ -7,7 +6,6 @@ class __CLASS_NAME__(ChatModelClient):
     SYSTEM_INSTRUCTIONS = (
         "TODO: insert instructions here"
     )
-    
 
     def __init__(
         self,
@@ -25,6 +23,6 @@ class __CLASS_NAME__(ChatModelClient):
 #        query: str,
 #    ) -> str:
 #        """Format the query based on what the client needs to do."""
-#        response = super().invoke(input_message)
+#        response = super().invoke(query)
 #        TODO: implement cast logic to string
 #        return ...

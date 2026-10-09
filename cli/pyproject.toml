@@ -20,16 +20,14 @@ dependencies = [
   "typer>=0.12.3",
   # A pre-release must be named to be resolved (PEP 440); the eval reads
   # spans only this ADK emits. Keep equal to BAT_ADK_VERSION in create/agent.py.
-  "bat-adk>=2026.9.29a0",
-  "bat-adk[all]",
+  "bat-adk[all]>=2026.9.29a0",
   "a2a-sdk>=1.0.0",
   "python-dotenv>=1.0.1",
-  "typing-extensions>=4.12.0",
   "matplotlib>=3.8",
 ]
 
 [project.scripts]
-bat = "cli:main"
+bat = "cli:app"
 
 [project.urls]
 "Homepage" = "https://bubbleran.com/"
@@ -65,18 +63,8 @@ create = [
 pythonpath = ["src"]
 
 [tool.ruff]
-target-version = "py312"
 line-length = 80
-
-# Files or directories to ignore entirely
-exclude = [
-    ".git",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "src/create/templates",   # agent scaffold templates, not valid Python
-]
+extend-exclude = ["src/create/templates"]  # agent scaffold templates, not valid Python
 
 [tool.ruff.lint]
 select = [
@@ -90,10 +78,3 @@ select = [
 ignore = [
     "B008", # function call in default argument (this is the Typer/FastAPI pattern)
 ]
-
-# Custom settings for specific files
-[tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]     # Allow 'assert' statements in tests without warning
-
-[tool.ruff.format]
-indent-style = "space"

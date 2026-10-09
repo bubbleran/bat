@@ -17,6 +17,7 @@ import typer
 import yaml
 from dotenv import dotenv_values
 
+from create.agent import PROVIDER_API_KEY_VAR
 from project import (
     AgentTarget,
     ProjectError,
@@ -32,10 +33,7 @@ from .engine.eval_config import (
     DEFAULT_TASKS_JSON,
     load_eval_config,
 )
-from .engine.orchestrator import run_evaluation
-
-# The variable each provider's SDK reads its API key from.
-_API_KEY_ENV = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+from .engine.orchestrator import load_tasks, run_evaluation
 
 _AGENT_ARGUMENT = typer.Argument(
     None,
@@ -69,7 +67,7 @@ def _load_config(target: AgentTarget) -> EvalConfig:
 
 def _refuse_redacted_spans(target: AgentTarget) -> None:
     """Stop when the agent's privacy floor redacts the spans the eval reads."""
-    name = target.agent_name or target.project_root.name
+    name = target.agent_dir.name
     for floor in privacy_floors(target):
         if floor.level is None:
             typer.secho(
@@ -118,12 +116,9 @@ def _spans_written_to(config_path: Path, spans_file: Path):
 
 def _with_vars(env: dict[str, str], extra: dict[str, str]) -> dict[str, str]:
     """env plus extra, whose values may refer to env as $VAR or ${VAR}."""
-    return {
-        **env,
-        **{
-            key: Template(value).safe_substitute(env)
-            for key, value in extra.items()
-        },
+    return env | {
+        key: Template(value).safe_substitute(env)
+        for key, value in extra.items()
     }
 
 
@@ -131,7 +126,7 @@ def _judge_env(judge: JudgeSpec, env: dict[str, str]) -> dict[str, str]:
     """env, with the judge's API key where its provider reads it, and the
     judge's own variables."""
     env = dict(env)
-    key_var = _API_KEY_ENV.get(judge.provider)
+    key_var = PROVIDER_API_KEY_VAR.get(judge.provider)
     if judge.api_key_env and key_var:
         if env.get(judge.api_key_env):
             env[key_var] = env[judge.api_key_env]
@@ -174,7 +169,7 @@ def _why_it_stopped(target: AgentTarget, code: int, log_path: Path) -> str:
     remote agent or MCP server it requires that doesn't answer."""
     log = log_path.read_text(encoding="utf-8", errors="replace").strip()
     last = log.splitlines()[-1].strip() if log else ""
-    name = target.agent_name or target.project_root.name
+    name = target.agent_dir.name
     reason = f"{name} stopped before it was ready (exit code {code})"
     if last:
         reason += f":\n    {last}"
@@ -261,6 +256,10 @@ def eval_run(agent: str | None = _AGENT_ARGUMENT) -> None:
     cfg = _load_config(target)
     if not cfg.dataset.exists():
         raise typer.BadParameter(f"Dataset not found: {cfg.dataset}")
+    try:
+        tasks = load_tasks(cfg.dataset)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     run_id = time.strftime("%Y%m%d_%H%M%S")
     out_dir = cfg.output_dir / run_id
@@ -317,7 +316,7 @@ def eval_run(agent: str | None = _AGENT_ARGUMENT) -> None:
                         run_evaluation(
                             agent_url=agent_url,
                             model=label,
-                            dataset=cfg.dataset,
+                            tasks=tasks,
                             out_dir=out_dir,
                             run_name=cfg.run_name,
                             k=cfg.k,

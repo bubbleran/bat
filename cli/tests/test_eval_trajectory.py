@@ -238,7 +238,7 @@ def test_the_digest_is_json_serialisable(trajectory) -> None:
 
 
 def test_rendering_reads_as_numbered_steps(trajectory) -> None:
-    text = render_trajectory(trajectory)
+    text = render_trajectory(trajectory, max_chars=24000)
 
     assert text.startswith(f"Turn 1 - user: {TURNS[0]}")
     assert "[tool list_networks]" in text
@@ -249,7 +249,7 @@ def test_rendering_reads_as_numbered_steps(trajectory) -> None:
 
 def test_rendering_leaves_out_models_and_tokens(trajectory) -> None:
     """No rubric scores cost; the counts stay in the digest for the checks."""
-    text = render_trajectory(trajectory)
+    text = render_trajectory(trajectory, max_chars=24000)
 
     assert "qwen3" not in text and " in / " not in text
     assert "[model plan] called: list_networks" in text

@@ -13,19 +13,13 @@ adk_src = spec_root.parent / "adk" / "src"
 for source_path in (adk_src, cli_src):
     sys.path.insert(0, str(source_path))
 
-template_root = cli_src / "create" / "templates"
-template_datas = [
-    (
-        str(file_path),
-        str((Path("create") / "templates" / file_path.relative_to(template_root).parent).as_posix()),
-    )
-    for file_path in template_root.rglob("*")
-    if file_path.is_file()
-    and "__pycache__" not in file_path.parts
-    and file_path.suffix != ".pyc"
-]
+from create.rendering import template_files
 
-datas = collect_data_files("create") + template_datas
+template_root = cli_src / "create" / "templates"
+datas = [
+    (str(template_root / name), (Path("create/templates") / name).parent.as_posix())
+    for name in template_files(template_root)
+]
 datas += collect_data_files("matplotlib")
 
 hiddenimports = []

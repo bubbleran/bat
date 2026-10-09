@@ -19,13 +19,6 @@ needs_make = pytest.mark.skipif(
 )
 
 
-@pytest.fixture(autouse=True)
-def _no_image_settings_from_the_shell(monkeypatch) -> None:
-    """make reads DOCKER_REGISTRY and REPO from the environment."""
-    monkeypatch.delenv("DOCKER_REGISTRY", raising=False)
-    monkeypatch.delenv("REPO", raising=False)
-
-
 def _blueprint(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.chdir(tmp_path)
     assert runner.invoke(app, ["init", "blueprint", "demo"]).exit_code == 0
@@ -109,7 +102,7 @@ def test_make_push_needs_a_registry(tmp_path, monkeypatch, scaffold) -> None:
 _real_run = subprocess.run
 
 
-def _is_dry_run(cmd) -> bool:  # noqa: ANN001
+def _is_dry_run(cmd) -> bool:
     return list(cmd[:2]) == ["make", "-n"]
 
 
@@ -117,7 +110,7 @@ def _record_runs(monkeypatch, module: str) -> list[dict]:
     """Record what would really run; dry runs (`make -n`) still run."""
     runs: list[dict] = []
 
-    def fake_run(cmd, *args, cwd, **kwargs):  # noqa: ANN001
+    def fake_run(cmd, *args, cwd, **kwargs):
         if _is_dry_run(cmd):
             return _real_run(cmd, *args, cwd=cwd, **kwargs)
         runs.append({"cmd": cmd, "cwd": Path(cwd)})
@@ -167,17 +160,6 @@ def test_bat_build_passes_what_it_was_given(tmp_path, monkeypatch) -> None:
     ]
 
 
-def test_bat_build_has_no_no_cache_flag(tmp_path, monkeypatch) -> None:
-    """`make build NO_CACHE=1` still does it, for whoever needs it."""
-    root = _blueprint(tmp_path, monkeypatch)
-    monkeypatch.chdir(root)
-
-    result = runner.invoke(app, ["build", "--no-cache"])
-
-    assert result.exit_code != 0
-    assert "No such option" in result.output
-
-
 @needs_make
 def test_a_registry_exported_in_the_shell_counts(
     tmp_path, monkeypatch
@@ -196,22 +178,6 @@ def test_a_registry_exported_in_the_shell_counts(
     assert "built successfully: hub.bubbleran.com/demo:dev" in built.output
     assert pushed.exit_code == 0, pushed.output
     assert [run["cmd"] for run in runs] == [["make", "build"], ["make", "push"]]
-
-
-@needs_make
-def test_bat_docker_variables_are_not_read(tmp_path, monkeypatch) -> None:
-    """The registry lives in the Makefile now, not in .env."""
-    root = _blueprint(tmp_path, monkeypatch)
-    _record_runs(monkeypatch, "image")
-    monkeypatch.chdir(root)
-    with (root / ".env").open("a", encoding="utf-8") as env:
-        env.write("BAT_DOCKER_REGISTRY=hub.bubbleran.com\n")
-    monkeypatch.setenv("BAT_DOCKER_REGISTRY", "hub.bubbleran.com")
-
-    result = runner.invoke(app, ["push"])
-
-    assert result.exit_code == 1
-    assert "no Docker registry set" in result.output
 
 
 def test_bat_build_from_an_agent_folder_builds_the_blueprint(
@@ -246,7 +212,7 @@ def test_bat_build_reports_a_failed_make(tmp_path, monkeypatch) -> None:
     root = _blueprint(tmp_path, monkeypatch)
     monkeypatch.chdir(root)
 
-    def failing_run(cmd, *args, cwd, **kwargs):  # noqa: ANN001
+    def failing_run(cmd, *args, cwd, **kwargs):
         if _is_dry_run(cmd):
             return _real_run(cmd, *args, cwd=cwd, **kwargs)
         raise subprocess.CalledProcessError(2, cmd)

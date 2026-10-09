@@ -4,7 +4,6 @@ comments and layout survive."""
 import json
 import re
 from pathlib import Path
-from typing import Any
 
 
 def _set_make_variable(content: str, name: str, value: str) -> str:
@@ -25,31 +24,25 @@ def _set_make_variable(content: str, name: str, value: str) -> str:
     return pattern.sub(lambda match: f"{match.group(1)} {value}", content, 1)
 
 
-def _yaml_scalar(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
+def _yaml_scalar(value: int | str) -> str:
+    if isinstance(value, int):
         return str(value)
-    text = str(value)
-    plain = text and text == text.strip()
-    if plain and not re.search(r"""[:#\[\]{}&*!|>%@`,"']""", text):
-        return text
-    return json.dumps(text)  # a double-quoted string is valid YAML too
+    plain = value and value == value.strip()
+    if plain and not re.search(r"""[:#\[\]{}&*!|>%@`,"']""", value):
+        return value
+    return json.dumps(value)  # a double-quoted string is valid YAML too
 
 
-def _set_yaml_value(text: str, section: str, key: str, value: Any) -> str:
+def _set_yaml_value(text: str, section: str, key: str, value: int | str) -> str:
     """``text`` with ``section.key`` set to ``value``, the key (or the whole
     section) added when missing."""
     scalar = _yaml_scalar(value)
     lines = text.splitlines(keepends=True)
-    start = next(
-        (
-            i
-            for i, line in enumerate(lines)
-            if re.match(rf"^{re.escape(section)}\s*:", line)
-        ),
-        None,
-    )
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(rf"^{re.escape(section)}\s*:", line):
+            start = i
+            break
     if start is None:
         separator = "" if not text or text.endswith("\n") else "\n"
         return f"{text}{separator}{section}:\n  {key}: {scalar}\n"

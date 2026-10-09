@@ -1,20 +1,8 @@
 """Condense one conversation's spans into what the agent did, step by step.
 
-The A2A stream carries only what an agent chooses to report; its spans record
-every model call, tool call and call to another agent. They are too big to
-hand to a judge as they are -- every model call carries the whole growing
-prompt -- so this module keeps, per turn and in the order things happened:
-
-- each model call's *output* (what it said, which tools it decided to call),
-  never its input, which is the history the digest already holds;
-- each tool call's arguments and result, and whether it failed;
-- each call to another agent: what was asked, what came back, and the called
-  agent's own steps nested under it (when it writes its spans where the eval
-  reads them);
-- failures outside any of those (a graph node that raised), once each.
-
-It reads the span dictionaries bat-adk's ``JsonFileSpanExporter`` writes
-(OpenInference attributes plus the ADK's own) and does not import the ADK.
+A model call keeps only its output: its input is the growing history the
+digest already holds. Reads the span dicts bat-adk's JsonFileSpanExporter
+writes, without importing the ADK.
 """
 
 from __future__ import annotations
@@ -23,6 +11,7 @@ import json
 import math
 import re
 from collections import defaultdict, deque
+from itertools import zip_longest
 from typing import Any
 
 from .contracts import (
@@ -36,21 +25,12 @@ from .contracts import (
     TrajectoryTurn,
 )
 
-DEFAULT_MAX_FIELD_CHARS = 4000
-DEFAULT_MAX_RENDER_CHARS = 24000
-
-_CONVERSATION_ID = "gen_ai.conversation.id"
 _OPERATION = "gen_ai.operation.name"
-_AGENT_NAME = "gen_ai.agent.name"
 _SPAN_KIND = "openinference.span.kind"
 _INVOKE_AGENT = "invoke_agent"
 
-_OUTPUT_FIELD = re.compile(r"^llm\.output_messages\.(\d+)\.message\.(.+)$")
-_CONTENT_BLOCK = re.compile(r"^contents\.(\d+)\.message_content\.text$")
-_TOOL_CALL_FIELD = re.compile(r"^tool_calls\.(\d+)\.tool_call\.(.+)$")
-
 # A2A task states, in the eval's own status vocabulary.
-_TASK_STATES = {
+TASK_STATES = {
     "TASK_STATE_SUBMITTED": "working",
     "TASK_STATE_WORKING": "working",
     "TASK_STATE_INPUT_REQUIRED": "input-required",
@@ -64,7 +44,7 @@ _TASK_STATES = {
 # --- building --------------------------------------------------------------
 
 
-def _conversation_roots(
+def conversation_roots(
     spans: list[dict[str, Any]], conversation_id: str
 ) -> list[dict[str, Any]]:
     """The root span of each request the agent served in the conversation.
@@ -79,17 +59,10 @@ def _conversation_roots(
             for span in spans
             if span.get("parent_span_id") is None
             and _is_agent_root(span)
-            and _attrs(span).get(_CONVERSATION_ID) == conversation_id
+            and _attrs(span).get("gen_ai.conversation.id") == conversation_id
         ),
         key=_start,
     )
-
-
-def count_conversation_roots(
-    spans: list[dict[str, Any]], conversation_id: str
-) -> int:
-    """How many of the conversation's requests are already on disk."""
-    return len(_conversation_roots(spans, conversation_id))
 
 
 def build_trajectory(
@@ -97,7 +70,7 @@ def build_trajectory(
     conversation_id: str,
     turns: list[str],
     *,
-    max_field_chars: int = DEFAULT_MAX_FIELD_CHARS,
+    max_field_chars: int = 4000,
 ) -> Trajectory:
     """The digest of conversation ``conversation_id`` in ``spans``.
 
@@ -107,20 +80,13 @@ def build_trajectory(
     ``traceparent``, so they are found by trace id wherever they were written.
     """
     cap = _Capper(max_field_chars)
-    roots = _conversation_roots(spans, conversation_id)
-    by_trace: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    wanted = {root.get("trace_id") for root in roots}
-    for span in spans:
-        if span.get("trace_id") in wanted:
-            by_trace[span["trace_id"]].append(span)
-
+    roots = conversation_roots(spans, conversation_id)
     built: list[TrajectoryTurn] = []
-    for index in range(max(len(roots), len(turns))):
-        user = turns[index] if index < len(turns) else None
+    for user, root in zip_longest(turns, roots):
         steps: list[Step] = []
-        if index < len(roots):
-            trace = _Trace(by_trace[roots[index]["trace_id"]])
-            steps = trace.steps(cap)
+        if root is not None:
+            trace = [s for s in spans if s.get("trace_id") == root["trace_id"]]
+            steps = _Trace(trace).steps(cap)
         built.append(TrajectoryTurn(user=user, steps=steps))
 
     trajectory = Trajectory(found=bool(roots), turns=built)
@@ -130,13 +96,7 @@ def build_trajectory(
 
 
 def tool_calls_from(trajectory: Trajectory) -> list[dict[str, Any]]:
-    """Every tool call of the conversation, called agents' included.
-
-    As ``EpisodeTrace.tool_calls`` holds them -- ``name`` and ``args``, plus
-    the ``error`` of a call that failed -- in the order they happened, with
-    the arguments recovered from the model's tool-call decision when the
-    tool span does not carry them (a ReAct loop's tools do not).
-    """
+    """Every tool call of the conversation, called agents' included."""
     return [
         {"name": step.name, "args": step.args, "error": step.error}
         for step in all_steps(trajectory)
@@ -207,11 +167,11 @@ class _Trace:
         call CallAgentNode makes from a background task -- takes the node
         that was running when it started.
         """
-        chain = [span, *self._ancestors(span)]
-        for index, candidate in enumerate(chain):
-            if index > 0 and _is_agent_root(candidate):
-                if index >= 3:
-                    return chain[index - 2].get("name")
+        ancestors = self._ancestors(span)
+        for depth, candidate in enumerate(ancestors):
+            if _is_agent_root(candidate):
+                if depth >= 2:
+                    return ancestors[depth - 2].get("name")
                 started = _start(span)
                 for graph in self.children.get(candidate["span_id"], []):
                     for node in self.children.get(graph["span_id"], []):
@@ -294,18 +254,15 @@ class _Trace:
                 error=cap(error),
             )
         if _is_agent_call(span):
-            state = attributes.get("bat.a2a.task_state")
             return AgentStep(
                 node=node,
-                agent=attributes.get(_AGENT_NAME),
+                agent=attributes.get("gen_ai.agent.name"),
                 asked=cap(attributes.get("input.value")),
                 answered=cap(attributes.get("output.value")),
-                status=_TASK_STATES.get(state) if state else None,
+                status=TASK_STATES.get(attributes.get("bat.a2a.task_state")),
                 error=cap(error),
             )
-        return ErrorStep(
-            node=node, span=span.get("name"), error=cap(error or "failed")
-        )
+        return ErrorStep(node=node, span=span.get("name"), error=cap(error))
 
     def _model_args(self, call_id: str | None, name: str | None) -> dict:
         if call_id and call_id in self._args_by_call_id:
@@ -420,13 +377,7 @@ def _error_text(span: dict[str, Any]) -> str | None:
 
 
 def _metadata_node(span: dict[str, Any]) -> str | None:
-    raw = _attrs(span).get("metadata")
-    try:
-        metadata = json.loads(raw) if isinstance(raw, str) else raw
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(metadata, dict):
-        return None
+    metadata = _json_object(_attrs(span).get("metadata"))
     namespace = metadata.get("langgraph_checkpoint_ns") or ""
     if namespace:
         return namespace.split("|")[0].split(":")[0] or None
@@ -434,15 +385,13 @@ def _metadata_node(span: dict[str, Any]) -> str | None:
 
 
 def _json_object(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, dict):
-        return raw
+    parsed = raw
     if isinstance(raw, str):
         try:
             parsed = json.loads(raw)
         except ValueError:
             return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _model_output(
@@ -451,7 +400,7 @@ def _model_output(
     """The texts a model call produced, and the tool calls it decided on."""
     messages: dict[int, dict[str, Any]] = defaultdict(dict)
     for key, value in attributes.items():
-        match = _OUTPUT_FIELD.match(key)
+        match = re.match(r"^llm\.output_messages\.(\d+)\.message\.(.+)$", key)
         if match:
             messages[int(match.group(1))][match.group(2)] = value
 
@@ -465,14 +414,14 @@ def _model_output(
         # Content blocks (e.g. OpenAI's Responses API) instead of a string.
         blocks: dict[int, str] = {}
         for key, value in fields.items():
-            match = _CONTENT_BLOCK.match(key)
+            match = re.match(r"^contents\.(\d+)\.message_content\.text$", key)
             if match and isinstance(value, str) and value.strip():
                 blocks[int(match.group(1))] = value
         texts.extend(blocks[index] for index in sorted(blocks))
 
         call_fields: dict[int, dict[str, Any]] = defaultdict(dict)
         for key, value in fields.items():
-            match = _TOOL_CALL_FIELD.match(key)
+            match = re.match(r"^tool_calls\.(\d+)\.tool_call\.(.+)$", key)
             if match:
                 call_fields[int(match.group(1))][match.group(2)] = value
         for call_index in sorted(call_fields):
@@ -499,7 +448,7 @@ def _tool_result(raw: Any) -> tuple[str | None, str | None]:
     try:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
     except ValueError:
-        return str(raw), None
+        return raw, None
     if (
         isinstance(parsed, dict)
         and "update" in parsed
@@ -511,12 +460,9 @@ def _tool_result(raw: Any) -> tuple[str | None, str | None]:
         # A serialized ToolMessage: {"type": "tool", "data": {...}}.
         data = parsed.get("data") if parsed.get("type") == "tool" else parsed
         if isinstance(data, dict) and "content" in data:
-            content = data.get("content")
-            text = (
-                content
-                if isinstance(content, str)
-                else json.dumps(content, ensure_ascii=False)
-            )
+            text = data["content"]
+            if not isinstance(text, str):
+                text = json.dumps(text, ensure_ascii=False)
             return text, data.get("tool_call_id")
     if isinstance(raw, str):
         return raw, None
@@ -524,9 +470,7 @@ def _tool_result(raw: Any) -> tuple[str | None, str | None]:
 
 
 def _command_result(update: Any) -> str | None:
-    """A tool that returned a LangGraph ``Command``: its output is the
-    ToolMessage in the state update, wherever the update put it. The rest
-    of the update is graph state, not what the tool answered."""
+    """A LangGraph ``Command``'s output: the ToolMessages in its update."""
     texts: list[str] = []
 
     def walk(value: Any) -> None:
@@ -549,9 +493,7 @@ def _command_result(update: Any) -> str | None:
 # --- rendering (for the judge) --------------------------------------------
 
 
-def render_trajectory(
-    trajectory: Trajectory, *, max_chars: int = DEFAULT_MAX_RENDER_CHARS
-) -> str:
+def render_trajectory(trajectory: Trajectory, *, max_chars: int) -> str:
     """The digest as numbered lines, at most ``max_chars`` long.
 
     Over budget, long fields are shortened first, then the middle steps of
@@ -582,18 +524,16 @@ def _render(
     lines: list[str] = []
     for number, turn in enumerate(trajectory.turns, 1):
         lines.append(f"Turn {number} - user: {short(turn.user)}")
-        steps = list(turn.steps)
+        steps = turn.steps
         if not steps:
             lines.append("  (no steps recorded)")
         if keep is not None and len(steps) > 2 * keep:
-            head, tail = steps[:keep], steps[-keep:]
-            _render_steps(head, "", 1, short, lines, start=1)
+            _render_steps(steps[:keep], "", short, lines)
             lines.append(f"  … {len(steps) - 2 * keep} steps omitted …")
-            _render_steps(
-                tail, "", 1, short, lines, start=len(steps) - keep + 1
-            )
+            tail = steps[-keep:]
+            _render_steps(tail, "", short, lines, start=len(steps) - keep + 1)
         else:
-            _render_steps(steps, "", 1, short, lines, start=1)
+            _render_steps(steps, "", short, lines)
 
     totals = trajectory.totals
     lines.append(
@@ -603,8 +543,8 @@ def _render(
     return "\n".join(lines)
 
 
-def _render_steps(steps, prefix, depth, short, lines, *, start) -> None:
-    pad = "  " * depth + "   " * prefix.count(".")
+def _render_steps(steps, prefix, short, lines, start=1) -> None:
+    pad = "  " + "   " * prefix.count(".")
     for offset, step in enumerate(steps):
         label = f"{prefix}{start + offset}"
         head = f"{pad}{label}{'.' if not prefix else ''} "
@@ -615,29 +555,25 @@ def _render_steps(steps, prefix, depth, short, lines, *, start) -> None:
                 parts.append("called: " + ", ".join(step.called))
             if step.said:
                 parts.append(f'said: "{short(step.said)}"')
-            if not step.called and not step.said:
+            if not parts:
                 parts.append("said nothing")
             if step.error:
                 parts.append(f"FAILED: {short(step.error)}")
             label_text = f"[model {step.node or '?'}] "
             lines.append(head + label_text + "; ".join(parts))
         elif isinstance(step, ToolStep):
-            outcome = (
-                f"FAILED: {short(step.error)}"
-                if step.error
-                else short(step.result) or "(no result)"
-            )
+            outcome = short(step.result) or "(no result)"
+            if step.error:
+                outcome = f"FAILED: {short(step.error)}"
             args = short(json.dumps(step.args, ensure_ascii=False))
             lines.append(f"{head}[tool {step.name}] args: {args} -> {outcome}")
-            _render_steps(step.steps, f"{label}.", depth, short, lines, start=1)
+            _render_steps(step.steps, f"{label}.", short, lines)
         elif isinstance(step, AgentStep):
-            asked = (
-                f'"{short(step.asked)}"'
-                if step.asked is not None
-                else "(not recorded)"
-            )
+            asked = "(not recorded)"
+            if step.asked is not None:
+                asked = f'"{short(step.asked)}"'
             lines.append(f"{head}[agent {step.agent}] asked: {asked}")
-            _render_steps(step.steps, f"{label}.", depth, short, lines, start=1)
+            _render_steps(step.steps, f"{label}.", short, lines)
             if step.error:
                 outcome = f"FAILED: {short(step.error)}"
             elif step.answered is not None:

@@ -11,9 +11,9 @@ import http.server
 import json
 import threading
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from eval.engine.adapter import read_spans
 from eval.engine.contracts import (
@@ -81,17 +81,14 @@ def test_an_answer_without_a_verdict_is_an_error() -> None:
 
 
 class _StructuredJudge:
-    """A judge client built with the verdict schema: ``invoke`` returns the
-    parsed verdict, or raises the way ChatModelClient does when the answer
-    does not fit the schema (or the server cannot produce structured
-    output)."""
+    """A schema-bound judge client: ``invoke`` returns the verdict or raises."""
 
     def __init__(self, outcomes: list) -> None:
         self.outcomes = list(outcomes)
         self.prompts: list[str] = []
 
     def invoke(self, message):
-        self.prompts.append(message.content)
+        self.prompts.append(message)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -106,8 +103,8 @@ class _TextJudge:
         self.prompts: list[str] = []
 
     def invoke(self, message):
-        self.prompts.append(message.content)
-        return SimpleNamespace(content=self.answers.pop(0))
+        self.prompts.append(message)
+        return AIMessage(content=self.answers.pop(0))
 
 
 def _judge(structured, text=None) -> Judge:

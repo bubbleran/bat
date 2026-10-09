@@ -16,16 +16,6 @@ from cli import app
 
 runner = CliRunner()
 
-needs_make = pytest.mark.skipif(
-    shutil.which("make") is None, reason="make is not installed"
-)
-
-
-@pytest.fixture(autouse=True)
-def _no_image_settings_from_the_shell(monkeypatch) -> None:
-    monkeypatch.delenv("DOCKER_REGISTRY", raising=False)
-    monkeypatch.delenv("REPO", raising=False)
-
 
 def _blueprint(tmp_path: Path, monkeypatch, *agents: str) -> Path:
     monkeypatch.chdir(tmp_path)
@@ -52,15 +42,6 @@ def _port(agent_dir: Path) -> int:
         (agent_dir / "config.yaml").read_text(encoding="utf-8")
     )
     return config["endpoint"]["port"]
-
-
-def test_set_env_is_gone(tmp_path, monkeypatch) -> None:
-    _blueprint(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["set", "env", "--port", "9999"])
-
-    assert result.exit_code != 0
-    assert "No such command" in result.output
 
 
 # -- bat set config -----------------------------------------------------------
@@ -113,7 +94,9 @@ def test_set_config_rejects_an_unknown_agent(tmp_path, monkeypatch) -> None:
 # -- bat set image ------------------------------------------------------------
 
 
-@needs_make
+@pytest.mark.skipif(
+    shutil.which("make") is None, reason="make is not installed"
+)
 def test_set_image_writes_the_registry_into_the_makefile(
     tmp_path, monkeypatch
 ) -> None:

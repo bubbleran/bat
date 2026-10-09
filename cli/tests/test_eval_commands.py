@@ -4,6 +4,7 @@ import os
 import signal
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from cli import app
@@ -18,8 +19,6 @@ runner = CliRunner()
 
 
 def _write_minimal_agent_root(root: Path) -> None:
-    # The eval reads the agent's endpoint from config.yaml to know where to
-    # connect (it no longer patches/forces it).
     (root / "config.yaml").write_text(
         "name: test\nendpoint:\n  url: http://127.0.0.1\n  port: 9900\n",
         encoding="utf-8",
@@ -77,57 +76,24 @@ def test_eval_show_prints_resolved_config(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     root = Path.cwd()
     _write_minimal_agent_root(root)
-
-    eval_input = root / "eval" / "input"
-    eval_output = root / "eval" / "output"
-    eval_input.mkdir(parents=True, exist_ok=True)
-    eval_output.mkdir(parents=True, exist_ok=True)
-
-    eval_yaml = root / "eval" / "eval.yaml"
-    eval_yaml.write_text(
-        "evaluation:\n  dataset: eval/input/tasks.json\n", encoding="utf-8"
+    (root / "eval").mkdir()
+    (root / "eval" / "eval.yaml").write_text(
+        "evaluation:\n"
+        "  k: 2\n"
+        "  qualitative: true\n"
+        "judge:\n"
+        "  provider: ollama\n"
+        "  model: judge-model\n"
+        "models:\n"
+        "  - provider: openai\n"
+        "    model: gpt-4.1-mini\n",
+        encoding="utf-8",
     )
-
-    dataset = eval_input / "tasks.json"
-    dataset.write_text("[]\n", encoding="utf-8")
-
-    config = EvalConfig(
-        dataset=dataset.resolve(),
-        output_dir=eval_output.resolve(),
-        agent_startup_timeout_s=15,
-        agent_shutdown_timeout_s=5,
-        k=2,
-        qualitative=True,
-        run_name="benchmark",
-        models=[
-            ModelSpec(
-                provider="openai",
-                model="gpt-4.1-mini",
-                base_url="http://model.local",
-                env={"EXTRA_FLAG": "enabled"},
-            )
-        ],
-        judge=JudgeSpec(
-            provider="ollama",
-            model="judge-model",
-            base_url="http://judge.local",
-            env={"JUDGE_MODE": "strict"},
-        ),
-    )
-
-    def fake_load_eval_config(
-        agent_root: Path, config_path: Path
-    ) -> EvalConfig:
-        assert agent_root == root
-        assert config_path == eval_yaml
-        return config
-
-    monkeypatch.setattr("eval.commands.load_eval_config", fake_load_eval_config)
 
     result = runner.invoke(app, ["eval", "show"])
 
     assert result.exit_code == 0
-
+    dataset = root / "eval" / "input" / "tasks.json"
     assert "EVALUATION CONFIGURATION" in result.output
     assert f"Dataset     : {dataset.resolve()}" in result.output
     assert "k           : 2" in result.output
@@ -138,19 +104,9 @@ def test_eval_show_prints_resolved_config(monkeypatch, tmp_path) -> None:
 
 
 def test_load_eval_config_allows_missing_judge_when_qualitative_is_false(
-    tmp_path, monkeypatch
+    tmp_path,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    root = Path.cwd()
-    _write_minimal_agent_root(root)
-
-    eval_input = root / "eval" / "input"
-    eval_input.mkdir(parents=True)
-    dataset = eval_input / "tasks.json"
-    dataset.write_text("[]\n", encoding="utf-8")
-
-    eval_yaml = root / "eval" / "eval.yaml"
-    eval_yaml.parent.mkdir(exist_ok=True)
+    eval_yaml = tmp_path / "eval.yaml"
     eval_yaml.write_text(
         "evaluation:\n"
         "  qualitative: false\n"
@@ -160,26 +116,16 @@ def test_load_eval_config_allows_missing_judge_when_qualitative_is_false(
         encoding="utf-8",
     )
 
-    config = load_eval_config(root, eval_yaml)
+    config = load_eval_config(tmp_path, eval_yaml)
 
     assert config.qualitative is False
     assert config.judge is None
 
 
 def test_load_eval_config_requires_judge_when_qualitative_is_true(
-    tmp_path, monkeypatch
+    tmp_path,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    root = Path.cwd()
-    _write_minimal_agent_root(root)
-
-    eval_input = root / "eval" / "input"
-    eval_input.mkdir(parents=True)
-    dataset = eval_input / "tasks.json"
-    dataset.write_text("[]\n", encoding="utf-8")
-
-    eval_yaml = root / "eval" / "eval.yaml"
-    eval_yaml.parent.mkdir(exist_ok=True)
+    eval_yaml = tmp_path / "eval.yaml"
     eval_yaml.write_text(
         "evaluation:\n"
         "  qualitative: true\n"
@@ -189,12 +135,8 @@ def test_load_eval_config_requires_judge_when_qualitative_is_true(
         encoding="utf-8",
     )
 
-    try:
-        load_eval_config(root, eval_yaml)
-    except ValueError as exc:
-        assert "judge.provider and judge.model" in str(exc)
-    else:
-        raise AssertionError("Expected missing qualitative judge to fail")
+    with pytest.raises(ValueError, match="judge.provider and judge.model"):
+        load_eval_config(tmp_path, eval_yaml)
 
 
 def test_eval_run_starts_agent_and_runs_orchestrator(
@@ -207,7 +149,6 @@ def test_eval_run_starts_agent_and_runs_orchestrator(
     eval_input = root / "eval" / "input"
     eval_output = root / "eval" / "output"
     eval_input.mkdir(parents=True, exist_ok=True)
-    eval_output.mkdir(parents=True, exist_ok=True)
 
     eval_yaml = root / "eval" / "eval.yaml"
     eval_yaml.write_text(
@@ -262,33 +203,27 @@ def test_eval_run_starts_agent_and_runs_orchestrator(
         def __init__(self) -> None:
             self.returncode = None
 
-        def poll(self):  # noqa: ANN001
+        def poll(self):
             return self.returncode
 
-        def terminate(self) -> None:
-            self.returncode = 0
-
-        def wait(self, timeout=None):  # noqa: ANN001
+        def wait(self, timeout=None):
             if self.returncode is None:
                 self.returncode = 0
             return self.returncode
 
-        def kill(self) -> None:
-            self.returncode = -9
-
-    def fake_popen(cmd, cwd, env, **kwargs):  # noqa: ANN001, ANN003
+    def fake_popen(cmd, cwd, env, **kwargs):
         captured["popen_cmd"] = cmd
         captured["popen_cwd"] = cwd
         captured["popen_kwargs"] = kwargs
         captured["popen_env"] = env
         return _FakeProcess()
 
-    def fake_wait_for_agent_port(agent_url: str, timeout_s: int, process):  # noqa: ANN001
+    def fake_wait_for_agent_port(agent_url: str, timeout_s: int, process):
         captured["wait_agent_url"] = agent_url
         captured["wait_timeout_s"] = timeout_s
         assert process is not None
 
-    async def fake_run_evaluation(**kwargs):  # noqa: ANN003
+    async def fake_run_evaluation(**kwargs):
         captured["runner_kwargs"] = kwargs
         captured["judge_mode"] = os.environ.get("JUDGE_MODE")
 
@@ -327,7 +262,7 @@ def test_eval_run_starts_agent_and_runs_orchestrator(
     runner_kwargs = captured["runner_kwargs"]
     assert runner_kwargs["agent_url"] == "http://127.0.0.1:9900"
     assert runner_kwargs["model"] == "openai:gpt-4.1-mini"
-    assert runner_kwargs["dataset"] == dataset.resolve()
+    assert runner_kwargs["tasks"] == []
     assert runner_kwargs["out_dir"] == eval_output.resolve() / "20260101_000000"
     assert runner_kwargs["k"] == 2
     assert runner_kwargs["run_name"] == "benchmark"
@@ -338,11 +273,7 @@ def test_eval_run_starts_agent_and_runs_orchestrator(
 
 
 def _write_eval_yaml_with_prompts(root: Path, prompts_block: str) -> Path:
-    eval_input = root / "eval" / "input"
-    eval_input.mkdir(parents=True)
-    (eval_input / "tasks.json").write_text("[]\n", encoding="utf-8")
-
-    eval_yaml = root / "eval" / "eval.yaml"
+    eval_yaml = root / "eval.yaml"
     eval_yaml.write_text(
         "evaluation:\n"
         "  qualitative: true\n"
@@ -356,12 +287,9 @@ def _write_eval_yaml_with_prompts(root: Path, prompts_block: str) -> Path:
     return eval_yaml
 
 
-def test_judge_prompts_parsed(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    root = Path.cwd()
-    _write_minimal_agent_root(root)
+def test_judge_prompts_parsed(tmp_path) -> None:
     eval_yaml = _write_eval_yaml_with_prompts(
-        root,
+        tmp_path,
         "  prompts:\n"
         "    relevance: tune relevance\n"
         "    task_completion: tune completion\n"
@@ -369,7 +297,7 @@ def test_judge_prompts_parsed(tmp_path, monkeypatch) -> None:
         "    tool_call: tune tool calls\n",
     )
 
-    config = load_eval_config(root, eval_yaml)
+    config = load_eval_config(tmp_path, eval_yaml)
 
     assert config.judge is not None
     assert config.judge.prompts == {
@@ -380,68 +308,48 @@ def test_judge_prompts_parsed(tmp_path, monkeypatch) -> None:
     }
 
 
-def test_judge_prompts_partial_ok(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    root = Path.cwd()
-    _write_minimal_agent_root(root)
+def test_judge_prompts_partial_ok(tmp_path) -> None:
     eval_yaml = _write_eval_yaml_with_prompts(
-        root,
+        tmp_path,
         "  prompts:\n    relevance: only relevance set\n",
     )
 
-    config = load_eval_config(root, eval_yaml)
+    config = load_eval_config(tmp_path, eval_yaml)
 
     assert config.judge is not None
     assert config.judge.prompts == {"relevance": "only relevance set"}
 
 
-def test_judge_prompts_overflow_errors(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    root = Path.cwd()
-    _write_minimal_agent_root(root)
+def test_judge_prompts_overflow_errors(tmp_path) -> None:
     overflow = "x" * 1001
     eval_yaml = _write_eval_yaml_with_prompts(
-        root,
+        tmp_path,
         f"  prompts:\n    task_completion: {overflow}\n",
     )
 
-    try:
-        load_eval_config(root, eval_yaml)
-    except ValueError as exc:
-        message = str(exc)
-        assert "judge.prompts.task_completion" in message
-        assert "1000-character limit" in message
-        assert "got 1001" in message
-    else:
-        raise AssertionError("Expected overflow to fail load")
+    with pytest.raises(ValueError) as exc:
+        load_eval_config(tmp_path, eval_yaml)
+
+    message = str(exc.value)
+    assert "judge.prompts.task_completion" in message
+    assert "1000-character limit" in message
+    assert "got 1001" in message
 
 
-def test_judge_prompts_unknown_key_errors(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    root = Path.cwd()
-    _write_minimal_agent_root(root)
+def test_judge_prompts_unknown_key_errors(tmp_path) -> None:
     eval_yaml = _write_eval_yaml_with_prompts(
-        root,
+        tmp_path,
         "  prompts:\n    bogus: nope\n",
     )
 
-    try:
-        load_eval_config(root, eval_yaml)
-    except ValueError as exc:
-        message = str(exc)
-        assert "bogus" in message
-        assert "relevance" in message
-    else:
-        raise AssertionError("Expected unknown key to fail load")
+    with pytest.raises(ValueError, match="bogus.*relevance"):
+        load_eval_config(tmp_path, eval_yaml)
 
 
-def test_judge_prompts_absent_is_empty_dict(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    root = Path.cwd()
-    _write_minimal_agent_root(root)
-    eval_yaml = _write_eval_yaml_with_prompts(root, "")
+def test_judge_prompts_absent_is_empty_dict(tmp_path) -> None:
+    eval_yaml = _write_eval_yaml_with_prompts(tmp_path, "")
 
-    config = load_eval_config(root, eval_yaml)
+    config = load_eval_config(tmp_path, eval_yaml)
 
     assert config.judge is not None
     assert config.judge.prompts == {}
@@ -578,7 +486,7 @@ def test_a_failed_judge_leaves_its_error_in_the_reasoning(monkeypatch) -> None:
     from eval.engine import judge
     from eval.engine.contracts import EpisodeResult, JudgeSpec, TaskSpec
 
-    def ask(self, rubric, prompt):  # noqa: ANN001
+    def ask(self, rubric, prompt):
         if rubric == "relevance":
             return {"reasoning": "Error: bad api key", "score": None}
         return {"reasoning": "looks good", "score": 0.75}
@@ -612,13 +520,8 @@ def test_load_eval_config_rejects_unsupported_provider(tmp_path) -> None:
         "    model: llama-3\n",
         encoding="utf-8",
     )
-    try:
+    with pytest.raises(ValueError, match="groq.*Valid providers"):
         load_eval_config(tmp_path, eval_yaml)
-    except ValueError as exc:
-        assert "groq" in str(exc)
-        assert "Valid providers" in str(exc)
-    else:
-        raise AssertionError("Expected unsupported provider to fail load")
 
 
 def test_load_eval_config_rejects_unsupported_judge_provider(tmp_path) -> None:
@@ -635,12 +538,8 @@ def test_load_eval_config_rejects_unsupported_judge_provider(tmp_path) -> None:
         "    model: gpt-4.1-mini\n",
         encoding="utf-8",
     )
-    try:
+    with pytest.raises(ValueError, match="azure"):
         load_eval_config(tmp_path, eval_yaml)
-    except ValueError as exc:
-        assert "azure" in str(exc)
-    else:
-        raise AssertionError("Expected unsupported judge provider to fail")
 
 
 def test_judge_client_does_not_inherit_model_base_url(monkeypatch) -> None:
@@ -651,7 +550,7 @@ def test_judge_client_does_not_inherit_model_base_url(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class _FakeConfig:
-        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+        def __init__(self, **kwargs) -> None:
             captured.update(kwargs)
 
     monkeypatch.setattr(judge, "ChatModelClientConfig", _FakeConfig)
@@ -681,7 +580,7 @@ def test_stop_agent_process_signals_whole_group(monkeypatch) -> None:
         def poll(self) -> None:
             return None
 
-        def wait(self, timeout=None) -> int:  # noqa: ANN001
+        def wait(self, timeout=None) -> int:
             return 0
 
     cmd._stop_agent_process(_FakeProc(), timeout_s=1)
@@ -692,9 +591,9 @@ def test_stop_agent_process_signals_whole_group(monkeypatch) -> None:
 def test_one_failing_task_does_not_stop_the_run(tmp_path, monkeypatch) -> None:
     """S4-M6: one task raising is recorded as an error, run still finishes."""
     from eval.engine import orchestrator
-    from eval.engine.contracts import EpisodeResult
+    from eval.engine.contracts import EpisodeResult, TaskSpec
 
-    async def run_task(agent_url, task, thread_id, span_paths):  # noqa: ANN001
+    async def run_task(agent_url, task, thread_id, span_paths):
         if task.id == "boom":
             raise RuntimeError("kaboom")
         return EpisodeResult(
@@ -702,19 +601,15 @@ def test_one_failing_task_does_not_stop_the_run(tmp_path, monkeypatch) -> None:
         )
 
     monkeypatch.setattr(orchestrator, "run_task", run_task)
-    dataset = tmp_path / "tasks.json"
-    dataset.write_text(
-        json.dumps(
-            [{"id": "boom", "turns": ["x"]}, {"id": "fine", "turns": ["y"]}]
-        ),
-        encoding="utf-8",
-    )
 
     results = asyncio.run(
         orchestrator.run_evaluation(
             agent_url="http://agent",
             model="openai:m",
-            dataset=dataset,
+            tasks=[
+                TaskSpec(id="boom", turns=["x"]),
+                TaskSpec(id="fine", turns=["y"]),
+            ],
             out_dir=tmp_path,
             run_name="r",
             k=1,
@@ -740,7 +635,6 @@ def test_eval_run_continues_after_one_model_fails(
     eval_input = root / "eval" / "input"
     eval_input.mkdir(parents=True)
     (eval_input / "tasks.json").write_text("[]\n", encoding="utf-8")
-    (root / "eval" / "output").mkdir(parents=True)
     eval_yaml = root / "eval" / "eval.yaml"
     eval_yaml.write_text(
         "evaluation:\n  dataset: eval/input/tasks.json\n", encoding="utf-8"
@@ -767,13 +661,13 @@ def test_eval_run_continues_after_one_model_fails(
     class _FakeProcess:
         pid = 222
 
-        def poll(self):  # noqa: ANN201
+        def poll(self):
             return None
 
-        def wait(self, timeout=None):  # noqa: ANN001, ANN201
+        def wait(self, timeout=None):
             return 0
 
-    def fake_wait(agent_url, timeout_s, process):  # noqa: ANN001
+    def fake_wait(agent_url, timeout_s, process):
         wait_calls["n"] += 1
         if wait_calls["n"] == 1:
             raise RuntimeError("agent did not start")
@@ -788,7 +682,7 @@ def test_eval_run_continues_after_one_model_fails(
     monkeypatch.setattr("eval.commands.os.killpg", lambda pgid, sig: None)
     monkeypatch.setattr("eval.commands._wait_for_agent_port", fake_wait)
 
-    async def fake_run_evaluation(**kw):  # noqa: ANN003
+    async def fake_run_evaluation(**kw):
         ran_models.append(kw["model"])
 
     monkeypatch.setattr("eval.commands.run_evaluation", fake_run_evaluation)

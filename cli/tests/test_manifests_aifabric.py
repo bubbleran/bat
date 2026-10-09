@@ -1,11 +1,5 @@
-"""`bat manifests aifabric`: the AIFabric of a blueprint, from its agents'
-config.yaml files.
-
-The orama operator renders each agent's config.yaml from the AIFabric
-(model from `llms`, remote-agents from `dependencies`, mcp-servers from
-`mcp`); this command goes the other way, and every run refreshes what the
-configs say while keeping what was written by hand.
-"""
+"""`bat manifests aifabric`: a blueprint's AIFabric from its agents'
+configs."""
 
 from __future__ import annotations
 
@@ -86,8 +80,7 @@ def test_each_agent_becomes_an_internal_agent_of_the_fabric(
     hermes = _agent(fabric, "hermes")
     assert hermes["type"] == "internal"
     assert hermes["internal"]["model"] == "demo/hermes"
-    # The dependencies below are exactly the config's remote-agents only
-    # without the implicit ones a role adds.
+    # Role "none": the dependencies are exactly the config's.
     assert hermes["internal"]["role"] == "none"
 
 

@@ -47,12 +47,10 @@ def test_init_blueprint_is_recognised_as_a_blueprint(
 ) -> None:
     """There is no manifest to find, so the layout itself has to be what
     `bat add agent` and `bat eval` recognise -- before any agent exists."""
-    monkeypatch.chdir(tmp_path)
-
-    runner.invoke(app, ["init", "blueprint", "demo"])
+    root = _fresh_blueprint(tmp_path, monkeypatch)
 
     with pytest.raises(ProjectError, match="root of a blueprint"):
-        resolve_agent_target(Path("demo"))
+        resolve_agent_target(root)
 
 
 def test_init_blueprint_pins_adk_with_telemetry_extra(
@@ -73,12 +71,10 @@ def test_init_blueprint_installs_pyinstaller_with_the_project(
 ) -> None:
     """The Dockerfile only runs `uv sync --frozen`: pyinstaller has to come
     from the project's own dev group, or the freeze step has no tool."""
-    monkeypatch.chdir(tmp_path)
-
-    runner.invoke(app, ["init", "blueprint", "demo"])
+    root = _fresh_blueprint(tmp_path, monkeypatch)
 
     pyproject = tomllib.loads(
-        (Path("demo") / "pyproject.toml").read_text(encoding="utf-8")
+        (root / "pyproject.toml").read_text(encoding="utf-8")
     )
     dev = pyproject["dependency-groups"]["dev"]
     assert any(req.startswith("pyinstaller") for req in dev)
@@ -257,12 +253,11 @@ def test_makefile_runs_an_agent_it_was_never_told_about(
 ) -> None:
     """Agents are discovered, so `bat add agent` never edits the Makefile;
     and the .env goes to uv explicitly, which an editable bat-adk needs."""
-    monkeypatch.chdir(tmp_path)
-    runner.invoke(app, ["init", "blueprint", "demo"])
-    monkeypatch.chdir(tmp_path / "demo")
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    monkeypatch.chdir(root)
     runner.invoke(app, ["add", "agent", "netops"])
 
-    commands = _make_dry_run(tmp_path / "demo", "netops")
+    commands = _make_dry_run(root, "netops")
 
     assert (
         "CONFIG_PATH=netops/config.yaml UV_ENV_FILE=.env uv run . netops"
@@ -273,10 +268,9 @@ def test_makefile_runs_an_agent_it_was_never_told_about(
 def test_makefile_build_locks_before_building(tmp_path, monkeypatch) -> None:
     """The image installs from the lockfile (`uv sync --frozen`), and a fresh
     blueprint has none yet."""
-    monkeypatch.chdir(tmp_path)
-    runner.invoke(app, ["init", "blueprint", "demo"])
+    root = _fresh_blueprint(tmp_path, monkeypatch)
 
-    commands = _make_dry_run(tmp_path / "demo", "build").splitlines()
+    commands = _make_dry_run(root, "build").splitlines()
 
     lock = commands.index("uv lock")
     build = next(i for i, line in enumerate(commands) if "docker build" in line)
@@ -306,21 +300,20 @@ _PLACEHOLDER = re.compile(r"(__|\*\*)[A-Z][A-Z_]*[A-Z](__|\*\*)")
 def test_no_placeholder_survives_in_a_scaffolded_blueprint(
     tmp_path, monkeypatch
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    runner.invoke(app, ["init", "blueprint", "demo"])
-    monkeypatch.chdir(tmp_path / "demo")
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    monkeypatch.chdir(root)
     runner.invoke(app, ["add", "agent", "netops"])
 
     leftovers = {
         str(path.relative_to(tmp_path)): _PLACEHOLDER.findall(
             path.read_text(encoding="utf-8")
         )
-        for path in (tmp_path / "demo").rglob("*")
+        for path in root.rglob("*")
         if path.is_file()
     }
 
     assert {name: found for name, found in leftovers.items() if found} == {}
-    readme = (tmp_path / "demo" / "README.md").read_text(encoding="utf-8")
+    readme = (root / "README.md").read_text(encoding="utf-8")
     assert readme.startswith("# demo\n")
 
 
@@ -329,27 +322,25 @@ def test_a_blueprint_cannot_be_created_inside_a_blueprint(
 ) -> None:
     """Its agents are the folders right below its root, so a blueprint
     created there would sit among them as a stray project."""
-    monkeypatch.chdir(tmp_path)
-    runner.invoke(app, ["init", "blueprint", "demo"])
-    monkeypatch.chdir(tmp_path / "demo")
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    monkeypatch.chdir(root)
 
     result = runner.invoke(app, ["init", "blueprint", "inner"])
 
     assert result.exit_code != 0
     assert "inside blueprint 'demo'" in result.output
-    assert not (tmp_path / "demo" / "inner").exists()
+    assert not (root / "inner").exists()
 
 
 def test_a_blueprint_cannot_be_created_inside_one_of_its_agents(
     tmp_path, monkeypatch
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    runner.invoke(app, ["init", "blueprint", "demo"])
-    monkeypatch.chdir(tmp_path / "demo")
+    root = _fresh_blueprint(tmp_path, monkeypatch)
+    monkeypatch.chdir(root)
     runner.invoke(app, ["add", "agent", "netops"])
-    monkeypatch.chdir(tmp_path / "demo" / "netops")
+    monkeypatch.chdir(root / "netops")
 
     result = runner.invoke(app, ["init", "blueprint", "inner"])
 
     assert result.exit_code != 0
-    assert not (tmp_path / "demo" / "netops" / "inner").exists()
+    assert not (root / "netops" / "inner").exists()

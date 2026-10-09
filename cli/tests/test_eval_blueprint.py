@@ -33,12 +33,6 @@ class _FakeProcess:
             self.returncode = 0
         return self.returncode
 
-    def terminate(self) -> None:
-        self.returncode = 0
-
-    def kill(self) -> None:
-        self.returncode = -9
-
 
 def _write_blueprint_with_agent(root: Path, selector: str = "netops") -> Path:
     """A blueprint laid out like the real ones: no manifest and no root
@@ -49,13 +43,9 @@ def _write_blueprint_with_agent(root: Path, selector: str = "netops") -> Path:
     (root / "__main__.py").write_text(
         f'APPS = {{"{selector}"}}\n', encoding="utf-8"
     )
-    venv_bin = root / ".venv" / "bin"
-    venv_bin.mkdir(parents=True, exist_ok=True)
-    (venv_bin / "python").write_text("", encoding="utf-8")
 
     agent = root / "netops"
     (agent / "eval" / "input").mkdir(parents=True, exist_ok=True)
-    (agent / "eval" / "output").mkdir(parents=True, exist_ok=True)
     (agent / "agent.json").write_text("{}\n", encoding="utf-8")
     (agent / "config.yaml").write_text(
         "agent_card: netops/agent.json\n"

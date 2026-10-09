@@ -21,10 +21,6 @@ import typer
 
 from project import fail, find_blueprint_root
 
-_REGISTRY_HINT = (
-    "BubbleRAN can provide a Docker registry for your images: ask your "
-    "BubbleRAN contact."
-)
 # The image in a dry run's `docker build ... --tag <image>` / `docker push`.
 _PLANNED_IMAGE = {
     "build": re.compile(r"docker build\b[^\n]*?(?:--tag|-t)[ =](\S+)"),
@@ -125,14 +121,14 @@ def _run(command: list[str], directory: Path) -> None:
         typer.secho(
             f"{' '.join(command[:2])} failed.", fg=typer.colors.RED, err=True
         )
-        raise typer.Exit(code=exc.returncode or 1) from exc
+        raise typer.Exit(code=exc.returncode) from exc
 
 
 def _plain_image(
     directory: Path, registry: str | None, repo: str | None, version: str
-) -> tuple[str, str | None]:
-    """The image and registry of a project without a Makefile."""
-    registry = registry or os.environ.get("DOCKER_REGISTRY", "").strip() or None
+) -> str:
+    """The image of a project without a Makefile."""
+    registry = registry or os.environ.get("DOCKER_REGISTRY", "").strip()
     repo = (
         repo
         or os.environ.get("REPO", "").strip()
@@ -140,7 +136,7 @@ def _plain_image(
         or "agent"
     )
     image = f"{repo}:{version}"
-    return (f"{registry}/{image}" if registry else image), registry
+    return f"{registry}/{image}" if registry else image
 
 
 def _refuse_push(
@@ -155,7 +151,8 @@ def _refuse_push(
         f"Can't push {directory.name}: no Docker registry set, so "
         f"{image or 'the image'} would go to Docker Hub.\n"
         f"  Pass --docker-registry, or {where}.\n"
-        f"  {_REGISTRY_HINT}"
+        "  BubbleRAN can provide a Docker registry for your images: ask your "
+        "BubbleRAN contact."
     )
 
 
@@ -183,7 +180,7 @@ def build_image(
         if not dockerfile.is_file():
             fail(f"Dockerfile not found in context: {dockerfile}")
         version = version or "latest"
-        image, _ = _plain_image(directory, docker_registry, repo, version)
+        image = _plain_image(directory, docker_registry, repo, version)
         build = ["docker", "build", "--build-arg", f"VERSION={version}"]
         _run([*build, "--tag", image, "."], directory)
     _succeeded("built", image)
@@ -210,10 +207,10 @@ def push_image(
             _refuse_push(directory, image, makefile=True)
         _run(["make", "push", *variables], directory)
     else:
-        image, registry = _plain_image(
+        image = _plain_image(
             directory, docker_registry, repo, version or "latest"
         )
-        if registry is None:
+        if registry_of(image) is None:
             _refuse_push(directory, image, makefile=False)
         _run(["docker", "push", image], directory)
     _succeeded("pushed", image)

@@ -9,15 +9,18 @@ from pathlib import Path
 
 import pytest
 
-# Top-level modules a generated project brings: every test generates them
-# under the same names, so they are imported fresh and forgotten afterwards.
-_GENERATED_MODULES = {"src"}
-
 
 def _forget(top_level: set[str]) -> None:
     for name in list(sys.modules):
         if name.split(".")[0] in top_level:
             del sys.modules[name]
+
+
+@pytest.fixture(autouse=True)
+def _no_image_settings(monkeypatch) -> None:
+    """make reads DOCKER_REGISTRY, REPO and VERSION from the environment."""
+    for name in ("DOCKER_REGISTRY", "REPO", "VERSION"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
@@ -29,7 +32,8 @@ def floor_given_to_the_application(monkeypatch):
     the dispatcher does. AgentApplication is replaced by a recorder, so
     nothing binds a port or builds a model.
     """
-    touched = set(_GENERATED_MODULES)
+    # Every generated project brings a top-level `src`: import it fresh.
+    touched = {"src"}
     recorded: list[dict] = []
 
     class _Recorder:

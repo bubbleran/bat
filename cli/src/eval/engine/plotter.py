@@ -37,7 +37,8 @@ def _style(ax, names: list[str], title: str, ylabel: str, ylim=None) -> None:
         ax.set_ylim(0, ylim)
 
 
-def _labels(ax, bars, values: list, fmt: str) -> None:
+def _bars(ax, names: list[str], values: list, fmt: str, color) -> None:
+    bars = ax.bar(range(len(names)), values, color=color, alpha=0.7)
     for bar, value in zip(bars, values, strict=False):
         if value:
             ax.text(
@@ -48,11 +49,6 @@ def _labels(ax, bars, values: list, fmt: str) -> None:
                 va="bottom",
                 fontsize=8,
             )
-
-
-def _bars(ax, names: list[str], values: list, fmt: str, color) -> None:
-    bars = ax.bar(range(len(names)), values, color=color, alpha=0.7)
-    _labels(ax, bars, values, fmt)
 
 
 def _tokens(ax, names: list[str], prompt: list, completion: list) -> None:

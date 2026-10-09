@@ -36,11 +36,6 @@ def failing_run() -> Trajectory:
     )
 
 
-CLEAN_RUN = Trajectory(
-    found=True,
-    turns=[TrajectoryTurn(user="hi", steps=[ModelStep(said="hello")])],
-    totals=TrajectoryTotals(model_calls=1, tokens_in=10, tokens_out=5),
-)
 NO_SPANS = Trajectory(found=False, turns=[TrajectoryTurn(user="hi")])
 
 
@@ -65,7 +60,13 @@ def test_no_errors_fails_on_a_run_with_failed_steps(failing_run) -> None:
 
 
 def test_no_errors_passes_a_clean_run() -> None:
-    assert _verdict({"no_errors": True}, CLEAN_RUN).passed is True
+    clean_run = Trajectory(
+        found=True,
+        turns=[TrajectoryTurn(user="hi", steps=[ModelStep(said="hello")])],
+        totals=TrajectoryTotals(model_calls=1, tokens_in=10, tokens_out=5),
+    )
+
+    assert _verdict({"no_errors": True}, clean_run).passed is True
 
 
 def test_model_calls_over_the_limit_fail(failing_run) -> None:

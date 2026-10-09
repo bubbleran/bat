@@ -22,7 +22,7 @@ class ExpectedAgentCall(BaseModel):
 class TaskExpected(BaseModel):
     status: AgentTaskStatus | None = "completed"  # None skips the check
     expected_outcome: str | None = None  # scored by the judge
-    output_must_contain: list[str] | None = None
+    output_must_contain: list[str] = Field(default_factory=list)
     # Read off the spans: without any, they fail as one "no spans" check.
     tool_calls: list[ExpectedToolCall] = Field(default_factory=list)
     agent_calls: list[ExpectedAgentCall] = Field(default_factory=list)
@@ -102,8 +102,6 @@ Step = Annotated[
     Union[ModelStep, ToolStep, AgentStep, ErrorStep],
     Field(discriminator="kind"),
 ]
-ToolStep.model_rebuild()
-AgentStep.model_rebuild()
 
 
 class TrajectoryTurn(BaseModel):
@@ -167,28 +165,23 @@ class ModelSpec(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
 
 
-class JudgeSpec(BaseModel):
-    provider: str
-    model: str
-    base_url: str | None = None
+class JudgeSpec(ModelSpec):
     api_key_env: str | None = None
-    env: dict[str, str] = Field(default_factory=dict)
     prompts: dict[str, str] = Field(default_factory=dict)
     # ~4 characters per token: fits a 16k-token context with the rubric.
     max_trajectory_chars: int = Field(default=24000, ge=1)
-    # full: every rubric, on the trajectory. outcome: one lenient
-    # task-success score from the request and the final response alone.
+    # outcome: one lenient score from the request and the final response.
     mode: Literal["full", "outcome"] = "full"
 
 
 class EvalConfig(BaseModel):
     dataset: Path
     output_dir: Path
-    agent_startup_timeout_s: int = Field(default=45, ge=1)
-    agent_shutdown_timeout_s: int = Field(default=10, ge=1)
-    k: int = Field(default=1, ge=1)
-    qualitative: bool = False
-    run_name: str = "benchmark"
+    agent_startup_timeout_s: int = Field(ge=1)
+    agent_shutdown_timeout_s: int = Field(ge=1)
+    k: int = Field(ge=1)
+    qualitative: bool
+    run_name: str
     models: list[ModelSpec]
-    judge: JudgeSpec | None = None
+    judge: JudgeSpec | None
     extra_spans: list[Path] = Field(default_factory=list)

@@ -78,6 +78,18 @@ def find_blueprint_root(start: Path) -> Path | None:
     return None
 
 
+def require_blueprint_root() -> Path:
+    root = find_blueprint_root(Path.cwd())
+    if root is None:
+        fail(
+            "Not inside a blueprint. Run this command from a blueprint's "
+            "root (a folder with pyproject.toml and __main__.py, and no "
+            "agent.json) or from one of its agent directories, or create one "
+            "with `bat init blueprint`."
+        )
+    return root
+
+
 def _missing(directory: Path, names: tuple[str, ...]) -> list[str]:
     return [name for name in names if not (directory / name).is_file()]
 
