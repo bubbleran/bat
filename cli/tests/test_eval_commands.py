@@ -254,6 +254,7 @@ def test_eval_run_starts_agent_and_runs_orchestrator(
     assert popen_env["MODEL"] == "gpt-4.1-mini"
     assert popen_env["BASE_URL"] == "http://model.local"
     assert popen_env["MODEL_ALIAS"] == "gpt-4.1-mini"
+    assert popen_env["PYTHONUNBUFFERED"] == "1"
 
     # agent_url is derived from the agent's config.yaml endpoint, not from
     # the eval config or env vars.

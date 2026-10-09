@@ -288,6 +288,9 @@ def eval_run(agent: str | None = _AGENT_ARGUMENT) -> None:
             **env,
             "MODEL_PROVIDER": model.provider,
             "MODEL": model.model,
+            # Its log in the order printed: stdout buffered after stderr
+            # buries the error under the startup banner.
+            "PYTHONUNBUFFERED": "1",
         }
         agent_env.pop("BASE_URL", None)
         if model.base_url:
