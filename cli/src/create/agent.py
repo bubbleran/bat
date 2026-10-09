@@ -9,7 +9,7 @@ from .rendering import ensure_empty_dir, render, template_files, write_files
 
 # Naming a pre-release lets the resolver pick one at all (PEP 440).
 # Keep in sync with the bat-adk floor in cli/pyproject.toml.
-BAT_ADK_VERSION = "2026.9.29a0"
+BAT_ADK_VERSION = "2026.10.9a0"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "agent"
 _CLIENT_TEMPLATE = TEMPLATES_DIR / "llm_client.py.template"

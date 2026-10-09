@@ -63,7 +63,7 @@ def test_init_blueprint_pins_adk_with_telemetry_extra(
     )
 
     pyproject = (Path("demo") / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"bat-adk[ollama,telemetry]>=2026.9.29a0"' in pyproject
+    assert '"bat-adk[ollama,telemetry]>=2026.10.9a0"' in pyproject
 
 
 def test_init_blueprint_installs_pyinstaller_with_the_project(

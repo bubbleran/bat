@@ -65,7 +65,7 @@ def test_create_new_agent_custom_name(tmp_path, monkeypatch) -> None:
     assert 'requires-python = ">=3.12"' in pyproject_content
     # The default provider is openai; `telemetry` is always pinned so the
     # scaffolded agent emits the spans `bat eval` reads usage back from.
-    assert '"bat-adk[openai,telemetry]>=2026.9.29a0"' in pyproject_content
+    assert '"bat-adk[openai,telemetry]>=2026.10.9a0"' in pyproject_content
 
     agent_json_content = (root / "agent.json").read_text(encoding="utf-8")
     assert '"version": "1.0.0"' in agent_json_content
