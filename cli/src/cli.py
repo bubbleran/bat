@@ -343,20 +343,41 @@ def set_agent_config(
         "--model_provider",
         help="Set model.provider in config.yaml.",
     ),
+    reasoning_effort: str | None = typer.Option(
+        None,
+        "--reasoning-effort",
+        help=(
+            "Set model.reasoning_effort in config.yaml, e.g. low. Supported "
+            "by gpt-5 and later."
+        ),
+    ),
+    service_tier: str | None = typer.Option(
+        None,
+        "--service-tier",
+        help=(
+            "Set model.service_tier in config.yaml, e.g. flex. Values depend "
+            "on the provider."
+        ),
+    ),
 ) -> None:
-    if port is None and model is None and model_provider is None:
+    values = {
+        "endpoint.port": port,
+        "model.name": model,
+        "model.provider": model_provider,
+        "model.reasoning_effort": reasoning_effort,
+        "model.service_tier": service_tier,
+    }
+    if all(value is None for value in values.values()):
         fail(
             "Provide at least one option to set: --port, --model, "
-            "--model-provider"
+            "--model-provider, --reasoning-effort, --service-tier"
         )
     try:
         target = resolve_agent_target(Path.cwd(), agent)
     except ProjectError as exc:
         fail(str(exc))
 
-    updated = set_config(
-        target.agent_dir, port=port, model=model, model_provider=model_provider
-    )
+    updated = set_config(target.agent_dir, values)
     typer.secho(
         f"Updated: {target.config_path.resolve()}", fg=typer.colors.GREEN
     )

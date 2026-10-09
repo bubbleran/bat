@@ -63,7 +63,9 @@ bat
 │   │   ├── [AGENT]
 │   │   ├── --port
 │   │   ├── --model
-│   │   └── --model-provider
+│   │   ├── --model-provider
+│   │   ├── --reasoning-effort
+│   │   └── --service-tier
 │   └── image
 │       ├── --docker-registry
 │       └── --repo
@@ -192,7 +194,7 @@ An unknown level is rejected before any file is created, since the ADK itself fa
 
 The `set` commands make **in-place updates**, without regenerating any other file, and each names what it changes:
 
-- **`bat set config`** writes an agent's runtime values (`--port`, `--model`, `--model-provider`) into its `config.yaml` (`endpoint.port`, `model.name`, `model.provider`), preserving comments and structure. It acts on the agent you are in, or — like `bat eval` — on the one named from the blueprint root: `bat set config netops --port 9309`.
+- **`bat set config`** writes an agent's runtime values (`--port`, `--model`, `--model-provider`, `--reasoning-effort`, `--service-tier`) into its `config.yaml` (`endpoint.port`, `model.name`, `model.provider`, `model.reasoning_effort`, `model.service_tier`), preserving comments and structure. It acts on the agent you are in, or — like `bat eval` — on the one named from the blueprint root: `bat set config netops --port 9309`.
 - **`bat set image`** writes the image settings (`--docker-registry`, `--repo`) into the project's `Makefile` as `DOCKER_REGISTRY` / `REPO` — the blueprint's, when run from one of its agent folders — where `make build` reads them as well as `bat build`. Settings shared by the whole team belong there, committed, rather than in the gitignored `.env`, which holds secrets only. A Makefile with no `DOCKER_REGISTRY ?=` / `REPO ?=` line names its image some other way, so the command refuses rather than guess, and writes nothing.
 
 Both are intentionally strict: they require at least one value to set, so they never silently do nothing.

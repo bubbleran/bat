@@ -114,7 +114,9 @@ bat
 │   │   ├── [AGENT]
 │   │   ├── --port
 │   │   ├── --model
-│   │   └── --model-provider
+│   │   ├── --model-provider
+│   │   ├── --reasoning-effort
+│   │   └── --service-tier
 │   └── image
 │       ├── --docker-registry
 │       └── --repo
@@ -226,13 +228,19 @@ bat add client planner,executor --force
 ### 4. Update agent settings
 
 `bat set config` writes an agent's runtime values into its `config.yaml`
-(`endpoint.port`, `model.name`, `model.provider`). Run it from the agent root,
-or name the agent from a blueprint's root:
+(`endpoint.port`, `model.name`, `model.provider`, `model.reasoning_effort`,
+`model.service_tier`). Run it from the agent root, or name the agent from a
+blueprint's root:
 
 ```bash
 bat set config --port 8080 --model gpt-4o-mini --model-provider openai
 bat set config netops --port 9309
+bat set config netops --model gpt-5-mini --reasoning-effort low --service-tier flex
 ```
+
+Reasoning effort and service tier have no environment variable, so
+`config.yaml` is the only place to set them; their values depend on the
+provider. A reasoning effort is supported by gpt-5 and later.
 
 `bat set image` writes the image settings into the project's `Makefile`
 (`DOCKER_REGISTRY`, `REPO`; the blueprint's, from an agent folder), where

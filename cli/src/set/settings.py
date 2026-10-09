@@ -34,8 +34,9 @@ def _yaml_scalar(value: int | str) -> str:
 
 
 def _set_yaml_value(text: str, section: str, key: str, value: int | str) -> str:
-    """``text`` with ``section.key`` set to ``value``, the key (or the whole
-    section) added when missing."""
+    """``text`` with ``section.key`` set to ``value``: on the key's line, else
+    on its commented-out one, else on a new line ending the section (itself
+    added when missing)."""
     scalar = _yaml_scalar(value)
     lines = text.splitlines(keepends=True)
     start = None
@@ -47,49 +48,52 @@ def _set_yaml_value(text: str, section: str, key: str, value: int | str) -> str:
         separator = "" if not text or text.endswith("\n") else "\n"
         return f"{text}{separator}{section}:\n  {key}: {scalar}\n"
 
-    key_re = re.compile(rf"^(\s+){re.escape(key)}\s*:(.*)$")
+    last = start  # the section's last indented line
     for i in range(start + 1, len(lines)):
-        line = lines[i].rstrip("\r\n")
+        line = lines[i]
         stripped = line.strip()
         # A non-indented line that is no comment ends the section.
         if stripped and not line[:1].isspace() and not stripped.startswith("#"):
             break
-        match = key_re.match(line)
-        if match:
-            comment = re.search(r"\s#.*", match.group(2))
-            eol = lines[i][len(line) :] or "\n"
-            lines[i] = (
-                f"{match.group(1)}{key}: {scalar}"
-                f"{comment.group(0) if comment else ''}{eol}"
-            )
-            return "".join(lines)
+        if stripped and line[:1].isspace():
+            last = i
 
-    if not lines[start].endswith("\n"):
-        lines[start] += "\n"
-    lines.insert(start + 1, f"  {key}: {scalar}\n")
+    patterns = (
+        rf"^(\s+){re.escape(key)}\s*:(.*)$",
+        rf"^(\s+)#\s*{re.escape(key)}\s*:(.*)$",  # commented out
+    )
+    for pattern in patterns:
+        for i in range(start + 1, last + 1):
+            line = lines[i].rstrip("\r\n")
+            match = re.match(pattern, line)
+            if match:
+                comment = re.search(r"\s+#.*", match.group(2))
+                eol = lines[i][len(line) :] or "\n"
+                lines[i] = (
+                    f"{match.group(1)}{key}: {scalar}"
+                    f"{comment.group(0) if comment else ''}{eol}"
+                )
+                return "".join(lines)
+
+    if not lines[last].endswith("\n"):
+        lines[last] += "\n"
+    lines.insert(last + 1, f"  {key}: {scalar}\n")
     return "".join(lines)
 
 
 def set_config(
-    agent_dir: Path,
-    *,
-    port: int | None = None,
-    model: str | None = None,
-    model_provider: str | None = None,
+    agent_dir: Path, values: dict[str, int | str | None]
 ) -> list[str]:
-    """Write the given values into the agent's config.yaml; returns the
-    dotted keys updated."""
+    """Write ``values`` (``section.key`` -> value, None left out) into the
+    agent's config.yaml; returns the keys updated."""
     path = agent_dir / "config.yaml"
     text = path.read_text(encoding="utf-8")
     updated: list[str] = []
-    for section, key, value in (
-        ("endpoint", "port", port),
-        ("model", "name", model),
-        ("model", "provider", model_provider),
-    ):
+    for dotted, value in values.items():
         if value is not None:
+            section, key = dotted.split(".")
             text = _set_yaml_value(text, section, key, value)
-            updated.append(f"{section}.{key}")
+            updated.append(dotted)
     path.write_text(text, encoding="utf-8")
     return updated
 

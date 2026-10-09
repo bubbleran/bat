@@ -13,6 +13,7 @@ import yaml
 from typer.testing import CliRunner
 
 from cli import app
+from set.settings import _set_yaml_value
 
 runner = CliRunner()
 
@@ -55,6 +56,45 @@ def test_set_config_from_an_agent_folder(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert _port(root / "netops") == 9999
+
+
+def test_set_config_writes_the_model_tuning(tmp_path, monkeypatch) -> None:
+    """No environment variable sets these: config.yaml is the only place."""
+    root = _blueprint(tmp_path, monkeypatch, "netops")
+
+    result = runner.invoke(
+        app,
+        [
+            "set",
+            "config",
+            "netops",
+            "--reasoning-effort",
+            "low",
+            "--service-tier",
+            "flex",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Keys updated: model.reasoning_effort, model.service_tier" in (
+        result.output
+    )
+    text = (root / "netops" / "config.yaml").read_text(encoding="utf-8")
+    # On the template's commented-out lines, their comments kept.
+    assert "\n  reasoning_effort: low              # optional;" in text
+    assert "\n  service_tier: flex                 # optional;" in text
+    model = yaml.safe_load(text)["model"]
+    assert model["reasoning_effort"] == "low"
+    assert model["service_tier"] == "flex"
+
+
+def test_a_key_set_for_the_first_time_ends_its_section() -> None:
+    text = "model:\n  provider: openai\n  name: gpt-5-mini\n\nchecks: 1\n"
+
+    assert _set_yaml_value(text, "model", "service_tier", "flex") == (
+        "model:\n  provider: openai\n  name: gpt-5-mini\n"
+        "  service_tier: flex\n\nchecks: 1\n"
+    )
 
 
 def test_set_config_names_an_agent_from_the_blueprint_root(

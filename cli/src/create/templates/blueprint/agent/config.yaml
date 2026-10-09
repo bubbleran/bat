@@ -11,6 +11,8 @@ model:
   provider: __MODEL_PROVIDER__
   name: __MODEL__
   # base_url: http://localhost:11434   # optional (e.g. for ollama)
+  # reasoning_effort: low              # optional; supported by gpt-5 and later
+  # service_tier: flex                 # optional; values depend on the provider
 
 checkpoints: false
 
