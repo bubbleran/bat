@@ -5,6 +5,7 @@ import signal
 from pathlib import Path
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from cli import app
@@ -586,6 +587,23 @@ def test_stop_agent_process_signals_whole_group(monkeypatch) -> None:
     cmd._stop_agent_process(_FakeProc(), timeout_s=1)
 
     assert (4242, signal.SIGTERM) in signals
+
+
+def test_agent_url_reads_the_endpoint_as_the_adk_does(tmp_path) -> None:
+    """A port written in endpoint.url is the port; two that disagree are
+    refused, as the agent itself would refuse to start."""
+    from eval import commands as cmd
+
+    config = tmp_path / "config.yaml"
+    config.write_text("endpoint:\n  url: localhost:9300\n", encoding="utf-8")
+    assert cmd._agent_url(config) == "http://localhost:9300"
+
+    config.write_text(
+        "endpoint:\n  url: http://localhost:9300\n  port: 9301\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(typer.BadParameter, match="Conflicting ports"):
+        cmd._agent_url(config)
 
 
 def test_one_failing_task_does_not_stop_the_run(tmp_path, monkeypatch) -> None:

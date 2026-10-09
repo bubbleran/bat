@@ -86,14 +86,19 @@ def _refuse_redacted_spans(target: AgentTarget) -> None:
 
 
 def _agent_url(config_path: Path) -> str:
-    """Where the agent listens: its config.yaml's endpoint, or the SDK's
-    defaults."""
+    """Where the agent listens, its config.yaml's endpoint read as the ADK
+    reads it."""
+    from bat.agent.config import EndpointConfig
+
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    endpoint = config.get("endpoint") or {}
-    url = str(endpoint.get("url") or "http://localhost").rstrip("/")
+    try:
+        endpoint = EndpointConfig(**(config.get("endpoint") or {}))
+    except ValueError as exc:
+        raise typer.BadParameter(f"{config_path}: {exc}") from exc
+    url = (endpoint.url or "http://localhost").rstrip("/")
     if "://" not in url:
         url = "http://" + url
-    return f"{url}:{endpoint.get('port') or 9900}"
+    return f"{url}:{endpoint.port or 9900}"
 
 
 @contextlib.contextmanager
