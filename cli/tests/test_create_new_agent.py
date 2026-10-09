@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner
 
 from cli import app
@@ -13,6 +14,19 @@ def test_create_new_agent_requires_name(tmp_path, monkeypatch) -> None:
     result = runner.invoke(app, ["init", "agent"])
 
     assert result.exit_code != 0
+
+
+def test_init_agent_leaves_the_model_tuning_to_the_provider(
+    tmp_path, monkeypatch
+) -> None:
+    """Both stay commented out: a reasoning effort breaks any model that
+    does not reason."""
+    monkeypatch.chdir(tmp_path)
+
+    assert runner.invoke(app, ["init", "agent", "api"]).exit_code == 0
+
+    config = yaml.safe_load(Path("api", "config.yaml").read_text())
+    assert config["model"] == {"provider": "openai", "name": "gpt-4o-mini"}
 
 
 def test_template_files_ignore_bytecode_cache(tmp_path) -> None:

@@ -294,3 +294,27 @@ def test_add_agent_keeps_the_services_written_by_hand(
     assert services["phoenix"] == {"image": "arizephoenix/phoenix"}
     assert services["netops"]["environment"]["LOG_LEVEL"] == "debug"
     assert list(services) == ["netops", "phoenix", "hermes"]
+
+
+def test_add_agent_writes_the_model_tuning_given(tmp_path, monkeypatch) -> None:
+    root = _blueprint(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "add",
+            "agent",
+            "netops",
+            "--model",
+            "gpt-5-mini",
+            "--reasoning-effort",
+            "low",
+            "--service-tier",
+            "flex",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    model = yaml.safe_load((root / "netops" / "config.yaml").read_text())
+    assert model["model"]["reasoning_effort"] == "low"
+    assert model["model"]["service_tier"] == "flex"

@@ -82,6 +82,22 @@ manifests_app.command("aifabric")(generate_aifabric)
 manifests_app.command("composition-model")(generate_composition_model)
 
 _CLIENTS_EXAMPLE = "reformulator,planner,executor"
+_REASONING_EFFORT = typer.Option(
+    None,
+    "--reasoning-effort",
+    help=(
+        "model.reasoning_effort written to config.yaml, e.g. low. Supported "
+        "by gpt-5 and later. Default: none."
+    ),
+)
+_SERVICE_TIER = typer.Option(
+    None,
+    "--service-tier",
+    help=(
+        "model.service_tier written to config.yaml, e.g. flex. Default: "
+        "none, the provider's own."
+    ),
+)
 
 
 @app.command("version")
@@ -160,6 +176,8 @@ def create_new_agent(
             "it but never lower it."
         ),
     ),
+    reasoning_effort: str | None = _REASONING_EFFORT,
+    service_tier: str | None = _SERVICE_TIER,
 ) -> None:
     name = _directory_name(name)
     # The folder is lowercased; the class names keep the casing typed.
@@ -174,6 +192,8 @@ def create_new_agent(
             model_provider=model_provider,
             class_name_source=name,
             telemetry_privacy=telemetry_privacy,
+            reasoning_effort=reasoning_effort,
+            service_tier=service_tier,
         )
     except (FileExistsError, ValueError) as exc:
         fail(str(exc))
@@ -294,6 +314,8 @@ def add_new_agent(
             "app.py. Default: none. Each agent of a blueprint has its own."
         ),
     ),
+    reasoning_effort: str | None = _REASONING_EFFORT,
+    service_tier: str | None = _SERVICE_TIER,
     force: bool = typer.Option(
         False, "--force", "-f", help="Overwrite existing files for this agent."
     ),
@@ -310,6 +332,8 @@ def add_new_agent(
             clients=_parse_clients(clients),
             force=force,
             telemetry_privacy=telemetry_privacy,
+            reasoning_effort=reasoning_effort,
+            service_tier=service_tier,
         )
     except ValueError as exc:
         fail(str(exc))

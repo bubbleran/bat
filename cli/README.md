@@ -91,7 +91,9 @@ bat
 │   │   ├── --port
 │   │   ├── --model
 │   │   ├── --model-provider
-│   │   └── --privacy
+│   │   ├── --privacy
+│   │   ├── --reasoning-effort
+│   │   └── --service-tier
 │   └── blueprint
 │       ├── <name>
 │       ├── --output-dir, -o
@@ -108,6 +110,8 @@ bat
 │       ├── --model
 │       ├── --model-provider
 │       ├── --privacy
+│       ├── --reasoning-effort
+│       ├── --service-tier
 │       └── --force, -f
 ├── set
 │   ├── config

@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from project import PRIVACY_LEVELS
+from set.settings import set_config
 
 from .rendering import ensure_empty_dir, render, template_files, write_files
 
@@ -156,6 +157,8 @@ def create_agent_scaffold(
     model_provider: str,
     class_name_source: str,
     telemetry_privacy: str | None,
+    reasoning_effort: str | None,
+    service_tier: str | None,
 ) -> list[Path]:
     """Write a standalone agent into ``target_dir``. Class names keep the
     casing of ``class_name_source``; everything else follows the folder."""
@@ -184,6 +187,14 @@ def create_agent_scaffold(
         for name in template_files(TEMPLATES_DIR)
         if name != _CLIENT_TEMPLATE.name
     }
-    return write_files(target_dir, files, force=True) + write_llm_clients(
+    written = write_files(target_dir, files, force=True)
+    set_config(
+        target_dir,
+        {
+            "model.reasoning_effort": reasoning_effort,
+            "model.service_tier": service_tier,
+        },
+    )
+    return written + write_llm_clients(
         target_dir / "src" / "llm_clients", clients=clients, force=force
     )

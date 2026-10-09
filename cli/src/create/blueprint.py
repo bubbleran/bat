@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 
 from project import blueprint_agents, find_blueprint_root
+from set.settings import set_config
 
 from .agent import (
     BAT_ADK_VERSION,
@@ -149,6 +150,8 @@ def add_agent_to_blueprint(
     clients: list[str] | None,
     force: bool,
     telemetry_privacy: str | None,
+    reasoning_effort: str | None,
+    service_tier: str | None,
 ) -> list[Path]:
     """Create agent ``name`` in the blueprint. Everything but
     docker-compose.yaml finds agents by their folder.
@@ -193,8 +196,16 @@ def add_agent_to_blueprint(
         )
 
     agent_dir = blueprint_root / directory
+    written = write_files(agent_dir, files, force=force)
+    set_config(
+        agent_dir,
+        {
+            "model.reasoning_effort": reasoning_effort,
+            "model.service_tier": service_tier,
+        },
+    )
     return [
-        *write_files(agent_dir, files, force=force),
+        *written,
         *write_llm_clients(
             agent_dir / "src" / "llm_clients", clients=clients, force=force
         ),

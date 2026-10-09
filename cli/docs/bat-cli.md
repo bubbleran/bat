@@ -40,7 +40,9 @@ bat
 │   │   ├── --port
 │   │   ├── --model
 │   │   ├── --model-provider
-│   │   └── --privacy
+│   │   ├── --privacy
+│   │   ├── --reasoning-effort
+│   │   └── --service-tier
 │   └── blueprint
 │       ├── <name>
 │       ├── --output-dir, -o
@@ -57,6 +59,8 @@ bat
 │       ├── --model
 │       ├── --model-provider
 │       ├── --privacy
+│       ├── --reasoning-effort
+│       ├── --service-tier
 │       └── --force, -f
 ├── set
 │   ├── config
@@ -161,6 +165,7 @@ The command parameterizes the generated files so the new agent is ready to run:
 
 - `--clients` pre-generates one **ChatModelClient** scaffold per name you provide.
 - `--port`, `--model`, and `--model-provider` are written directly into `config.yaml` (`endpoint.port`, `model.name`, `model.provider`).
+- `--reasoning-effort` and `--service-tier` set `model.reasoning_effort` and `model.service_tier`; without them both stay commented out in `config.yaml`, so the provider's own defaults apply. A reasoning effort is supported by gpt-5 and later.
 
 ### Adding Clients Later
 
