@@ -1,0 +1,32 @@
+# This agent's own config. The process runs from the blueprint root, so every
+# path here is relative to that root. `uv run . __AGENT_NAME__` reads this file
+# unless CONFIG_PATH names another.
+agent_card: __AGENT_NAME__/agent.json
+
+endpoint:                              # where this agent binds (the eval reads this too)
+  url: http://localhost
+  port: __PORT__
+
+model:
+  provider: __MODEL_PROVIDER__
+  name: __MODEL__
+  # base_url: http://localhost:11434   # optional (e.g. for ollama)
+  # reasoning_effort: low              # optional; supported by gpt-5 and later
+  # service_tier: flex                 # optional; values depend on the provider
+
+checkpoints: false
+
+telemetry:
+  # service_name: __AGENT_NAME__       # optional (defaults to the agent name)
+  # project_name: __BLUEPRINT_NAME__   # Phoenix project; agents sharing a trace must share this
+  # privacy: none                      # none (default) | content | names | full
+  output: []                           # telemetry is ON when output has >=1 entry
+
+# remote-agents:
+#   - name: Other Agent
+#     url: http://localhost:9901
+#     protocol: a2a
+
+# mcp-servers:
+#   - name: my-mcp
+#     url: http://localhost:8000

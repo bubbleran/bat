@@ -5,5 +5,11 @@ description = "__PROJECT_DESCRIPTION__"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "bat-adk>=__BAT_ADK_VERSION__"
+    # `telemetry` pulls in OpenTelemetry/OpenInference: without it the SDK's
+    # tracers degrade to no-ops, no span is ever written, and `bat eval`
+    # reports zero tokens and no tool calls. Remove it only for an agent that
+    # must never be traced. The other extra is the provider's LangChain
+    # integration -- the `langchain` metapackage does not ship them, so
+    # dropping it leaves `init_chat_model` unable to build the model at all.
+    "bat-adk[__BAT_ADK_EXTRAS__]>=__BAT_ADK_VERSION__"
 ]

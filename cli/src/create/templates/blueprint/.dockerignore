@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.template
+
+__pycache__/
+*.pyc
+.venv/
+
+.git/
+**/eval/output/
+**/spans.jsonl

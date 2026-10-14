@@ -1,10 +1,10 @@
-import os
 from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner
 
-import create.agent as create_agent_module
 from cli import app
+from create.rendering import template_files
 
 runner = CliRunner()
 
@@ -16,21 +16,27 @@ def test_create_new_agent_requires_name(tmp_path, monkeypatch) -> None:
     assert result.exit_code != 0
 
 
-def test_static_template_loader_ignores_bytecode_cache(
-    monkeypatch, tmp_path
+def test_init_agent_leaves_the_model_tuning_to_the_provider(
+    tmp_path, monkeypatch
 ) -> None:
+    """Both stay commented out: a reasoning effort breaks any model that
+    does not reason."""
+    monkeypatch.chdir(tmp_path)
+
+    assert runner.invoke(app, ["init", "agent", "api"]).exit_code == 0
+
+    config = yaml.safe_load(Path("api", "config.yaml").read_text())
+    assert config["model"] == {"provider": "openai", "name": "gpt-6-luna"}
+
+
+def test_template_files_ignore_bytecode_cache(tmp_path) -> None:
     templates_dir = tmp_path / "templates" / "agent"
     cache_dir = templates_dir / "__pycache__"
     cache_dir.mkdir(parents=True)
     (cache_dir / "README.cpython-313.pyc").write_bytes(b"\xf3\x00\x00\x00")
     (templates_dir / "README.md").write_text("hello\n", encoding="utf-8")
 
-    monkeypatch.setattr(create_agent_module, "TEMPLATES_DIR", templates_dir)
-    monkeypatch.setattr(create_agent_module, "_DYNAMIC_TEMPLATE_FILES", set())
-
-    assert create_agent_module._load_static_templates() == {
-        "README.md": "hello\n"
-    }
+    assert template_files(templates_dir) == ["README.md"]
 
 
 def test_create_new_agent_custom_name(tmp_path, monkeypatch) -> None:
@@ -71,7 +77,9 @@ def test_create_new_agent_custom_name(tmp_path, monkeypatch) -> None:
     assert 'description = "DEMO Agent"' in pyproject_content
     assert 'readme = "README.md"' in pyproject_content
     assert 'requires-python = ">=3.12"' in pyproject_content
-    assert '"bat-adk>=2026.06"' in pyproject_content
+    # The default provider is openai; `telemetry` is always pinned so the
+    # scaffolded agent emits the spans `bat eval` reads usage back from.
+    assert '"bat-adk[openai,telemetry]>=2026.10.9a0"' in pyproject_content
 
     agent_json_content = (root / "agent.json").read_text(encoding="utf-8")
     assert '"version": "1.0.0"' in agent_json_content
@@ -87,7 +95,7 @@ def test_create_new_agent_custom_name(tmp_path, monkeypatch) -> None:
     assert 'ENTRYPOINT ["./demo"]' in dockerfile_content
 
     makefile_content = (root / "Makefile").read_text(encoding="utf-8")
-    assert "REPO ?= YOUR_REPOSITORY/demo_agent" in makefile_content
+    assert "REPO ?= demo_agent" in makefile_content
     assert "Building demo_agent Docker image" in makefile_content
 
     agent_spec_content = (root / "agent.spec").read_text(encoding="utf-8")
@@ -95,10 +103,17 @@ def test_create_new_agent_custom_name(tmp_path, monkeypatch) -> None:
 
     assert not (root / ".env.template").exists()
 
+    # Endpoint/model now live in config.yaml; .env carries only the API key.
+    config_content = (root / "config.yaml").read_text(encoding="utf-8")
+    assert "port: 9900" in config_content
+    assert "name: gpt-6-luna" in config_content
+    assert "provider: openai" in config_content
+    assert "telemetry:" in config_content
+
     env_content = (root / ".env").read_text(encoding="utf-8")
-    assert "PORT=9900" in env_content
-    assert "MODEL=gpt-4o-mini" in env_content
-    assert "MODEL_PROVIDER=openai" in env_content
+    assert "OPENAI_API_KEY=" in env_content
+    assert "MODEL=" not in env_content
+    assert "PORT=" not in env_content
 
     graph_content = (root / "src" / "graph.py").read_text(encoding="utf-8")
     assert (
@@ -146,7 +161,7 @@ def test_create_new_agent_lowercases_directory_but_keeps_class_casing(
     agent_json_content = (root / "agent.json").read_text(encoding="utf-8")
     assert '"name": "sla-agent"' in agent_json_content
     makefile_content = (root / "Makefile").read_text(encoding="utf-8")
-    assert "REPO ?= YOUR_REPOSITORY/sla-agent" in makefile_content
+    assert "REPO ?= sla-agent" in makefile_content
 
 
 def test_create_new_agent_rejects_empty_clients_option(
@@ -199,18 +214,12 @@ def test_add_new_client_from_existing_agent_root(tmp_path, monkeypatch) -> None:
     init_result = runner.invoke(app, ["init", "agent", "api"])
     assert init_result.exit_code == 0
 
-    start_dir = Path.cwd()
-    os.chdir(Path("api"))
-    try:
-        result = runner.invoke(app, ["add", "client", "talk,discuss"])
-    finally:
-        os.chdir(start_dir)
+    monkeypatch.chdir("api")
+    result = runner.invoke(app, ["add", "client", "talk,discuss"])
 
     assert result.exit_code == 0
-
-    root = Path("api")
-    assert (root / "src" / "llm_clients" / "talk_client.py").exists()
-    assert (root / "src" / "llm_clients" / "discuss_client.py").exists()
+    assert Path("src", "llm_clients", "talk_client.py").exists()
+    assert Path("src", "llm_clients", "discuss_client.py").exists()
 
 
 def test_create_new_agent_errors_for_non_empty_target_without_force(
@@ -272,7 +281,7 @@ def test_create_new_agent_clients_are_normalized_and_deduplicated(
     assert (root / "planner_agent_client.py").exists()
 
 
-def test_create_new_agent_writes_custom_env_template_values(
+def test_create_new_agent_writes_custom_config_values(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -292,10 +301,15 @@ def test_create_new_agent_writes_custom_env_template_values(
     )
 
     assert result.exit_code == 0
+    # The CLI options now populate config.yaml, not .env.
+    config_file = Path("envagent", "config.yaml").read_text(encoding="utf-8")
+    assert "port: 8088" in config_file
+    assert "name: gpt-4.1-mini" in config_file
+    assert "provider: openai" in config_file
+
     env_file = Path("envagent", ".env").read_text(encoding="utf-8")
-    assert "PORT=8088" in env_file
-    assert "MODEL=gpt-4.1-mini" in env_file
-    assert "MODEL_PROVIDER=openai" in env_file
+    assert "OPENAI_API_KEY=" in env_file
+    assert "MODEL=" not in env_file
     assert not Path("envagent", ".env.template").exists()
 
 
@@ -308,15 +322,11 @@ def test_add_new_client_force_overwrites_existing_client_file(
     )
     assert init_result.exit_code == 0
 
-    talk_client_path = Path("api", "src", "llm_clients", "talk_client.py")
+    monkeypatch.chdir("api")
+    talk_client_path = Path("src", "llm_clients", "talk_client.py")
     talk_client_path.write_text("# stale", encoding="utf-8")
 
-    start_dir = Path.cwd()
-    os.chdir(Path("api"))
-    try:
-        result = runner.invoke(app, ["add", "client", "talk", "--force"])
-    finally:
-        os.chdir(start_dir)
+    result = runner.invoke(app, ["add", "client", "talk", "--force"])
 
     assert result.exit_code == 0
     assert "# stale" not in talk_client_path.read_text(encoding="utf-8")
@@ -329,12 +339,8 @@ def test_add_new_client_rejects_empty_client_input(
     init_result = runner.invoke(app, ["init", "agent", "api"])
     assert init_result.exit_code == 0
 
-    start_dir = Path.cwd()
-    os.chdir(Path("api"))
-    try:
-        result = runner.invoke(app, ["add", "client", " , "])
-    finally:
-        os.chdir(start_dir)
+    monkeypatch.chdir("api")
+    result = runner.invoke(app, ["add", "client", " , "])
 
     assert result.exit_code != 0
     assert "Provide at least one client name" in result.output
@@ -348,33 +354,31 @@ def test_add_new_client_requires_agent_root(tmp_path, monkeypatch) -> None:
     assert "src/llm_clients" in result.output
 
 
-def test_build_command_runs_docker_build(tmp_path, monkeypatch) -> None:
+def test_build_command_runs_docker_build(monkeypatch, tmp_path) -> None:
     captured: dict[str, object] = {}
 
-    def fake_run(cmd, check, cwd, **kwargs):  # noqa: ANN001
+    def fake_run(cmd, check, cwd, **kwargs):
         captured["cmd"] = cmd
         captured["check"] = check
         captured["cwd"] = cwd
         return None
 
-    monkeypatch.setattr("build.build.subprocess.run", fake_run)
+    monkeypatch.setattr("image.subprocess.run", fake_run)
 
-    monkeypatch.chdir(tmp_path)
-    Path("agent").mkdir()
-    Path("agent", "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    (agent / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    monkeypatch.chdir(agent)
     result = runner.invoke(
         app,
         [
             "build",
-            "--context",
-            "agent",
             "--docker-registry",
             "hub.bubbleran.com",
             "--repo",
             "orama/labs/rng-agent",
             "--version",
             "v1.2.3",
-            "--no-cache",
         ],
     )
 
@@ -382,7 +386,6 @@ def test_build_command_runs_docker_build(tmp_path, monkeypatch) -> None:
     assert captured["cmd"] == [
         "docker",
         "build",
-        "--no-cache",
         "--build-arg",
         "VERSION=v1.2.3",
         "--tag",
@@ -390,32 +393,31 @@ def test_build_command_runs_docker_build(tmp_path, monkeypatch) -> None:
         ".",
     ]
     assert captured["check"] is True
-    assert captured["cwd"] == Path("agent").resolve()
+    assert captured["cwd"] == agent.resolve()
     assert (
         "Docker image built successfully: hub.bubbleran.com/orama/labs/rng-agent:v1.2.3"
         in result.output
     )
 
 
-def test_push_command_runs_docker_push(tmp_path, monkeypatch) -> None:
+def test_push_command_runs_docker_push(monkeypatch, tmp_path) -> None:
     captured: dict[str, object] = {}
 
-    def fake_run(cmd, check, cwd, **kwargs):  # noqa: ANN001
+    def fake_run(cmd, check, cwd, **kwargs):
         captured["cmd"] = cmd
         captured["check"] = check
         captured["cwd"] = cwd
         return None
 
-    monkeypatch.setattr("push.push.subprocess.run", fake_run)
+    monkeypatch.setattr("image.subprocess.run", fake_run)
 
-    monkeypatch.chdir(tmp_path)
-    Path("agent").mkdir()
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    monkeypatch.chdir(agent)
     result = runner.invoke(
         app,
         [
             "push",
-            "--context",
-            "agent",
             "--docker-registry",
             "hub.bubbleran.com",
             "--repo",
@@ -432,116 +434,170 @@ def test_push_command_runs_docker_push(tmp_path, monkeypatch) -> None:
         "hub.bubbleran.com/orama/labs/rng-agent:latest",
     ]
     assert captured["check"] is True
-    assert captured["cwd"] == Path("agent").resolve()
+    assert captured["cwd"] == agent.resolve()
     assert (
         "Docker image pushed successfully: hub.bubbleran.com/orama/labs/rng-agent:latest"
         in result.output
     )
 
 
-def test_build_command_errors_when_context_missing(
-    tmp_path, monkeypatch
-) -> None:
+def test_build_needs_a_makefile_or_a_dockerfile(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ["build", "--context", "missing"])
+
+    result = runner.invoke(app, ["build"])
 
     assert result.exit_code == 1
-    assert "Context directory not found" in result.output
+    assert "Dockerfile not found" in result.output
 
 
-def test_push_command_errors_when_context_missing(
-    tmp_path, monkeypatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ["push", "--context", "missing"])
-
-    assert result.exit_code == 1
-    assert "Context directory not found" in result.output
-
-
-def test_set_env_updates_values_in_existing_agent_env_file(
+def test_set_config_and_image_on_a_standalone_agent(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
     init_result = runner.invoke(app, ["init", "agent", "api"])
     assert init_result.exit_code == 0
 
-    env_path = Path("api", ".env")
-    env_path.write_text(
-        "PORT=9900\nMODEL=gpt-4o-mini\nMODEL_PROVIDER=openai\n",
-        encoding="utf-8",
+    monkeypatch.chdir("api")
+    config_result = runner.invoke(
+        app,
+        [
+            "set",
+            "config",
+            "--port",
+            "8080",
+            "--model",
+            "gpt-4.1-mini",
+            "--model-provider",
+            "openai",
+        ],
+    )
+    image_result = runner.invoke(
+        app,
+        [
+            "set",
+            "image",
+            "--docker-registry",
+            "hub.bubbleran.com",
+            "--repo",
+            "orama/labs/demo",
+        ],
     )
 
-    start_dir = Path.cwd()
-    os.chdir(Path("api"))
-    try:
-        result = runner.invoke(
-            app,
-            [
-                "set",
-                "env",
-                "--port",
-                "8080",
-                "--model",
-                "gpt-4.1-mini",
-                "--model-provider",
-                "openai",
-                "--docker-registry",
-                "hub.bubbleran.com",
-                "--repo",
-                "orama/labs/demo",
-            ],
-        )
-    finally:
-        os.chdir(start_dir)
+    assert config_result.exit_code == 0, config_result.output
+    assert image_result.exit_code == 0, image_result.output
 
-    assert result.exit_code == 0
-    content = env_path.read_text(encoding="utf-8")
-    assert "PORT=8080" in content
-    assert "MODEL=gpt-4.1-mini" in content
-    assert "MODEL_PROVIDER=openai" in content
-    assert "BAT_DOCKER_REGISTRY=hub.bubbleran.com" in content
-    assert "BAT_DOCKER_REPO=orama/labs/demo" in content
+    # Endpoint/model land in config.yaml.
+    import yaml
+
+    config = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+    assert config["endpoint"]["port"] == 8080
+    assert config["model"]["name"] == "gpt-4.1-mini"
+    assert config["model"]["provider"] == "openai"
+
+    # The image settings go to the Makefile, where make reads them too.
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    assert "DOCKER_REGISTRY ?= hub.bubbleran.com\n" in makefile
+    assert "REPO ?= orama/labs/demo\n" in makefile
+    env_content = Path(".env").read_text(encoding="utf-8")
+    assert "BAT_DOCKER" not in env_content
+    assert "MODEL=" not in env_content
+    assert "PORT=" not in env_content
 
 
-def test_set_env_requires_env_when_missing(tmp_path, monkeypatch) -> None:
+def test_set_config_requires_config_yaml_when_missing(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     init_result = runner.invoke(app, ["init", "agent", "api"])
     assert init_result.exit_code == 0
 
-    env_path = Path("api", ".env")
-    env_path.unlink()
+    Path("api", "config.yaml").unlink()
 
-    start_dir = Path.cwd()
-    os.chdir(Path("api"))
-    try:
-        result = runner.invoke(app, ["set", "env", "--port", "7777"])
-    finally:
-        os.chdir(start_dir)
+    monkeypatch.chdir("api")
+    result = runner.invoke(app, ["set", "config", "--port", "7777"])
 
     assert result.exit_code == 1
-    assert "must contain .env" in result.output
+    assert "Missing: config.yaml" in result.output
 
 
-def test_set_env_requires_agent_root(tmp_path, monkeypatch) -> None:
+def test_set_config_requires_agent_root(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ["set", "env", "--port", "7777"])
+    result = runner.invoke(app, ["set", "config", "--port", "7777"])
 
     assert result.exit_code == 1
-    assert "must contain .env" in result.output
+    assert "config.yaml" in result.output
 
 
-def test_set_env_requires_at_least_one_option(tmp_path, monkeypatch) -> None:
+def test_set_config_requires_at_least_one_option(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     init_result = runner.invoke(app, ["init", "agent", "api"])
     assert init_result.exit_code == 0
 
-    start_dir = Path.cwd()
-    os.chdir(Path("api"))
-    try:
-        result = runner.invoke(app, ["set", "env"])
-    finally:
-        os.chdir(start_dir)
+    monkeypatch.chdir("api")
+    result = runner.invoke(app, ["set", "config"])
 
     assert result.exit_code == 1
     assert "Provide at least one option to set" in result.output
+
+
+def test_agent_passes_no_floor_by_default(
+    tmp_path, monkeypatch, floor_given_to_the_application
+) -> None:
+    """Without the flag the floor is AgentApplication's own default: none,
+    and config.yaml alone decides."""
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "agent", "demo_agent"])
+
+    assert floor_given_to_the_application(tmp_path / "demo_agent") == "none"
+
+
+def test_agent_passes_the_requested_floor(
+    tmp_path, monkeypatch, floor_given_to_the_application
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["init", "agent", "demo_agent", "--privacy", "Content"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert floor_given_to_the_application(tmp_path / "demo_agent") == (
+        "content"
+    )
+
+
+def test_agent_rejects_an_unknown_telemetry_floor(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app, ["init", "agent", "demo_agent", "--privacy", "secret"]
+    )
+
+    assert result.exit_code != 0
+    assert "secret" in result.output
+    assert not Path("demo_agent").exists()
+
+
+def test_no_placeholder_survives_in_a_scaffolded_agent(
+    tmp_path, monkeypatch
+) -> None:
+    """Same guard as for blueprints: an unreplaced placeholder, or one a
+    Markdown formatter mangled into bold, must not reach a new agent."""
+    import re
+
+    placeholder = re.compile(r"(__|\*\*)[A-Z][A-Z_]*[A-Z](__|\*\*)")
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "agent", "demo_agent", "-c", "planner"])
+
+    leftovers = {
+        str(path.relative_to(tmp_path)): placeholder.findall(
+            path.read_text(encoding="utf-8")
+        )
+        for path in (tmp_path / "demo_agent").rglob("*")
+        if path.is_file()
+    }
+
+    assert {name: found for name, found in leftovers.items() if found} == {}
