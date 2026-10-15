@@ -32,7 +32,9 @@ def _blueprint(tmp_path: Path, monkeypatch) -> Path:
 
 
 def _generate(*args: str):
-    result = runner.invoke(app, ["manifests", "composition-model", *args])
+    result = runner.invoke(
+        app, ["manifests", "composition-model", "--vendor", "brp", *args]
+    )
     assert result.exit_code == 0, result.output
     return result
 
@@ -54,6 +56,7 @@ def test_each_agent_becomes_a_deployment_mode(tmp_path, monkeypatch) -> None:
     assert model["deploymentModes"]["netops"] == {
         "kind": "agent",
         "name": "netops",
+        "vendor": "brp",
         "imageTag": "hub.example.com/demo:1.2.3",
         "args": ["netops"],
         "env": [{"name": "AGENT_CARD_PATH", "value": "netops/agent.json"}],
@@ -135,6 +138,8 @@ def test_a_rerun_keeps_hand_edits_and_moves_the_image(
     # Same image, so a new build too; another image is left alone.
     assert modes["knowledge"]["imageTag"] == "hub.example.com/demo:2"
     assert modes["phoenix"]["imageTag"] == "arizephoenix/phoenix:latest"
+    # The cluster requires a vendor on every mode, hand-written ones too.
+    assert modes["phoenix"]["vendor"] == "brp"
     assert _model(root)["spec"]["version"] == "v2.0.0"
     assert path.read_text().startswith("# Deployed by hand.\n")
     assert (
@@ -175,6 +180,31 @@ def test_an_agent_with_a_mode_under_another_name_gets_no_second_one(
     assert modes["ops"]["imageTag"] == "hub.example.com/demo:1.2.3"
 
 
+def test_a_rerun_with_another_vendor_moves_every_mode(
+    tmp_path, monkeypatch
+) -> None:
+    root = _blueprint(tmp_path, monkeypatch)
+    _generate(*IMAGE_FLAGS)
+
+    result = _generate(*IMAGE_FLAGS, "--vendor", "acm")
+
+    modes = _model(root)["deploymentModes"]
+    assert {mode["vendor"] for mode in modes.values()} == {"acm"}
+    assert "netops: vendor brp -> acm" in result.output
+
+
+def test_without_a_vendor_it_refuses_and_writes_nothing(
+    tmp_path, monkeypatch
+) -> None:
+    root = _blueprint(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["manifests", "composition-model"])
+
+    assert result.exit_code == 2
+    assert "Missing option '--vendor'" in result.output
+    assert not (root / "composition-model.yaml").exists()
+
+
 def test_an_unchanged_rerun_changes_nothing(tmp_path, monkeypatch) -> None:
     root = _blueprint(tmp_path, monkeypatch)
     _generate(*IMAGE_FLAGS)
@@ -192,7 +222,9 @@ def test_a_file_holding_something_else_is_refused(
     root = _blueprint(tmp_path, monkeypatch)
     (root / "composition-model.yaml").write_text("kind: AIFabric\n")
 
-    result = runner.invoke(app, ["manifests", "composition-model"])
+    result = runner.invoke(
+        app, ["manifests", "composition-model", "--vendor", "brp"]
+    )
 
     assert result.exit_code == 1
     assert "not a CompositionModel" in result.output
@@ -201,7 +233,9 @@ def test_a_file_holding_something_else_is_refused(
 def test_outside_a_blueprint_it_says_so(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
-    result = runner.invoke(app, ["manifests", "composition-model"])
+    result = runner.invoke(
+        app, ["manifests", "composition-model", "--vendor", "brp"]
+    )
 
     assert result.exit_code == 1
     assert "Not inside a blueprint" in result.output

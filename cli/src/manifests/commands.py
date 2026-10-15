@@ -125,6 +125,14 @@ def generate_composition_model(
         "--namespace",
         help="metadata.namespace. Default: the file's, else 'default'.",
     ),
+    vendor: str = typer.Option(
+        ...,
+        "--vendor",
+        help=(
+            "The vendor written on every deployment mode, which the cluster "
+            "requires: preferably three lowercase alphanumerics, e.g. brp."
+        ),
+    ),
     docker_registry: str | None = typer.Option(
         None,
         "--docker-registry",
@@ -147,9 +155,9 @@ def generate_composition_model(
     """Write or update the blueprint's CompositionModel: one deployment mode
     per agent, running the image `bat build` tags with the same options.
 
-    Each run adds the agents that have no mode and points the blueprint's
-    modes at that image; RBAC rules, resources, probes, env and MCP modes
-    written by hand are kept.
+    Each run adds the agents that have no mode, points the blueprint's
+    modes at that image and sets every mode's vendor; RBAC rules,
+    resources, probes, env and MCP modes written by hand are kept.
     """
     root = require_blueprint_root()
     dry_run = plan(
@@ -174,6 +182,7 @@ def generate_composition_model(
             update_composition_model,
             root,
             image=dry_run.image,
+            vendor=vendor,
             name=name,
             namespace=namespace,
         ),

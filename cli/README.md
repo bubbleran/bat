@@ -146,6 +146,7 @@ bat
 │       ├── --output, -o
 │       ├── --name
 │       ├── --namespace
+│       ├── --vendor
 │       ├── --docker-registry
 │       ├── --repo
 │       └── --version

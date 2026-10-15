@@ -33,11 +33,13 @@ def update_composition_model(
     existing: dict[str, Any] | None = None,
     *,
     image: str,
+    vendor: str,
     name: str | None = None,
     namespace: str | None = None,
 ) -> ManifestUpdate:
     """The CompositionModel for ``blueprint_root``, built on ``existing``
-    if given, its agents' modes running ``image``.
+    if given, its agents' modes running ``image`` and every mode set to
+    ``vendor``.
 
     Raises:
         ValueError: If ``existing`` is not a CompositionModel.
@@ -70,6 +72,9 @@ def update_composition_model(
         if tag and tag != image and _repository(str(tag)) in repositories:
             changes.append(f"{mode}: imageTag {tag} -> {image}")
             desc["imageTag"] = image
+        if desc.get("vendor") != vendor:
+            changes.append(f"{mode}: vendor {desc.get('vendor')} -> {vendor}")
+            desc["vendor"] = vendor
 
     for directory in ours:
         if directory in runs:
@@ -84,6 +89,7 @@ def update_composition_model(
         modes[mode] = {
             "kind": "agent",
             "name": mode,
+            "vendor": vendor,
             "imageTag": image,
             "args": [directory],
             # The config.yaml the operator mounts has no agent_card.

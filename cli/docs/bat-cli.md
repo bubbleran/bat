@@ -84,6 +84,7 @@ bat
 │       ├── --output, -o
 │       ├── --name
 │       ├── --namespace
+│       ├── --vendor
 │       ├── --docker-registry
 │       ├── --repo
 │       └── --version
@@ -240,6 +241,7 @@ An AIFabric's `internal.model` names a deployment mode of a **CompositionModel**
 netops:
   kind: agent
   name: netops
+  vendor: brp                     # --vendor, required by the cluster on every mode
   imageTag: hub.bubbleran.com/orama/demo:1.2.3
   args: [netops]                  # the entrypoint runs the agent it names
   env:
@@ -253,7 +255,7 @@ netops:
   #     verbs: [get, watch]
 ```
 
-The image is the one `bat build` would tag with the same `--docker-registry`, `--repo` and `--version`; one with no registry is flagged, since the cluster can't pull it. Each run adds a mode for agents that have none and moves every mode built from the blueprint's image (MCP modes included) to the new image, listing each change. Everything else is kept: `rules`, `resources`, `readinessProbe`, extra `env`, `spec.version`, other images' modes and the leading comment block. RBAC rules are never guessed: a new mode gets an empty `rules` list to fill in by hand, with a commented example under it (re-added on every run under each `rules: []`).
+The image is the one `bat build` would tag with the same `--docker-registry`, `--repo` and `--version`; one with no registry is flagged, since the cluster can't pull it. `--vendor` is required: the cluster rejects a mode without one, so each run sets it on every mode, hand-written ones included. Each run adds a mode for agents that have none and moves every mode built from the blueprint's image (MCP modes included) to the new image, listing each change. Everything else is kept: `rules`, `resources`, `readinessProbe`, extra `env`, `spec.version`, other images' modes and the leading comment block. RBAC rules are never guessed: a new mode gets an empty `rules` list to fill in by hand, with a commented example under it (re-added on every run under each `rules: []`).
 
 ## Evaluation (`eval`)
 

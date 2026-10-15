@@ -20,7 +20,7 @@ PROVIDER_API_KEY_VAR = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
-    "nvidia": "API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
 }
 
 _CLIENTS_INIT_HEADER = (
