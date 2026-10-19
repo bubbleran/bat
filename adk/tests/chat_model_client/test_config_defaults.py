@@ -64,3 +64,16 @@ def test_raises_without_provider_anywhere(monkeypatch):
     monkeypatch.setenv("MODEL", "some-model")  # no provider, no colon
     with pytest.raises(EnvironmentError, match="provider not configured"):
         ChatModelClientConfig.load()
+
+
+def test_model_settings_come_from_config_defaults(monkeypatch):
+    ChatModelClientConfig._set_defaults(
+        provider="openai",
+        name="gpt-5.2",
+        reasoning_effort="low",
+        service_tier="flex",
+    )
+    monkeypatch.setenv("MODEL", "gpt-5-mini")
+    cfg = ChatModelClientConfig.load()
+    assert cfg.reasoning_effort == "low"
+    assert cfg.service_tier == "flex"

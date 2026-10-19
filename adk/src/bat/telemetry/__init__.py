@@ -12,6 +12,7 @@ from .setup import (
     get_tracer,
     inject_context,
     is_enabled,
+    mark_span_error,
     setup_telemetry,
     shutdown_telemetry,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "get_tracer",
     "inject_context",
     "is_enabled",
+    "mark_span_error",
     "parse_privacy",
     "resolve_privacy",
     "setup_telemetry",

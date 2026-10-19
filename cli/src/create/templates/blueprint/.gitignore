@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.template
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+/build/
+/dist/
+
+# Evaluation output (each agent keeps its own under <agent>/eval/)
+**/eval/output/
+**/spans.jsonl

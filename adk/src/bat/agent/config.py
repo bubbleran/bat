@@ -132,8 +132,9 @@ class EndpointConfig(BaseModel):
 class ModelConfig(BaseModel):
     """Chat model selection.
 
-    These three values are the only ones an environment variable may override:
-    ``MODEL`` / ``MODEL_PROVIDER`` / ``BASE_URL`` take precedence when set (see
+    Only ``provider``, ``name`` and ``base_url`` may be overridden by an
+    environment variable: ``MODEL`` / ``MODEL_PROVIDER`` / ``BASE_URL`` take
+    precedence when set (see
     :meth:`bat.chat_model_client.ChatModelClientConfig.load`).
 
     Attributes:
@@ -141,11 +142,17 @@ class ModelConfig(BaseModel):
         name (Optional[str]): Model name, e.g. ``gpt-4.1-mini``.
         base_url (Optional[str]): Optional base URL for the provider; needed by
             local providers such as ollama.
+        reasoning_effort (Optional[str]): How much the model reasons before
+            answering, e.g. ``low``. Values depend on the provider.
+        service_tier (Optional[str]): Processing tier for the requests, e.g.
+            ``flex``. Values depend on the provider.
     """
 
     provider: Optional[str] = None
     name: Optional[str] = None
     base_url: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    service_tier: Optional[str] = None
 
 
 class OutputConfig(BaseModel):
@@ -233,12 +240,18 @@ class AgentConfig(BaseModel):
 
     Attributes
     -------
+        checkpoints (bool): Keep each conversation's state in memory between
+            messages. Defaults to False.
         agent_card (Optional[str]): Path to the agent card JSON file. When
             unset it defaults to ``./agent.json`` (see ``AgentApplication``).
+        endpoint (Optional[EndpointConfig]): Where the agent is served;
+            ``endpoint.url`` is required by ``AgentApplication``.
+        model (Optional[ModelConfig]): Chat model selection and settings.
+        telemetry (Optional[TelemetrySettings]): OpenTelemetry settings.
         mcp_servers (List[MCPServerConfig]): List of MCP server
-            configurations.
+            configurations (``mcp-servers`` in YAML).
         remote_agents (List[RemoteAgentConfig]): List of remote agent
-            configurations.
+            configurations (``remote-agents`` in YAML).
 
     Methods
     -------

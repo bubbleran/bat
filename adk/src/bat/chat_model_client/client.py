@@ -26,6 +26,23 @@ from .config import ChatModelClientConfig
 
 logger = create_logger(__name__, "debug")
 
+# `response_metadata` entries that providers set when the model output was
+# cut off, e.g. by the output token limit.
+_TRUNCATED = {
+    "finish_reason": "length",  # OpenAI Chat Completions and compatible APIs
+    "status": "incomplete",  # OpenAI Responses API
+    "stop_reason": "max_tokens",  # Anthropic
+    "done_reason": "length",  # Ollama
+}
+
+
+def _is_truncated(message: AIMessage) -> bool:
+    """Return True if the provider marked the output as cut off."""
+    return any(
+        message.response_metadata.get(key) == value
+        for key, value in _TRUNCATED.items()
+    )
+
 
 class ChatModelClient:
     """Client that facilitates interaction with a chat model.
@@ -107,8 +124,7 @@ class ChatModelClient:
             model=self.config.model,
             model_provider=self.config.model_provider,
             base_url=self.config.base_url,
-            default_headers=self.config.build_default_headers(),
-            **self._responses_api_kwargs(),
+            **self._extra_kwargs(),
         )
         _full_model_name = self.config.model_provider + ":" + self.config.model
         client_name = self.config.client_name or ""
@@ -135,13 +151,50 @@ class ChatModelClient:
         else:
             self.output_schema = AIMessage
 
-    def _responses_api_kwargs(self) -> Dict[str, Any]:
-        """Extra `init_chat_model` arguments selecting the OpenAI endpoint."""
-        if self.config.model_provider != "openai":
-            return {}
-        if self.config.base_url is not None:
-            return {}
-        return {"use_responses_api": True}
+    def _extra_kwargs(self) -> Dict[str, Any]:
+        """Extra `init_chat_model` arguments for the configured provider."""
+        kwargs: Dict[str, Any] = {}
+        # OpenAI's own endpoint (no base_url) uses the Responses API.
+        if (
+            self.config.model_provider == "openai"
+            and self.config.base_url is None
+        ):
+            kwargs["use_responses_api"] = True
+        kwargs.update(self._reasoning_effort_kwargs())
+        kwargs.update(self._service_tier_kwargs())
+        return kwargs
+
+    def _reasoning_effort_kwargs(self) -> Dict[str, Any]:
+        """`init_chat_model` arguments for the configured reasoning effort."""
+        kwargs: Dict[str, Any] = {}
+        effort = self.config.reasoning_effort
+        if effort is not None:
+            match self.config.model_provider:
+                case "anthropic" | "openai":
+                    kwargs["reasoning_effort"] = effort
+                case "ollama":
+                    kwargs["reasoning"] = effort
+                case _:
+                    logger.warning(
+                        "reasoning_effort is not supported for provider "
+                        f"{self.config.model_provider}: ignored."
+                    )
+        return kwargs
+
+    def _service_tier_kwargs(self) -> Dict[str, Any]:
+        """`init_chat_model` arguments for the configured service tier."""
+        kwargs: Dict[str, Any] = {}
+        tier = self.config.service_tier
+        if tier is not None:
+            match self.config.model_provider:
+                case "openai":
+                    kwargs["service_tier"] = tier
+                case _:
+                    logger.warning(
+                        "service_tier is not supported for provider "
+                        f"{self.config.model_provider}: ignored."
+                    )
+        return kwargs
 
     @property
     def chat_model(self) -> BaseChatModel:
@@ -232,8 +285,9 @@ class ChatModelClient:
                 and the parsed output.
 
         Raises:
-            ValueError: If the response is not of the expected type or if there
-                is an error parsing the response according to the output schema.
+            ValueError: If the response is not of the expected type, if the
+                output was truncated, or if there is an error parsing the
+                response according to the output schema.
             KeyError: If the expected keys are not found in the response when
                 the output schema is used.
             ValidationError: If the parsed response does not conform to the
@@ -247,6 +301,8 @@ class ChatModelClient:
                 f"got {type(response)}, value={response}"
             )
         if isinstance(response, AIMessage):
+            if _is_truncated(response):
+                raise ValueError("Model output truncated.")
             return response, response.model_copy()
         for key in ["raw", "parsed", "parsing_error"]:
             if key not in response:
@@ -254,6 +310,8 @@ class ChatModelClient:
                     f"Key '{key}' not in response of chat model invoke"
                 )
         raw: AIMessage = response["raw"]
+        if _is_truncated(raw):
+            raise ValueError("Model output truncated.")
         parsed = response["parsed"]
         parsing_error = response["parsing_error"]
         if parsing_error is not None:
@@ -287,29 +345,53 @@ class ChatModelClient:
         Returns:
             AIMessage | Any: The response from the chat model.
         Raises:
-            ValueError: If the input/output type is invalid or if there is an
-                error parsing the response according to the output schema.
+            ValueError: If the input/output type is invalid, if the output was
+                truncated, or if there is an error parsing the response
+                according to the output schema.
             KeyError: If the expected keys are not found in the response when
                 the output schema is used.
             ValidationError: If the parsed response does not conform to the
                 output schema.
         """
-        assert self._validate_input_type(input), (
-            f"Invalid input type: {type(input)}. "
-            "Expected str or HumanMessageor List[ToolMessage]."
+        response = self._chat_model.invoke(
+            self._prepare_messages(input, history)
         )
+        return self._record_response(response, input, history)
 
-        messages = self._build_messages_list(input, history)
+    async def ainvoke(
+        self,
+        input: str | HumanMessage | List[ToolMessage],
+        history: Optional[List[BaseMessage]] = None,
+    ) -> Union[AIMessage, Any]:
+        """Asynchronous `invoke`: same arguments, result, errors and history
+        update, but it awaits the chat model instead of blocking the event
+        loop."""
+        response = await self._chat_model.ainvoke(
+            self._prepare_messages(input, history)
+        )
+        return self._record_response(response, input, history)
 
-        try:
-            response = self._chat_model.invoke(messages)
-        except Exception as e:
-            raise e
+    def _prepare_messages(
+        self,
+        input: str | HumanMessage | List[ToolMessage],
+        history: Optional[List[BaseMessage]],
+    ) -> List[BaseMessage]:
+        if not self._validate_input_type(input):
+            raise ValueError(
+                f"Invalid input type: {type(input)}. "
+                "Expected str, HumanMessage or List[ToolMessage]."
+            )
+        return self._build_messages_list(input, history)
+
+    def _record_response(
+        self,
+        response: Any,
+        input: str | HumanMessage | List[ToolMessage],
+        history: Optional[List[BaseMessage]],
+    ) -> Union[AIMessage, Any]:
         r_for_history, r_to_return = self._process_response(response)
-
         if history is not None:
             self._update_history(history, input, r_for_history)
-
         return r_to_return
 
     def batch(
@@ -331,8 +413,9 @@ class ChatModelClient:
             List[AIMessage]: List of responses from the chat model for each
                 input.
         Raises:
-            ValueError: If the input type is invalid or if the response from
-                the chat model is not an AIMessage.
+            ValueError: If the input type is invalid, if the response from
+                the chat model is not an AIMessage, or if an output was
+                truncated.
         """
         if not all([self._validate_input_type(input) for input in inputs]):
             types = [type(input) for input in inputs]
@@ -351,4 +434,6 @@ class ChatModelClient:
                 "Expected all responses to be AIMessage instances after batch "
                 "invocation of chat model."
             )
+        if any(_is_truncated(response) for response in responses):
+            raise ValueError("Model output truncated.")
         return responses

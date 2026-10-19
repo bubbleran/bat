@@ -1,3 +1,4 @@
+from contextlib import aclosing
 from typing import Dict
 
 from a2a.helpers import (
@@ -75,7 +76,6 @@ class MinimalAgentExecutor(AgentExecutor):
         updater = TaskUpdater(event_queue, task.id, task.context_id)
         parent_ctx = extract_context(_carrier_from_message(context.message))
 
-
         agent_name = type(self.agent_graph).__name__.removesuffix("Graph")
         try:
             with tracer.start_as_current_span(
@@ -96,21 +96,14 @@ class MinimalAgentExecutor(AgentExecutor):
                     span.set_attribute(attrs.BAT_TASK_ID, task.id)
 
                 config = {"configurable": {"thread_id": task.context_id}}
-                keep_streaming = True
-                prev_item = None
-                async for item in self.agent_graph.astream(query, config):
-                    if item != prev_item:
-                        if keep_streaming:
-                            keep_streaming = await self._process_task_result(
-                                task=task,
-                                task_result=item,
-                                updater=updater,
-                            )
-                        else:
-                            logger.warning(
-                                "Artifact has been updated: ignoring item."
-                            )
-                    prev_item = item
+                stream = self.agent_graph.astream(query, config)
+                async with aclosing(stream):
+                    async for item in stream:
+                        await self._process_task_result(
+                            task=task,
+                            task_result=item,
+                            updater=updater,
+                        )
         except Exception as e:
             logger.error(f"An error occurred while streaming the response: {e}")
             raise InternalError(
@@ -125,7 +118,7 @@ class MinimalAgentExecutor(AgentExecutor):
         task: Task,
         task_result: AgentTaskResult,
         updater: TaskUpdater,
-    ) -> bool:
+    ) -> None:
         match task_result.task_status:
             case (
                 TaskState.TASK_STATE_WORKING
@@ -160,7 +153,6 @@ class MinimalAgentExecutor(AgentExecutor):
                 )
             case _:
                 logger.error(f"Unknown task status: {task_result.task_status}")
-        return task_result.task_status == TaskState.TASK_STATE_WORKING
 
     @override
     async def cancel(

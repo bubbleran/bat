@@ -1,4 +1,5 @@
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -82,6 +83,11 @@ def test_validate_input_type(client):
     )
 
 
+def test_invoke_rejects_an_invalid_input_type(client):
+    with pytest.raises(ValueError, match="Invalid input type"):
+        client.invoke(42)
+
+
 def test_build_messages_list_with_human_message(client):
     human_msg = HumanMessage("hello")
     history = [AIMessage("prev")]
@@ -150,11 +156,79 @@ def test_invoke_with_string_input(client):
     assert history[-1] == response
 
 
+def test_ainvoke_awaits_the_model_and_updates_history(client, mock_chat_model):
+    mock_chat_model.ainvoke = AsyncMock(return_value=AIMessage("async ok"))
+    history = []
+    response = asyncio.run(client.ainvoke("hi", history))
+    assert response.content == "async ok"
+    assert len(history) == 2 and history[-1] == response
+    mock_chat_model.invoke.assert_not_called()
+
+
 def test_batch_invocation(client):
     msgs = [HumanMessage("hi1"), HumanMessage("hi2")]
     responses = client.batch(msgs)
     assert len(responses) == 2
     assert all(isinstance(r, AIMessage) for r in responses)
+
+
+# ------------------ Truncated output Tests ------------------
+
+TRUNCATED = [
+    {"finish_reason": "length"},
+    {
+        "status": "incomplete",
+        "incomplete_details": {"reason": "max_output_tokens"},
+    },
+    {"stop_reason": "max_tokens"},
+    {"done_reason": "length"},
+]
+
+
+@pytest.mark.parametrize("metadata", TRUNCATED)
+def test_truncated_output_raises(client, mock_chat_model, metadata):
+    mock_chat_model.invoke.return_value = AIMessage(
+        "half an ans", response_metadata=metadata
+    )
+    with pytest.raises(ValueError, match="truncated"):
+        client.invoke("hi")
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"finish_reason": "stop"},
+        {"status": "completed"},
+        {"stop_reason": "end_turn"},
+        {"done_reason": "stop"},
+        {},
+    ],
+)
+def test_complete_output_is_returned(client, mock_chat_model, metadata):
+    mock_chat_model.invoke.return_value = AIMessage(
+        "answer", response_metadata=metadata
+    )
+    assert client.invoke("hi").content == "answer"
+
+
+def test_truncation_is_reported_before_the_parsing_error(client):
+    response = {
+        "raw": AIMessage('{"answer": "hal', response_metadata=TRUNCATED[0]),
+        "parsed": None,
+        "parsing_error": ValueError("invalid JSON"),
+    }
+    with pytest.raises(ValueError, match="truncated"):
+        client._process_response(response)
+
+
+def test_batch_raises_if_one_output_is_truncated(client, mock_chat_model):
+    mock_chat_model.batch.side_effect = None
+    mock_chat_model.batch.return_value = [
+        AIMessage("answer"),
+        AIMessage("half an ans", response_metadata=TRUNCATED[0]),
+    ]
+    with pytest.raises(ValueError, match="truncated"):
+        client.batch([HumanMessage("hi1"), HumanMessage("hi2")])
 
 
 # ------------------ Responses API selection Tests ------------------
@@ -215,3 +289,45 @@ def test_output_version_is_left_to_the_provider(captured_init_kwargs):
         ),
     )
     assert "output_version" not in captured_init_kwargs
+
+
+# ------------------ Model settings Tests ------------------
+
+
+@pytest.mark.parametrize(
+    "provider, expected",
+    [
+        ("openai", {"reasoning_effort": "low", "service_tier": "flex"}),
+        ("anthropic", {"reasoning_effort": "low"}),
+        ("ollama", {"reasoning": "low"}),
+        ("nvidia", {}),
+    ],
+)
+def test_model_settings_are_named_per_provider(
+    captured_init_kwargs, provider, expected
+):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="some-model",
+            model_provider=provider,
+            reasoning_effort="low",
+            service_tier="flex",
+        ),
+    )
+    sent = {
+        name: captured_init_kwargs[name]
+        for name in ("reasoning_effort", "reasoning", "service_tier")
+        if name in captured_init_kwargs
+    }
+    assert sent == expected
+
+
+def test_unset_model_settings_are_not_sent(captured_init_kwargs):
+    ChatModelClient(
+        chat_model_config=ChatModelClientConfig(
+            model="gpt-5.2",
+            model_provider="openai",
+        ),
+    )
+    assert "reasoning_effort" not in captured_init_kwargs
+    assert "service_tier" not in captured_init_kwargs

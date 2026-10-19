@@ -31,8 +31,7 @@ class ReActLoop(PrebuiltWorkflow):
 
     Args
     -------
-        config (AgentConfig): Configuration for the agent, including
-            checkpointing options.
+        config (AgentConfig): Configuration for the agent.
         StateType (Type[AgentState]): The AgentState schema used in the loop.
         loop_name (str): The name of the loop.
         chat_model_client (ChatModelClient): The chat model client to use.
@@ -69,10 +68,13 @@ class ReActLoop(PrebuiltWorkflow):
     Example
     -------
     ```python
-    from bat.agent import AgentGraph, AgentState
+    from typing import List, Optional
+
+    from bat.agent import AgentConfig, AgentGraph, AgentState
     from bat.chat_model_client import ChatModelClient
     from bat.prebuilt import ReActLoop
     from langchain.tools import tool
+    from langchain_core.messages import BaseMessage
 
     class RNGClient(ChatModelClient):
         ...
@@ -85,7 +87,7 @@ class ReActLoop(PrebuiltWorkflow):
         ...
 
     @tool
-    def generate_random_numbers(int min: int, int max: int, int n: int) -> str:
+    def generate_random_numbers(min: int, max: int, n: int) -> str:
         ""\"Generate n random numbers between min and max (inclusive).""\"
         ...
 
@@ -93,7 +95,8 @@ class ReActLoop(PrebuiltWorkflow):
         def setup(self, config: AgentConfig) -> None:
             self.rng_client = RNGClient(tools=[generate_random_numbers])
             self.rng_loop = ReActLoop(
-                state_schema=RNGAgentState,
+                config=config,
+                StateType=RNGAgentState,
                 loop_name="rng_loop",
                 chat_model_client=self.rng_client,
                 input_key="user_input",
@@ -122,8 +125,7 @@ class ReActLoop(PrebuiltWorkflow):
         parameters.
 
         Args:
-            config (AgentConfig): Configuration for the agent, including
-                checkpointing options.
+            config (AgentConfig): Configuration for the agent.
             StateType (Type[AgentState]): The AgentState schema used in the
                 loop.
             loop_name (str): The name of the loop.
@@ -145,6 +147,12 @@ class ReActLoop(PrebuiltWorkflow):
                 state. Defaults to None. If provided, the value at this key is
                 updated with the current status of the loop. Useful to beautify
                 the streamed output of the loop.
+            tool_call_policy ("parallel" | "sequential", optional): How a turn
+                asking for several tools is executed. Defaults to "parallel":
+                the ToolNode runs them together on one snapshot of the state.
+                "sequential" executes them one at a time, each on the state
+                the previous one left. Required by any loop whose tools write
+                state through ``Command``.
         """
 
         keys = [
@@ -374,6 +382,8 @@ class ReActLoop(PrebuiltWorkflow):
         input_key from the state and then cleared.
         - If the chat model produces tool calls, they are added to the buffer
         for processing in the ToolNode.
+        - If the chat model produces tool calls that cannot be parsed, a
+        ValueError is raised.
         - If a status_key is provided, the status is updated to reflect the
         current operation.
         """
@@ -395,12 +405,15 @@ class ReActLoop(PrebuiltWorkflow):
                 )
                 else state_input
             )
-            response = self.chat_model_client.invoke(
+            response = await self.chat_model_client.ainvoke(
                 input=input,
                 history=state.bat_extra[self._internal_messages_key],
             )
         except Exception as e:
             raise RuntimeError(f"Error invoking chat model client: {e}") from e
+        if response.invalid_tool_calls:
+            names = [call["name"] for call in response.invalid_tool_calls]
+            raise ValueError(f"Model returned invalid tool calls: {names}")
         if response.tool_calls:
             tool_calls = list(response.tool_calls)
             state.bat_extra[self._internal_trace_key].extend(tool_calls)

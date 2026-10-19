@@ -1,280 +1,136 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
-from a2a.helpers import (
-    get_artifact_text,
-    get_message_text,
-    new_text_message,
-)
+from a2a.helpers import get_stream_response_text, new_text_message
 from a2a.types import Role, SendMessageRequest, StreamResponse, TaskState
-from google.protobuf.json_format import MessageToDict
+from bat.logging import create_logger
 from httpx import AsyncClient
 
-from .contracts import EpisodeResult, EpisodeTrace, TaskSpec, TraceEvent
+from .contracts import (
+    EpisodeResult,
+    EpisodeTrace,
+    TaskSpec,
+    TraceEvent,
+    Trajectory,
+)
+from .trajectory import (
+    TASK_STATES,
+    build_trajectory,
+    conversation_roots,
+    tool_calls_from,
+)
 
-TERMINAL_STATUSES = {"completed", "error", "input-required"}
-
-
-_TASK_STATE_TO_STR = {
-    TaskState.TASK_STATE_SUBMITTED: "working",
-    TaskState.TASK_STATE_WORKING: "working",
-    TaskState.TASK_STATE_INPUT_REQUIRED: "input-required",
-    TaskState.TASK_STATE_COMPLETED: "completed",
-    TaskState.TASK_STATE_FAILED: "error",
-    TaskState.TASK_STATE_CANCELED: "error",
-    TaskState.TASK_STATE_REJECTED: "error",
-}
-
-
-def _to_dict(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return value
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(by_alias=True)
-        return dumped if isinstance(dumped, dict) else {}
-    return {}
+logger = create_logger(__name__, level="info")
 
 
-def _struct_to_dict(metadata_struct: Any) -> dict[str, Any]:
-    if metadata_struct is None:
-        return {}
-    try:
-        return MessageToDict(metadata_struct) or {}
-    except Exception:
-        return {}
+def read_spans(paths: list[str]) -> list[dict[str, Any]]:
+    """The spans in these files, and in the ``*.jsonl`` of these directories."""
+    spans: list[dict[str, Any]] = []
+    for raw in paths:
+        path = Path(raw)
+        files = sorted(path.glob("*.jsonl")) if path.is_dir() else [path]
+        for file in files:
+            if not file.is_file():
+                continue
+            for line in file.read_text(encoding="utf-8").splitlines():
+                with contextlib.suppress(json.JSONDecodeError):
+                    spans.append(json.loads(line))
+    return spans
 
 
-def _chunk_key(chunk: StreamResponse) -> str:
+def _status(chunk: StreamResponse) -> str | None:
     if chunk.HasField("status_update"):
-        message_id = chunk.status_update.status.message.message_id
-        if message_id:
-            return f"status:{message_id}"
-    if chunk.HasField("artifact_update"):
-        artifact_id = chunk.artifact_update.artifact.artifact_id
-        if artifact_id:
-            return f"artifact:{artifact_id}"
-    if chunk.HasField("message") and chunk.message.message_id:
-        return f"message:{chunk.message.message_id}"
-    if chunk.HasField("task") and chunk.task.id:
-        return f"task:{chunk.task.id}"
-    return f"raw:{chunk.SerializeToString().hex()}"
-
-
-def _extract_status_and_content(
-    chunk: StreamResponse,
-) -> tuple[str | None, str]:
-    if chunk.HasField("message"):
-        return "completed", get_message_text(chunk.message)
-    if chunk.HasField("artifact_update"):
-        return "completed", get_artifact_text(chunk.artifact_update.artifact)
-    if chunk.HasField("status_update"):
-        state = chunk.status_update.status.state
-        status = _TASK_STATE_TO_STR.get(state)
-        content = ""
-        if chunk.status_update.status.HasField("message"):
-            content = get_message_text(chunk.status_update.status.message)
-        return status, content
+        return TASK_STATES.get(TaskState.Name(chunk.status_update.status.state))
     if chunk.HasField("task"):
-        state = chunk.task.status.state
-        status = _TASK_STATE_TO_STR.get(state)
-        texts = [get_artifact_text(a) for a in chunk.task.artifacts]
-        return status, "\n".join(t for t in texts if t)
-    return None, ""
+        return TASK_STATES.get(TaskState.Name(chunk.task.status.state))
+    if chunk.HasField("message") or chunk.HasField("artifact_update"):
+        return "completed"
+    return None
 
 
-def _extract_metadata(chunk: StreamResponse) -> dict[str, Any]:
-    metadata_struct: Any = None
-    if chunk.HasField("status_update"):
-        metadata_struct = chunk.status_update.metadata
-    elif chunk.HasField("artifact_update"):
-        metadata_struct = chunk.artifact_update.metadata
-    elif chunk.HasField("message"):
-        metadata_struct = chunk.message.metadata
-    elif chunk.HasField("task"):
-        metadata_struct = chunk.task.metadata
-
-    metadata = _struct_to_dict(metadata_struct)
-
-    if chunk.HasField("artifact_update"):
-        artifact_metadata = _struct_to_dict(
-            chunk.artifact_update.artifact.metadata
+async def _trajectory(
+    paths: list[str], conversation_id: str, turns: list[str]
+) -> Trajectory:
+    """The conversation's trajectory, once each turn's root span is on disk:
+    the last one ends just after the answer is streamed."""
+    spans = read_spans(paths)
+    for _ in range(20):
+        roots = conversation_roots(spans, conversation_id)
+        if not paths or len(roots) >= len(turns):
+            break
+        await asyncio.sleep(0.1)
+        spans = read_spans(paths)
+    trajectory = build_trajectory(spans, conversation_id, turns)
+    if paths and not trajectory.found:
+        logger.warning(
+            "No spans found for conversation '%s' in %s: is telemetry on?",
+            conversation_id,
+            ", ".join(paths),
         )
-        if artifact_metadata:
-            merged = dict(artifact_metadata)
-            merged.update(metadata)
-            metadata = merged
-
-    return metadata
+    return trajectory
 
 
-def _normalize_usage(metadata: dict[str, Any]) -> dict[str, Any]:
-    usage = _to_dict(metadata.get("usage"))
-    if not usage:
-        return {}
-
-    input_tokens = int(usage.get("input_tokens") or 0)
-    output_tokens = int(usage.get("output_tokens") or 0)
-    total_tokens = int(
-        usage.get("total_tokens") or (input_tokens + output_tokens)
-    )
-    inference_time = float(usage.get("inference_time") or 0.0)
-
-    if (
-        input_tokens == 0
-        and output_tokens == 0
-        and total_tokens == 0
-        and inference_time == 0.0
-    ):
-        return {}
-
-    return {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-        "inference_time": inference_time,
-    }
-
-
-def _add_usage(
-    total: dict[str, Any], incremental: dict[str, Any]
-) -> dict[str, Any]:
-    return {
-        "input_tokens": int(total.get("input_tokens") or 0)
-        + int(incremental.get("input_tokens") or 0),
-        "output_tokens": int(total.get("output_tokens") or 0)
-        + int(incremental.get("output_tokens") or 0),
-        "total_tokens": int(total.get("total_tokens") or 0)
-        + int(incremental.get("total_tokens") or 0),
-        "inference_time": float(total.get("inference_time") or 0.0)
-        + float(incremental.get("inference_time") or 0.0),
-    }
-
-
-def _extract_tool_calls(metadata: dict[str, Any]) -> list[dict[str, Any]]:
-    trace = _to_dict(metadata.get("trace"))
-    tool_calls = trace.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        return []
-    return [item for item in tool_calls if isinstance(item, dict)]
-
-
-def _tool_call_key(tool_call: dict[str, Any]) -> str:
-    call_id = tool_call.get("id")
-    if isinstance(call_id, str) and call_id:
-        return f"id:{call_id}"
-    return json.dumps(tool_call, sort_keys=True, ensure_ascii=True, default=str)
-
-
-class BatA2AAdapter:
-    def __init__(
-        self,
-        agent_url: str,
-        request_timeout_s: float = 180.0,
-        max_events: int = 200,
-    ) -> None:
-        self.agent_url = agent_url
-        self.request_timeout_s = request_timeout_s
-        self.max_events = max_events
-
-    async def run_task(
-        self, task: TaskSpec, *, thread_id: str
-    ) -> EpisodeResult:
-        t0_perf = time.perf_counter()
-        trace = EpisodeTrace()
-
-        usage_total: dict[str, Any] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-            "inference_time": 0.0,
-        }
-        usage_seen: set[str] = set()
-        tool_calls_seen: set[str] = set()
-
-        last_status: str | None = None
-        last_content = ""
-
-        async with AsyncClient(timeout=self.request_timeout_s) as httpx_client:
-            resolver = A2ACardResolver(
-                httpx_client=httpx_client, base_url=self.agent_url
-            )
-            agent_card = await resolver.get_agent_card()
-
-            client = ClientFactory(
-                ClientConfig(httpx_client=httpx_client, streaming=True)
-            ).create(card=agent_card)
-
-            try:
-                for turn in task.turns:
-                    turn_started = False
-                    message = new_text_message(
-                        text=turn,
-                        context_id=thread_id,
-                        role=Role.ROLE_USER,
-                    )
-                    stream = client.send_message(
-                        SendMessageRequest(message=message)
-                    )
-
-                    async for chunk in stream:
-                        metadata = _extract_metadata(chunk)
-
-                        usage = _normalize_usage(metadata)
-                        if usage:
-                            usage_key = f"{_chunk_key(chunk)}::{json.dumps(usage, sort_keys=True, ensure_ascii=True)}"
-                            if usage_key not in usage_seen:
-                                usage_seen.add(usage_key)
-                                usage_total = _add_usage(usage_total, usage)
-
-                        for tool_call in _extract_tool_calls(metadata):
-                            key = _tool_call_key(tool_call)
-                            if key in tool_calls_seen:
-                                continue
-                            tool_calls_seen.add(key)
-                            trace.tool_calls.append(tool_call)
-
-                        status, content = _extract_status_and_content(chunk)
-                        if status is None:
-                            continue
-
-                        if len(trace.events) < self.max_events:
-                            trace.events.append(
-                                TraceEvent(
-                                    t_ms=(time.perf_counter() - t0_perf)
-                                    * 1000.0,
-                                    task_status=status,
-                                    content_preview=content,
-                                    user_input=turn
-                                    if not turn_started
-                                    else None,
-                                )
+async def run_task(
+    agent_url: str, task: TaskSpec, thread_id: str, span_paths: list[str]
+) -> EpisodeResult:
+    """One conversation with the agent, and what its spans say it did."""
+    started = time.perf_counter()
+    trace = EpisodeTrace()
+    status = "error"
+    output = ""
+    async with AsyncClient(timeout=180.0) as http:
+        card = await A2ACardResolver(
+            httpx_client=http, base_url=agent_url
+        ).get_agent_card()
+        client = ClientFactory(
+            ClientConfig(httpx_client=http, streaming=True)
+        ).create(card=card)
+        try:
+            for turn in task.turns:
+                output = ""  # the final output is the last turn's answer
+                user_input: str | None = turn
+                message = new_text_message(
+                    text=turn, context_id=thread_id, role=Role.ROLE_USER
+                )
+                async for chunk in client.send_message(
+                    SendMessageRequest(message=message)
+                ):
+                    chunk_status = _status(chunk)
+                    if chunk_status is None:
+                        continue
+                    text = get_stream_response_text(chunk)
+                    if len(trace.events) < 200:
+                        trace.events.append(
+                            TraceEvent(
+                                t_ms=(time.perf_counter() - started) * 1000,
+                                task_status=chunk_status,
+                                content_preview=text,
+                                user_input=user_input,
                             )
-                            turn_started = True
+                        )
+                        user_input = None
+                    if chunk_status in ("completed", "error", "input-required"):
+                        status = chunk_status
+                        # The stream closes on a status with no text.
+                        output = text or output
+        except Exception as exc:
+            status = "error"
+            output = f"{type(exc).__name__}: {exc}"
 
-                        if status in TERMINAL_STATUSES:
-                            last_status = status
-                            last_content = content or ""
-
-            except Exception as exc:
-                last_status = "error"
-                last_content = f"{type(exc).__name__}: {exc}"
-
-        trace.timings["wall_ms"] = (time.perf_counter() - t0_perf) * 1000.0
-        trace.usage = usage_total
-
-        final_status = last_status or "error"
-        final_output = last_content or ""
-
-        return EpisodeResult(
-            task_id=task.id,
-            final_status=final_status,
-            final_output=final_output,
-            trace=trace,
-            aux={"agent_url": self.agent_url},
-        )
+    trace.wall_ms = (time.perf_counter() - started) * 1000
+    trace.trajectory = await _trajectory(span_paths, thread_id, task.turns)
+    trace.tool_calls = tool_calls_from(trace.trajectory)
+    return EpisodeResult(
+        task_id=task.id,
+        final_status=status,
+        final_output=output,
+        trace=trace,
+        aux={"agent_url": agent_url},
+    )

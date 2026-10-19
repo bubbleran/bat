@@ -8,12 +8,8 @@ from bat.telemetry.setup import setup_telemetry
 
 @pytest.fixture(autouse=True)
 def reset_state(monkeypatch):
-    """Reset the module-level init guard so each test starts uninitialized."""
-    monkeypatch.setattr(setup_mod, "_initialized", False)
-    yield
-    # The guard is mutated via ``global`` inside setup_telemetry; force it back
-    # so a successful run in one test cannot leak into the next.
-    setup_mod._initialized = False
+    """Start each test with telemetry uninitialized."""
+    monkeypatch.setattr(setup_mod, "_provider", None)
 
 
 def test_setup_disables_without_crashing_when_enabled_but_otel_missing(
