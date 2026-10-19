@@ -7,6 +7,7 @@ loaders:
       - bat.interop
       - bat.logging
       - bat.prebuilt
+      - bat.telemetry
 
 processors:
   - type: filter
@@ -15,6 +16,9 @@ processors:
 
 renderer:
   type: mkdocs
+  markdown:
+    data_code_block: true
+    data_expression_maxlength: 200
   pages:
     - title: Home
       name: index
@@ -40,6 +44,12 @@ renderer:
             - bat.prebuilt.prebuilt_workflow.*
             - bat.prebuilt.react_loop.*
             - bat.prebuilt.call_agent_node.*
+        - title: Telemetry
+          contents:
+            - bat.telemetry.config.*
+            - bat.telemetry.privacy.*
+            - bat.telemetry.setup.*
+            - bat.telemetry.attributes.*
         - title: Interoperability
           contents:
             - bat.interop.nvidia_nat.*

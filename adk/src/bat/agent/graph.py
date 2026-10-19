@@ -21,34 +21,31 @@ logger = create_logger(__name__, level="debug")
 class AgentGraph(ABC):
     """Abstract base class for agent graphs.
 
-    Extend this class to implement the specific behavior of an agent.
+    Extend this class to implement the specific behavior of an agent: add the
+    nodes and edges of the graph in `setup`. The graph is instantiated and
+    compiled by `AgentApplication`, so subclasses do not override `__init__`.
 
     Example
     -------
     ```python
-    from bat.agent import AgentGraph, AgentState
-    from langgraph.runnables import RunnableConfig
-    from langgraph.graph import StateGraph
+    from bat.agent import AgentConfig, AgentGraph, AgentState
+    from langgraph.graph import END, START
 
-    class MyAgentState(BaseModel):
+    class MyAgentState(AgentState):
         # Your state here
         # ...
         pass
 
     class MyAgentGraph(AgentGraph):
-        def __init__(self):
-            # Define the agent graph using langgraph.graph.StateGraph class
-            graph_builder = StateGraph(MyAgentState)
-            # Add nodes and edges to the graph as needed ...
-            super().__init__(
-                graph_builder=graph_builder,
-                use_checkpoint=True,
-                logger_name="my_agent"
-            )
-            self._log("Graph initialized", "info")
+        def setup(self, config: AgentConfig) -> None:
+            # self.graph_builder is a StateGraph of the agent state type
+            self.graph_builder.add_node("answer", self.answer)
+            self.graph_builder.add_edge(START, "answer")
+            self.graph_builder.add_edge("answer", END)
 
         # Your nodes logic here
-        # ...
+        def answer(self, state: MyAgentState) -> MyAgentState:
+            ...
     ```
     """
 
@@ -61,17 +58,15 @@ class AgentGraph(ABC):
         config: AgentConfig,
         StateType: Type[AgentState],
     ):
-        """Initialize the AgentGraph with a state graph and optional
-        checkpointing and logger.
-        Compile the state graph and set up the logger if the logger_name
-        is provided.
+        """Initialize the AgentGraph: create a state graph of `StateType`,
+        let `setup` add its nodes and edges, then compile it.
+
+        The graph is compiled with an in-memory checkpointer when
+        `config.checkpoints` is set. Called by `AgentApplication`.
 
         Args:
-            graph_builder (StateGraph): The state graph builder.
-            use_checkpoint (bool): Whether to use checkpointing.
-                Defaults to False.
-            logger_name (Optional[str]): The name of the logger to use.
-                Defaults to None.
+            config (AgentConfig): The agent configuration, passed to `setup`.
+            StateType (Type[AgentState]): The AgentState schema of the graph.
         """
         self.StateType = StateType
         self._graph_builder = StateGraph(StateType)
@@ -308,6 +303,19 @@ class AgentGraph(ABC):
         config: RunnableConfig,
         text: str,
     ) -> Message:
+        """Build a user A2A text message to send to a remote agent.
+
+        Fits the `build_message` callback of `CallAgentNode`. The message
+        takes its `context_id` from the `thread_id` of the configuration
+        (`default` if unset) and its `task_id` from the `task_id`, if any.
+
+        Args:
+            config (RunnableConfig): The configuration of the running graph.
+            text (str): The text of the message.
+
+        Returns:
+            Message: The A2A message.
+        """
         cfg = config["configurable"] or {}
         thread_id = cfg.get("thread_id", "default")
         task_id = cfg.get("task_id", None)

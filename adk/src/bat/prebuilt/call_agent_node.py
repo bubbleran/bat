@@ -70,27 +70,19 @@ class CallAgentNode(PrebuiltWorkflow):
     Example
     -------
     ```python
-    from a2a.types import Message
-    from bat.agent import AgentGraph, AgentState
+    from typing import Optional
+
+    from bat.agent import AgentConfig, AgentGraph, AgentState
     from bat.prebuilt import CallAgentNode
-    from langchain_core.runnables import RunnableConfig
-    from typing import List, Optional
-    from langchain_core.messages import BaseMessage
 
     class MyAgentState(AgentState):
         agent_input_text: str
         agent_output_text: str
+        agent_status: str
         agent_response_status: str
         agent_input_required: bool = False
         agent_response_content: Optional[str] = None
         ...
-
-    def build_agent_message(config: RunnableConfig, text: str) -> Message:
-        \"\"\"Build a message to send to the SMO Agent.\"\"\"
-        return Message(
-            role="user",
-            parts=[{"type": "text", "text": text}],
-        )
 
     class MyAgentGraph(AgentGraph):
         def setup(self, config: AgentConfig) -> None:
@@ -105,7 +97,7 @@ class CallAgentNode(PrebuiltWorkflow):
                 agent_input_required_key="agent_input_required",
                 agent_response_status_key="agent_response_status",
                 agent_response_content_key="agent_response_content",
-                build_message=build_agent_message,
+                build_message=self.build_message,
             )
             ...
             self.graph_builder.add_node(

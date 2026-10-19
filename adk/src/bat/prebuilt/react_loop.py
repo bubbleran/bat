@@ -68,10 +68,13 @@ class ReActLoop(PrebuiltWorkflow):
     Example
     -------
     ```python
-    from bat.agent import AgentGraph, AgentState
+    from typing import List, Optional
+
+    from bat.agent import AgentConfig, AgentGraph, AgentState
     from bat.chat_model_client import ChatModelClient
     from bat.prebuilt import ReActLoop
     from langchain.tools import tool
+    from langchain_core.messages import BaseMessage
 
     class RNGClient(ChatModelClient):
         ...
@@ -84,7 +87,7 @@ class ReActLoop(PrebuiltWorkflow):
         ...
 
     @tool
-    def generate_random_numbers(int min: int, int max: int, int n: int) -> str:
+    def generate_random_numbers(min: int, max: int, n: int) -> str:
         ""\"Generate n random numbers between min and max (inclusive).""\"
         ...
 
@@ -92,7 +95,8 @@ class ReActLoop(PrebuiltWorkflow):
         def setup(self, config: AgentConfig) -> None:
             self.rng_client = RNGClient(tools=[generate_random_numbers])
             self.rng_loop = ReActLoop(
-                state_schema=RNGAgentState,
+                config=config,
+                StateType=RNGAgentState,
                 loop_name="rng_loop",
                 chat_model_client=self.rng_client,
                 input_key="user_input",
@@ -143,6 +147,12 @@ class ReActLoop(PrebuiltWorkflow):
                 state. Defaults to None. If provided, the value at this key is
                 updated with the current status of the loop. Useful to beautify
                 the streamed output of the loop.
+            tool_call_policy ("parallel" | "sequential", optional): How a turn
+                asking for several tools is executed. Defaults to "parallel":
+                the ToolNode runs them together on one snapshot of the state.
+                "sequential" executes them one at a time, each on the state
+                the previous one left. Required by any loop whose tools write
+                state through ``Command``.
         """
 
         keys = [

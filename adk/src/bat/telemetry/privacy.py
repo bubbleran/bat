@@ -43,6 +43,9 @@ from ..logging import create_logger
 
 logger = create_logger(__name__, "debug")
 TelemetryPrivacyLevel = Literal["none", "content", "names", "full"]
+"""`TelemetryPrivacyLevel` is a type alias for the names of the
+`TelemetryPrivacy` levels, as written in config.yaml.
+"""
 
 
 class TelemetryPrivacy(IntEnum):
