@@ -28,6 +28,17 @@ def _repository(image: str) -> str:
     return head if colon and "/" not in tag else name
 
 
+def _readiness_probe() -> dict[str, Any]:
+    """The cluster's agent probe: the A2A card, on the port the operator
+    serves every agent on, whatever its config.yaml says."""
+    return {
+        "httpGet": {"path": "/.well-known/agent-card.json", "port": 9900},
+        "periodSeconds": 5,
+        "timeoutSeconds": 2,
+        "failureThreshold": 3,
+    }
+
+
 def update_composition_model(
     blueprint_root: Path,
     existing: dict[str, Any] | None = None,
@@ -78,6 +89,10 @@ def update_composition_model(
 
     for directory in ours:
         if directory in runs:
+            mode = runs[directory]
+            if "readinessProbe" not in modes[mode]:
+                modes[mode]["readinessProbe"] = _readiness_probe()
+                changes.append(f"{mode}: added readinessProbe")
             continue
         mode = kubernetes_name(directory)
         if mode in modes:
@@ -96,6 +111,7 @@ def update_composition_model(
             "env": [
                 {"name": "AGENT_CARD_PATH", "value": f"{directory}/agent.json"}
             ],
+            "readinessProbe": _readiness_probe(),
             # Where the RBAC rules the agent needs in the cluster go, by hand.
             "rules": [],
         }

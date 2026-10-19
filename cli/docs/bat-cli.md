@@ -247,6 +247,11 @@ netops:
   env:
     - name: AGENT_CARD_PATH       # the config.yaml the operator mounts has no agent_card
       value: netops/agent.json
+  readinessProbe:                 # the A2A card, on the port the operator serves agents on
+    httpGet: {path: /.well-known/agent-card.json, port: 9900}
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
   rules: []
   # Instead, e.g. to read the cluster's networks and terminals:
   # rules:
@@ -255,7 +260,7 @@ netops:
   #     verbs: [get, watch]
 ```
 
-The image is the one `bat build` would tag with the same `--docker-registry`, `--repo` and `--version`; one with no registry is flagged, since the cluster can't pull it. `--vendor` is required: the cluster rejects a mode without one, so each run sets it on every mode, hand-written ones included. Each run adds a mode for agents that have none and moves every mode built from the blueprint's image (MCP modes included) to the new image, listing each change. Everything else is kept: `rules`, `resources`, `readinessProbe`, extra `env`, `spec.version`, other images' modes and the leading comment block. RBAC rules are never guessed: a new mode gets an empty `rules` list to fill in by hand, with a commented example under it (re-added on every run under each `rules: []`).
+The image is the one `bat build` would tag with the same `--docker-registry`, `--repo` and `--version`; one with no registry is flagged, since the cluster can't pull it. `--vendor` is required: the cluster rejects a mode without one, so each run sets it on every mode, hand-written ones included. Each run adds a mode for agents that have none, gives the blueprint's agent modes that lack one the readiness probe above, and moves every mode built from the blueprint's image (MCP modes included) to the new image, listing each change. Everything else is kept: `rules`, `resources`, `readinessProbe`, extra `env`, `spec.version`, other images' modes and the leading comment block. RBAC rules are never guessed: a new mode gets an empty `rules` list to fill in by hand, with a commented example under it (re-added on every run under each `rules: []`).
 
 ## Evaluation (`eval`)
 

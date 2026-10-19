@@ -60,6 +60,12 @@ def test_each_agent_becomes_a_deployment_mode(tmp_path, monkeypatch) -> None:
         "imageTag": "hub.example.com/demo:1.2.3",
         "args": ["netops"],
         "env": [{"name": "AGENT_CARD_PATH", "value": "netops/agent.json"}],
+        "readinessProbe": {
+            "httpGet": {"path": "/.well-known/agent-card.json", "port": 9900},
+            "periodSeconds": 5,
+            "timeoutSeconds": 2,
+            "failureThreshold": 3,
+        },
         "rules": [],
     }
     assert set(model["deploymentModes"]) == {"hermes", "netops"}
@@ -115,6 +121,8 @@ def test_a_rerun_keeps_hand_edits_and_moves_the_image(
     model = _model(root)
     rules = [{"apiGroups": [""], "resources": ["pods"], "verbs": ["get"]}]
     model["deploymentModes"]["netops"]["rules"] = rules
+    probe = {"httpGet": {"path": "/ping", "port": 9900}}
+    model["deploymentModes"]["netops"]["readinessProbe"] = probe
     model["deploymentModes"]["knowledge"] = {
         "kind": "mcp",
         "name": "knowledge",
@@ -134,6 +142,7 @@ def test_a_rerun_keeps_hand_edits_and_moves_the_image(
 
     modes = _model(root)["deploymentModes"]
     assert modes["netops"]["rules"] == rules
+    assert modes["netops"]["readinessProbe"] == probe
     assert modes["netops"]["imageTag"] == "hub.example.com/demo:2"
     # Same image, so a new build too; another image is left alone.
     assert modes["knowledge"]["imageTag"] == "hub.example.com/demo:2"
@@ -173,11 +182,13 @@ def test_an_agent_with_a_mode_under_another_name_gets_no_second_one(
         )
     )
 
-    _generate(*IMAGE_FLAGS)
+    result = _generate(*IMAGE_FLAGS)
 
     modes = _model(root)["deploymentModes"]
     assert set(modes) == {"ops", "hermes"}
     assert modes["ops"]["imageTag"] == "hub.example.com/demo:1.2.3"
+    assert modes["ops"]["readinessProbe"] == modes["hermes"]["readinessProbe"]
+    assert "ops: added readinessProbe" in result.output
 
 
 def test_a_rerun_with_another_vendor_moves_every_mode(
