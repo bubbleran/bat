@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-adk"
-version = "2026.10.9a0"
+version = "2026.10.19a0"
 authors = [
   { name="Andrea LEONE", email="andrea.leone@bubbleran.com" },
   { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },
@@ -22,7 +22,7 @@ dependencies = [
   "a2a-sdk[http-server]",
   "httpx>=0.28.1",
   "langchain>=1.0",
-  "langchain-mcp-adapters>=0.2.0",
+  "langchain-mcp-adapters>=0.3.2",
   "langgraph>=1.2",
   "mcp[cli]>=1.17.0",
   "pydantic>=2.10.6",
