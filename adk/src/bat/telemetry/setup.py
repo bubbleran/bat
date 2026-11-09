@@ -1,10 +1,14 @@
 import atexit
 import contextlib
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..logging import create_logger
 from .attributes import OPENINFERENCE_PROJECT_NAME
 from .config import TelemetryConfig
+from .privacy import TelemetryPrivacyLevel, resolve_privacy
+
+if TYPE_CHECKING:
+    from ..config import BATAgentConfig
 
 logger = create_logger(__name__, "debug")
 
@@ -228,3 +232,31 @@ def extract_context(carrier: Dict[str, str]) -> Optional[Any]:
 def is_enabled() -> bool:
     """Whether telemetry has been successfully initialized."""
     return _provider is not None
+
+
+def init_telemetry(
+    config: "BATAgentConfig",
+    service_name: str,
+    privacy_floor: TelemetryPrivacyLevel = "none",
+) -> bool:
+    """Set up OpenTelemetry from config.yaml's `telemetry` section. The
+    agent's `privacy_floor` can only raise the level config.yaml asks for."""
+    settings = config.telemetry
+    privacy = resolve_privacy(settings.privacy, privacy_floor)
+    if privacy > settings.privacy:
+        logger.info(
+            "Telemetry: privacy level raised to %s by the agent's floor "
+            "(config.yaml asked for %s).",
+            privacy.name.lower(),
+            settings.privacy.name.lower(),
+        )
+    return setup_telemetry(
+        TelemetryConfig.from_settings(
+            enabled=bool(settings.output),
+            service_name=settings.service_name,
+            project_name=settings.project_name,
+            privacy=privacy,
+            outputs=[output.model_dump() for output in settings.output],
+            default_service_name=service_name,
+        )
+    )
