@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-adk"
-version = "2026.10"
+version = "2026.11.dev0"
 authors = [
   { name="Andrea LEONE", email="andrea.leone@bubbleran.com" },
   { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },
@@ -18,14 +18,15 @@ classifiers = [
 ]
 
 dependencies = [
-  "a2a-sdk>=1.0.0",
-  "a2a-sdk[http-server]",
+  "a2a-sdk[http-server]>=1.2.3",
   "httpx>=0.28.1",
-  "langchain>=1.0",
+  "langchain>=1.4",
   "langchain-mcp-adapters>=0.3.2",
-  "langgraph>=1.2",
+  "langgraph>=1.2.16",
   "mcp[cli]>=1.17.0",
+  "opentelemetry-api>=1.27.0",
   "pydantic>=2.10.6",
+  "python-dotenv>=1.0",
   "pyyaml>=6.0.1",
   "uvicorn>=0.37.0",
 ]
@@ -36,64 +37,46 @@ deepseek = ["langchain-deepseek"]
 nvidia = ["langchain-nvidia-ai-endpoints"]
 ollama = ["langchain-ollama"]
 openai = ["langchain-openai>=1.6.6"]
-
-# OpenTelemetry instrumentation. Export to any OTLP backend (e.g. Arize
-# Phoenix). Auto-instruments LangChain/LangGraph via OpenInference.
+postgres = [
+  "langgraph-checkpoint-postgres>=3.2.0",
+  "psycopg[binary]",
+  "sqlalchemy[asyncio]>=2.0",
+]
 telemetry = [
-  "opentelemetry-api>=1.27.0",
   "opentelemetry-sdk>=1.27.0",
   "opentelemetry-exporter-otlp>=1.27.0",
-  "openinference-instrumentation-langchain>=0.1.68",
+  "openinference-instrumentation-langchain>=0.1.73",
   "openinference-instrumentation>=0.1.53",
 ]
-
-all = [
-  "bat-adk[anthropic]",
-  "bat-adk[deepseek]",
-  "bat-adk[nvidia]",
-  "bat-adk[ollama]",
-  "bat-adk[openai]",
-  "bat-adk[telemetry]",
-]
+all = ["bat-adk[anthropic,deepseek,nvidia,ollama,openai,postgres,telemetry]"]
 
 [dependency-groups]
 dev = [
+  "bat-adk[postgres,telemetry]",
   "build",
-  "twine",
   "pytest>=9.0.2",
   "pytest-cov>=7.0.0",
+  "twine",
 ]
 
 [project.urls]
 "Homepage" = "https://bubbleran.com/"
 "Repository" = "https://github.com/bubbleran/bat"
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 80
-
-# Files or directories to ignore entirely
-exclude = [
-    ".git",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-]
+exclude = [".git", ".venv", "__pycache__", "build", "dist"]
 
 [tool.ruff.lint]
-select = [
-    "E",   # pycodestyle errors (standard spacing, formatting)
-    "W",   # pycodestyle warnings
-    "F",   # Pyflakes (catches unused imports, undefined variables)
-    "I",   # isort (automatically sorts your imports alphabetically)
-    "B",   # flake8-bugbear (catches tricky hidden Python bugs)
-    "SIM", # flake8-simplify (helps you write simpler, shorter code)
-]
+select = ["E", "W", "F", "I", "B", "SIM"]
 
-# Custom settings for specific files
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]     # Allow 'assert' statements in tests without warning
+# The A2A SDK reads its instrumentation switch at import: set it first.
+"src/bat/__init__.py" = ["E402"]
 
 [tool.ruff.format]
 indent-style = "space"
