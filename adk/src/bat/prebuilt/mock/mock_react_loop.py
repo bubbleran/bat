@@ -1,6 +1,6 @@
 from typing import Optional, Type
 
-from typing_extensions import override
+from typing_extensions import deprecated, override
 
 from ...agent.config import AgentConfig
 from ...agent.state import AgentState
@@ -8,6 +8,11 @@ from ...chat_model_client import ChatModelClient
 from .mock_prebuilt_workflow import MockPrebuiltWorkflow
 
 
+@deprecated(
+    "MockReActLoop is deprecated and will be removed in the next release: "
+    "test with LangChain's fake chat models.",
+    category=FutureWarning,
+)
 class MockReActLoop(MockPrebuiltWorkflow):
     """Mock version of ReActLoop that modifies state without actual LLM calls.
 

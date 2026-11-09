@@ -13,7 +13,7 @@ from langchain_mcp_adapters.sessions import (
     StreamableHttpConnection as MCPConnection,
 )
 from pydantic import BaseModel, Field, field_validator, model_validator
-from typing_extensions import Self
+from typing_extensions import Self, deprecated
 
 from ..logging import create_logger
 from ..telemetry.privacy import TelemetryPrivacy, parse_privacy
@@ -234,6 +234,11 @@ class TelemetrySettings(BaseModel):
         return parse_privacy(value)
 
 
+@deprecated(
+    "AgentConfig is deprecated and will be removed in the next release: "
+    "use bat.load_agent_config() and bat.BATAgentConfig.",
+    category=FutureWarning,
+)
 class AgentConfig(BaseModel):
     """
     Agent Configuration, including MCP servers and remote agents.

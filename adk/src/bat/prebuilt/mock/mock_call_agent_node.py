@@ -2,13 +2,18 @@ from typing import Callable, Type
 
 from a2a.types import Message
 from langchain_core.runnables import RunnableConfig
-from typing_extensions import override
+from typing_extensions import deprecated, override
 
 from ...agent.config import AgentConfig
 from ...agent.state import AgentState
 from .mock_prebuilt_workflow import MockPrebuiltWorkflow
 
 
+@deprecated(
+    "MockCallAgentNode is deprecated and will be removed in the next "
+    "release: test with LangChain's fake chat models.",
+    category=FutureWarning,
+)
 class MockCallAgentNode(MockPrebuiltWorkflow):
     """Mock version of CallAgentNode that modifies state without actual agent
     calls.

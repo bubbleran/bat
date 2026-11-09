@@ -2,7 +2,7 @@ import os
 from typing import ClassVar, Dict, Optional
 
 from pydantic import BaseModel, Field
-from typing_extensions import Literal
+from typing_extensions import Literal, deprecated
 
 ModelProvider = Literal[
     "anthropic",
@@ -21,6 +21,11 @@ The currently supported providers are:
 """
 
 
+@deprecated(
+    "ChatModelClientConfig is deprecated and will be removed in the next "
+    "release: use bat.init_model(config.model).",
+    category=FutureWarning,
+)
 class ChatModelClientConfig(BaseModel):
     """Configuration for the chat model client.
 

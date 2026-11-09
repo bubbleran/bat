@@ -5,12 +5,18 @@ from typing import Any, Dict, List, Self
 from a2a.helpers import get_stream_response_text
 from a2a.types import StreamResponse, TaskState
 from pydantic import BaseModel
+from typing_extensions import deprecated
 
 from ..logging import create_logger
 
 logger = create_logger(__name__, "debug")
 
 
+@deprecated(
+    "AgentTaskStatus is deprecated and will be removed in the next "
+    "release: a BATAgentExecutor asks for input with interrupt().",
+    category=FutureWarning,
+)
 class AgentTaskStatus(IntEnum):
     """**AgentTaskStatus** is an enum type matching the A2A-SDK **TaskState**.
     The need for this redefinition is due to:
@@ -39,6 +45,12 @@ class AgentTaskStatus(IntEnum):
     AGENT_TASK_STATUS_INPUT_REQUIRED = 6
 
 
+@deprecated(
+    "AgentTaskResult is deprecated and will be removed in the next "
+    "release: a BATAgentExecutor answers with the last AIMessage and "
+    "data_out.",
+    category=FutureWarning,
+)
 class AgentTaskResult(BaseModel):
     """Result of an agent invocation.
 
@@ -153,6 +165,11 @@ class AgentTaskResult(BaseModel):
         return self.task_status == TaskState.TASK_STATE_INPUT_REQUIRED
 
 
+@deprecated(
+    "AgentState is deprecated and will be removed in the next release: "
+    "use bat.BATAgentState.",
+    category=FutureWarning,
+)
 class AgentState(BaseModel, ABC):
     """Abstract Pydantic model from which agent's state classes should inherit.
 

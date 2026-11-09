@@ -20,6 +20,7 @@ from langchain_core.messages import (
 )
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
+from typing_extensions import deprecated
 
 from ..logging import create_logger
 from .config import ChatModelClientConfig
@@ -44,6 +45,11 @@ def _is_truncated(message: AIMessage) -> bool:
     )
 
 
+@deprecated(
+    "ChatModelClient is deprecated and will be removed in the next "
+    "release: use bat.init_model(config.model).",
+    category=FutureWarning,
+)
 class ChatModelClient:
     """Client that facilitates interaction with a chat model.
 

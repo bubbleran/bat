@@ -16,7 +16,7 @@ from a2a.types import (
 from httpx import AsyncClient
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START
-from typing_extensions import override
+from typing_extensions import deprecated, override
 
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState, AgentTaskResult, AgentTaskStatus
@@ -48,6 +48,11 @@ def _inject_traceparent(message: Message, span: Any = None) -> None:
         logger.debug(f"Could not inject trace context into message: {e}")
 
 
+@deprecated(
+    "CallAgentNode is deprecated and will be removed in the next release: "
+    "use bat.init_a2a_clients().",
+    category=FutureWarning,
+)
 class CallAgentNode(PrebuiltWorkflow):
     """CallAgentNode implements agent-to-agent communication using the A2A
     protocol.

@@ -3,10 +3,16 @@ from typing import Optional
 from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from typing_extensions import deprecated
 
 from bat.agent import AgentApplication, AgentState
 
 
+@deprecated(
+    "NATConnector is deprecated and will be removed in the next release: "
+    "NAT can run a compiled messages graph as is.",
+    category=FutureWarning,
+)
 class NATConnector:
     """LangGraph connector between NAT A2A server and BAT agent.
     Provides a LangGraph wrapper that converts NAT message format to BAT

@@ -14,6 +14,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+from typing_extensions import deprecated
 
 from ..chat_model_client import ChatModelClientConfig
 from ..logging import create_logger
@@ -35,6 +36,11 @@ A2A_APPLICATION_DEFAULT_PORT = 9900
 DEFAULT_AGENT_CARD_PATH = "./agent.json"
 
 
+@deprecated(
+    "AgentApplication is deprecated and will be removed in the next "
+    "release: use bat.BATAgentExecutor and bat.BATAgentServer.",
+    category=FutureWarning,
+)
 class AgentApplication:
     """Agent Application based on `Starlette`.
     This class sets up an agent application that serves the A2A protocol.

@@ -10,6 +10,7 @@ from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 from pydantic import ValidationError
+from typing_extensions import deprecated
 
 from ..logging import create_logger
 from .config import AgentConfig
@@ -18,6 +19,11 @@ from .state import AgentState, AgentTaskResult, AgentTaskStatus
 logger = create_logger(__name__, level="debug")
 
 
+@deprecated(
+    "AgentGraph is deprecated and will be removed in the next release: "
+    "serve a LangGraph graph with bat.BATAgentExecutor.",
+    category=FutureWarning,
+)
 class AgentGraph(ABC):
     """Abstract base class for agent graphs.
 

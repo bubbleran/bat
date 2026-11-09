@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START
 from langgraph.prebuilt import ToolNode
 from pydantic import ValidationError
-from typing_extensions import AsyncIterable, override
+from typing_extensions import AsyncIterable, deprecated, override
 
 from ..agent.config import AgentConfig
 from ..agent.state import AgentState
@@ -21,6 +21,11 @@ from .prebuilt_workflow import PrebuiltWorkflow
 logger = create_logger(__name__, level="debug")
 
 
+@deprecated(
+    "ReActLoop is deprecated and will be removed in the next release: use "
+    "langchain.agents.create_agent.",
+    category=FutureWarning,
+)
 class ReActLoop(PrebuiltWorkflow):
     """ReActLoop implements a ReAct-style loop using a ChatModelClient with
     associated tools.
