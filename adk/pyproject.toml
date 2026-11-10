@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bat-adk"
-version = "2026.11.dev0"
+version = "2026.11.9a0"
 authors = [
   { name="Andrea LEONE", email="andrea.leone@bubbleran.com" },
   { name="Enrico SBUTTONI", email="enrico.sbuttoni@bubbleran.com" },
@@ -42,17 +42,23 @@ postgres = [
   "psycopg[binary]",
   "sqlalchemy[asyncio]>=2.0",
 ]
+sqlite = [
+  "a2a-sdk[sqlite]>=1.2.3",
+  "langgraph-checkpoint-sqlite>=3.1.3",
+]
 telemetry = [
   "opentelemetry-sdk>=1.27.0",
   "opentelemetry-exporter-otlp>=1.27.0",
   "openinference-instrumentation-langchain>=0.1.73",
   "openinference-instrumentation>=0.1.53",
 ]
-all = ["bat-adk[anthropic,deepseek,nvidia,ollama,openai,postgres,telemetry]"]
+all = [
+  "bat-adk[anthropic,deepseek,nvidia,ollama,openai,postgres,sqlite,telemetry]",
+]
 
 [dependency-groups]
 dev = [
-  "bat-adk[postgres,telemetry]",
+  "bat-adk[postgres,sqlite,telemetry]",
   "build",
   "pytest>=9.0.2",
   "pytest-cov>=7.0.0",

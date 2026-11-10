@@ -59,13 +59,30 @@ are opened in the event loop that then serves the agent.
 | `await init_mcp_clients(config.mcp_servers)` | `mcp-servers` | `MultiServerMCPClient`; a server that does not answer stops the agent |
 | `await list_mcp_tools(client, *servers)` | | `list[BaseTool]` of the named servers, or all |
 | `await init_a2a_clients(config.remote_agents)` | `remote-agents` | `dict[str, RemoteAgentClient]`: `send_request(message, session)` (a str as text, any other value as data; automatically forwards interrupts inside a graph), `as_tool()` (the model gets the reply's text and data as JSON), `card()` |
-| `await init_checkpointer(config.persistence)` | `persistence` (`memory`, `postgres`) | checkpointer (Postgres: on a connection pool), or `None`; `BATAgentServer` keeps A2A tasks in the same Postgres |
+| `await init_checkpointer(config.persistence)` | `persistence` (`memory`, `postgres`, `sqlite`) | checkpointer (Postgres: on a connection pool; SQLite: a file, for a single replica), or `None`; `BATAgentServer` keeps A2A tasks in the same database |
 | `BATAgentExecutor(graph, agent_name)` | | runs a compiled graph per A2A request |
 | `BATAgentState` | | Pydantic base state with `messages`, `data_in`, and `data_out` |
 | `BATAgentServer(card, config, executor)` | `endpoint` | `serve()` / `run()`: card and JSON-RPC; add routes to `server.app`, e.g. `/bat/ping` with `bat.server.ping_route` |
 
 Every block returns a native LangChain/LangGraph object, so any of them can
 be swapped for one you build yourself.
+
+## Persistence
+
+`persistence` in config.yaml decides where conversations survive between
+messages. `init_checkpointer` and `BATAgentServer` read it and keep the
+checkpoints and the A2A tasks in the same place.
+
+| `type` | `url` | Extra | Survives a restart | Replicas |
+|---|---|---|---|---|
+| `memory` | | | no | each has its own state |
+| `sqlite` | a file path, e.g. `/app/data/agent.db` | `bat-adk[sqlite]` | yes, on a persistent volume | one: replicas cannot share the file |
+| `postgres` | `postgresql://user:password@host:5432/db` | `bat-adk[postgres]` | yes | any number |
+
+A conversation resumes, after a restart too, when the client sends the same
+`contextId`, plus the `taskId` of a pending interrupt. Without its extra,
+`load_agent_config` stops with the `pip install` command to run.
+`checkpoints: true` still means `memory` when `persistence` is not set.
 
 ## How a graph run maps to A2A
 
@@ -246,7 +263,7 @@ src/bat/
 ## Develop
 
 ```bash
-uv sync                          # Python, dev tools, postgres + telemetry extras
+uv sync                          # Python, dev tools, postgres + sqlite + telemetry extras
 .venv/bin/python -m pytest -q    # no network beyond localhost, no LLM
 uvx ruff check src tests
 ```

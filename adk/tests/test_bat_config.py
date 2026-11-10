@@ -80,6 +80,22 @@ def test_postgres_needs_a_url(tmp_path):
         load_agent_config(_write(tmp_path, "persistence:\n  type: postgres\n"))
 
 
+def test_persistence_wins_over_checkpoints(tmp_path):
+    text = "checkpoints: true\npersistence:\n  type: sqlite\n  url: /d/a.db\n"
+    persistence = load_agent_config(_write(tmp_path, text)).persistence
+
+    assert (persistence.type, persistence.url) == ("sqlite", "/d/a.db")
+
+
+def test_a_database_without_its_extra_stops_the_load(tmp_path, monkeypatch):
+    monkeypatch.setattr("bat.config.find_spec", lambda name: None)
+    text = "persistence:\n  type: sqlite\n  url: a.db\n"
+    hint = r"pip install 'bat-adk\[sqlite\]'"
+
+    with pytest.raises(ValidationError, match=hint):
+        load_agent_config(_write(tmp_path, text))
+
+
 def test_port_in_url_moves_to_port(tmp_path):
     path = _write(tmp_path, "endpoint:\n  url: http://localhost:9300/\n")
 

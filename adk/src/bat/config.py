@@ -1,4 +1,5 @@
 import os
+from importlib.util import find_spec
 from typing import Any, Dict, List, Literal, Optional, Self
 from urllib.parse import urlsplit
 
@@ -52,15 +53,24 @@ class ModelConfig(BaseModel):
 
 
 class PersistenceConfig(BaseModel):
-    """Where conversations are kept between messages."""
+    """Where conversations are kept between messages. `url` is the database
+    URL for postgres and the file path for sqlite; sqlite suits a single
+    replica, since replicas cannot share the file."""
 
-    type: Literal["memory", "postgres"]
+    type: Literal["memory", "postgres", "sqlite"]
     url: Optional[str] = None
 
     @model_validator(mode="after")
-    def _postgres_needs_url(self) -> Self:
-        if self.type == "postgres" and not self.url:
-            raise ValueError("persistence.url is required for postgres.")
+    def _database_needs_url_and_extra(self) -> Self:
+        database = self.type != "memory"
+        if database and not self.url:
+            raise ValueError(f"persistence.url is required for {self.type}.")
+        # Fail at startup, not on the first request, without the extra.
+        if database and find_spec(f"langgraph.checkpoint.{self.type}") is None:
+            raise ValueError(
+                f"persistence.type {self.type} needs its extra: "
+                f"pip install 'bat-adk[{self.type}]'."
+            )
         return self
 
 
