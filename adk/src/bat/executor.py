@@ -72,8 +72,6 @@ class BATAgentExecutor(AgentExecutor):
     goes back as a data part next to the answer. Interrupt replies update
     the same fields, excluding the resume control envelope. `interrupt()`
     returns the inner `resume` value, or the text for text-only replies.
-    With default data channels, put successive interrupts in separate
-    sequential nodes: LastValue allows only one update per graph step.
     """
 
     def __init__(self, graph: CompiledStateGraph, agent_name: str) -> None:

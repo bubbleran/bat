@@ -714,15 +714,19 @@ def test_agent_state_full_returns_across_sequential_interrupt_nodes():
 
 
 @pytest.mark.parametrize("parallel", [False, True])
-def test_default_data_channels_reject_repeated_updates_in_one_step(parallel):
-    def first(state):
+def test_agent_state_takes_several_answers_in_one_step(parallel):
+    seen = []
+
+    def first(state: BATAgentState) -> dict:
         interrupt("First?")
         if not parallel:
             interrupt("Second?")
+        seen.append(state.data_in)
         return {"messages": [AIMessage("Done")]}
 
-    def second(state):
+    def second(state: BATAgentState) -> dict:
         interrupt("Second?")
+        seen.append(state.data_in)
         return {"messages": [AIMessage("Done")]}
 
     builder = StateGraph(BATAgentState)
@@ -734,13 +738,12 @@ def test_default_data_channels_reject_repeated_updates_in_one_step(parallel):
     graph = builder.compile(checkpointer=InMemorySaver())
 
     assert _states(_events(graph, "start")) == ["TASK_STATE_INPUT_REQUIRED"]
-    assert _states(_events(graph, "one")) == ["TASK_STATE_INPUT_REQUIRED"]
-    events = _events(graph, "two")
+    one = _events(graph, "", {"resume": 1}, extra_data=[{"n": 1}])
+    two = _events(graph, "", {"resume": 2}, extra_data=[{"n": 2}])
 
-    assert _states(events) == ["TASK_STATE_FAILED"]
-    assert events[0].status.message.parts[0].text == (
-        "Agent execution failed (InvalidUpdateError)."
-    )
+    assert _states(one) == ["TASK_STATE_INPUT_REQUIRED"]
+    assert _states(two) == ["TASK_STATE_COMPLETED"]
+    assert seen[-1] == {"n": 2}
 
 
 def test_graph_error_shows_only_the_exception_type():

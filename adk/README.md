@@ -95,9 +95,10 @@ class State(bat.BATAgentState):
 
 It provides `messages` with the `add_messages` reducer and an independent
 empty list by default, plus `data_in` and `data_out`, initially `None`.
-Data fields have no custom reducer: LangGraph uses its default `LastValue`
-channel. An update replaces the previous value, including with `None`, and
-allows at most one write per graph step. `data_in` accepts JSON values;
+Data fields keep the newest write, including `None`, and allow several writes
+per graph step, so a node can take several interrupt answers. If parallel
+branches write the same data field in one step, the last write wins without an
+error. `data_in` accepts JSON values;
 `data_out` accepts JSON values or a Pydantic model.
 
 Custom state schemas remain supported. The executor needs `messages` with
@@ -197,26 +198,18 @@ Interrupt replies replace `data_in`, so save any part of the original
 request that a paused node still needs in a separate state field before
 entering that node. The node restarts when resumed.
 
-Custom data channels can also use the default behavior:
+Custom data channels get the same behavior with a newest-write reducer:
 
 ```python
+from typing import Annotated
+
 from langgraph.graph import MessagesState
 from pydantic import JsonValue
 
 class State(MessagesState):
-    data_in: JsonValue
-    data_out: JsonValue
+    data_in: Annotated[JsonValue, lambda _, new: new]
+    data_out: Annotated[JsonValue, lambda _, new: new]
 ```
-
-Put successive interrupts in separate sequential nodes when using these data
-channels. After one node completes, the next question is in a new graph step.
-Repeated interrupts in one node, or questions in parallel branches, can
-accumulate several resume updates within one step and raise `InvalidUpdateError`
-on `data_in` or `data_out`. A messages-only graph can still ask parallel
-questions because `messages` already has its own `add_messages` reducer.
-Ordinary parallel
-work remains supported when each branch writes only its own fields or fields
-with suitable aggregation reducers.
 
 ## Graph execution settings
 
